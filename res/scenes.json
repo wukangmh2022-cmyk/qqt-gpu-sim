@@ -1,0 +1,126 @@
+{
+  "comment": "场景资源配置（纯 UI，不进训练）。bgm=背景音乐；bg=整图背景(600x520 大图)；tiles.brick=可炸墙体图，可配多张（Z 开头的都是可炸墙体，渲染时每格随机选一张）；tiles.wall=不可炸永久墙图；无 ground 素材（地面直接透出背景大图）。缺配置用色块/默认背景兜底。",
+  "scenes": {
+    "中国城": {
+      "bgm": "res/wall/中国城/town.ogg",
+      "bg": "res/wall/中国城/town.png",
+      "tiles": {
+        "brick": [
+          "res/wall/中国城/z1.png",
+          "res/wall/中国城/z2.png",
+          "res/wall/中国城/z3.png",
+          "res/wall/中国城/z4.png"
+        ]
+      }
+    },
+    "功夫": {
+      "bgm": "res/wall/功夫/match.ogg",
+      "bg": "res/wall/功夫/gf.PNG",
+      "tiles": {
+        "brick": [
+          "res/wall/功夫/z1.png",
+          "res/wall/功夫/z2.png"
+        ]
+      }
+    },
+    "夺宝": {
+      "bgm": "res/wall/夺宝/mine.ogg",
+      "bg": "res/wall/夺宝/db.png",
+      "tiles": {
+        "brick": [
+          "res/wall/夺宝/z1.png",
+          "res/wall/夺宝/z2.png",
+          "res/wall/夺宝/z3.png"
+        ]
+      }
+    },
+    "抢包子": {
+      "bgm": "res/wall/抢包子/bun.ogg",
+      "bg": "res/wall/抢包子/qbz.png",
+      "tiles": {
+        "brick": [
+          "res/wall/抢包子/z1.png",
+          "res/wall/抢包子/z2.png",
+          "res/wall/抢包子/z3.png",
+          "res/wall/抢包子/z4.png"
+        ]
+      }
+    },
+    "比武": {
+      "bgm": "res/wall/比武/M15.ogg",
+      "bg": "res/wall/比武/bw.png",
+      "tiles": {
+        "brick": [
+          "res/wall/比武/z1.png",
+          "res/wall/比武/z2.png"
+        ],
+        "wall": "res/wall/比武/tile_024.png"
+      }
+    },
+    "水面": {
+      "bgm": "res/wall/水面/water.ogg",
+      "bg": "res/wall/水面/sm.png",
+      "tiles": {
+        "brick": [
+          "res/wall/水面/z1.png",
+          "res/wall/水面/z2.png",
+          "res/wall/水面/z3.png"
+        ]
+      }
+    },
+    "沙漠": {
+      "bgm": "res/wall/沙漠/desert.ogg",
+      "bg": "res/wall/沙漠/shamo.png",
+      "tiles": {
+        "brick": [
+          "res/wall/沙漠/z1.png",
+          "res/wall/沙漠/z2.png"
+        ]
+      }
+    },
+    "矿洞": {
+      "bgm": "res/wall/矿洞/mine.ogg",
+      "bg": "res/wall/矿洞/kd.png",
+      "tiles": {
+        "brick": [
+          "res/wall/矿洞/z1.png",
+          "res/wall/矿洞/z2.png",
+          "res/wall/矿洞/z3.png",
+          "res/wall/矿洞/z4.png"
+        ]
+      }
+    },
+    "野外": {
+      "bgm": "res/wall/野外/field.ogg",
+      "bg": "res/wall/野外/yw.PNG",
+      "tiles": {
+        "brick": [
+          "res/wall/野外/z1.png",
+          "res/wall/野外/z2.png",
+          "res/wall/野外/z3.png",
+          "res/wall/野外/z4.png",
+          "res/wall/野外/z5.png"
+        ]
+      }
+    },
+    "雪地": {
+      "bgm": "res/wall/雪地/snow.ogg",
+      "bg": "res/wall/雪地/xd.png",
+      "tiles": {
+        "brick": [
+          "res/wall/雪地/z1.png",
+          "res/wall/雪地/z2.png"
+        ]
+      }
+    },
+    "英雄": {
+      "bgm": "res/wall/英雄/M08.ogg",
+      "tiles": {
+        "brick": [
+          "res/wall/英雄/z1.png",
+          "res/wall/英雄/z2.png"
+        ]
+      }
+    }
+  }
+}
