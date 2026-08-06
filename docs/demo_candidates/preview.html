@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head><meta charset="utf-8"><title>对局演示候选预览</title>
+<style>body{font-family:system-ui,sans-serif;background:#1a1a22;color:#ddd;padding:20px;margin:0}
+h1{color:#fff;font-size:20px}h2{color:#9cf;font-size:15px;margin:24px 0 8px}
+.grid{display:flex;flex-wrap:wrap;gap:16px}.card{background:#26262e;border-radius:10px;padding:10px;width:520px}
+.card video{width:100%;border-radius:6px;display:block;background:#000}
+.card .cap{font-size:12px;color:#aaa;margin-top:6px}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;margin-right:6px}
+.open{background:#2a5}.corr{background:#a52}.sim{background:#55a}
+</style></head>
+<body>
+<h1>对局演示候选（video 可播放/暂停，挑 3-5 个放 README）</h1>
+<h2>空场景 open（新增 5 个 + 原有）</h2>
+<div class="grid">
+  <div class="card"><video controls muted loop preload="none" src="cand_01_open_比武.webm"></video><div class="cap"><span class="tag open">open</span>录像回放·比武 15s 2.2MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_02_open_中国城.webm"></video><div class="cap"><span class="tag open">open</span>录像回放·中国城 14s 2.4MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_11_open_雪地.webm"></video><div class="cap"><span class="tag open">open</span>录像回放·雪地 15s 2.5MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_12_open_野外.webm"></video><div class="cap"><span class="tag open">open</span>录像回放·野外 15s 2.5MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_13_open_矿洞.webm"></video><div class="cap"><span class="tag open">open</span>录像回放·矿洞 15s 2.6MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_14_open_水面.webm"></video><div class="cap"><span class="tag open">open</span>录像回放·水面 15s 2.8MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_15_open_hunter_vs_1023_沙漠.webm"></video><div class="cap"><span class="tag open sim">open·实况</span>hunter vs course_1023m·沙漠 15s 2.9MB</div></div>
+</div>
+<h2>corridor（砖墙）</h2>
+<div class="grid">
+  <div class="card"><video controls muted loop preload="none" src="cand_03_corr_功夫.webm"></video><div class="cap"><span class="tag corr">corridor</span>录像回放·功夫 15s 1.2MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_04_corr_夺宝.webm"></video><div class="cap"><span class="tag corr">corridor</span>录像回放·夺宝 15s 1.3MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_05_corr_抢包子.webm"></video><div class="cap"><span class="tag corr">corridor</span>录像回放·抢包子 15s 1.5MB</div></div>
+</div>
+<h2>实况对打（真爆炸动画）</h2>
+<div class="grid">
+  <div class="card"><video controls muted loop preload="none" src="cand_07_hunter_vs_cnn_矿洞.webm"></video><div class="cap"><span class="tag sim">sim</span>hunter vs cnn·矿洞 15s 2.4MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_08_astar_vs_1023_沙漠.webm"></video><div class="cap"><span class="tag sim">sim</span>astar vs course_1023m·沙漠 15s 2.0MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_09_hunter_vs_1023_雪地.webm"></video><div class="cap"><span class="tag sim">sim</span>hunter vs course_1023m·雪地 15s 2.4MB</div></div>
+  <div class="card"><video controls muted loop preload="none" src="cand_10_astar_vs_cnn_水面.webm"></video><div class="cap"><span class="tag sim">sim</span>astar vs cnn·水面 15s 2.6MB</div></div>
+</div>
+</body></html>

@@ -1,13 +1,9 @@
 """录像回放：从 recordings/*.npz 逐 tick 重放，检查人类轨迹录得对不对。
 
-直接画观测通道（不需要 sim / 不需要网络）：
-    墙/砖   ch4    >0.5 → 深灰砖格
-    玩家0   ch0    双线性 splat → 重心反推亚格位置（人类视角，自己=绿、对手=红）
-    玩家1   ch1    同上
-    引信    ch2/ch3 fuse_norm >0 → 该格有泡（画蓝圈，随引信淡）
-    危险    ch5    可选（D 键开关）淡红覆盖
-    宝箱    ch7    >0.5 → 金色小方块
-    进度    ch6    t/max_steps → 状态栏进度条
+**真实场景渲染**：从 obs 通道构造 FakeSim（play/rec_state.py），复用 duel 的
+build_static + draw_grid —— 背景大图/砖块贴图/角色精灵/泡泡素材/危险红区/
+血条/无敌罩，与对打完全一致（不再是简单色块）。逐 tick 显示 obs 原始状态
+（step 前快照）→ 泡泡/道具/位置完全同步，无插值时序偏差。
 
 10Hz 播放（与录制同频）；空格暂停、←→ 逐帧（暂停时逐 tick 检查动作）、
 ↑↓ 调速（0.5/1/2/4×）、R 重头、D 切危险图、Q/ESC 退出。
@@ -28,6 +24,10 @@ import sys
 
 import numpy as np
 import pygame
+import torch
+
+from .rec_state import FakeSim
+from .duel import CELL, MOVE_DOWN, WALK_HZ, _load_cjk_font, build_static, draw_grid
 
 # ---- CJK 字体（与 duel 同款：常见中文字体路径，找不到回退默认）----
 _CJK_FONT_PATHS = [
@@ -40,18 +40,6 @@ _CJK_FONT_PATHS = [
     "C:/Windows/Fonts/msyh.ttc",
 ]
 
-
-def _load_cjk_font(size: int) -> pygame.font.Font:
-    for path in _CJK_FONT_PATHS:
-        if os.path.exists(path):
-            try:
-                return pygame.font.Font(path, size)
-            except pygame.error:
-                continue
-    return pygame.font.Font(None, size)
-
-
-CELL = 52
 HUD_H = 52
 MOVE_GLYPH = {0: "↑", 1: "↓", 2: "←", 3: "→", 4: "停"}
 
@@ -86,8 +74,19 @@ def player_center(plane: np.ndarray) -> tuple[float, float] | None:
     return cy, cx
 
 
+def make_cfg(map_: str):
+    from sim.config import SimConfig
+    if map_ == "open":
+        return SimConfig(map_mode="corridor", open_fraction=1.0, max_steps=1800,
+                         speed=3.0, max_hp=5)
+    if map_ == "ring":
+        return SimConfig(map_mode="corridor", ring_fraction=1.0, max_steps=1800,
+                         speed=3.0, max_hp=5)
+    return SimConfig(map_mode="corridor", max_steps=1800, speed=3.0, max_hp=5)
+
+
 class Replay:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, scene: str = "比武") -> None:
         self.path = path
         self.rec = load_rec(path)
         self.obs = self.rec["obs"]
@@ -98,79 +97,51 @@ class Replay:
         self.speed = 1.0
         self.show_danger = True
         self.loop = True
+        self.scene = scene
+        self.meta = self.rec["meta"]
+        self.cfg = make_cfg(self.meta.get("map", "corridor"))
         pygame.init()
-        self.screen = pygame.display.set_mode((self.W * CELL, self.H * CELL + HUD_H))
+        self.screen = pygame.display.set_mode(
+            (self.W * CELL, self.H * CELL + HUD_H))
         name = os.path.basename(path)
         pygame.display.set_caption(f"录像回放 · {name}")
         self.font = _load_cjk_font(20)
         self.font_s = _load_cjk_font(16)
-        # 静态背景格（浅色棋盘）只画一次，回放帧 blit 后叠动态层
-        self.bg = pygame.Surface((self.W * CELL, self.H * CELL))
-        self.bg.fill((46, 44, 54))
-        for r in range(self.H):
-            for c in range(self.W):
-                if (r + c) % 2:
-                    pygame.draw.rect(self.bg, (52, 50, 60),
-                                     (c * CELL, r * CELL, CELL, CELL))
+        from .res import Res
+        self.res = Res(cell=CELL, blast=self.cfg.growth_blast_max, scene=scene)
+        self.fake = FakeSim(self.cfg)
+        self.face = {0: MOVE_DOWN, 1: MOVE_DOWN}
+        self.anim = {0: 0, 1: 0}
+        self._static = None
         self.acc = 0.0
         self.tick_dt = 0.1 / self.speed
 
-    # ---- 绘制一帧（t 时刻）----
+    # ---- 绘制一帧（t 时刻，真实 RES 渲染）----
     def draw(self) -> None:
         s = self.screen
-        s.blit(self.bg, (0, 0))
-        o = self.obs[self.t]                               # (C,H,W)
-        wall = o[2 * 2]                                    # ch4 墙|砖
-        crate = o[2 * 2 + 3] if self.C > 2 * 2 + 3 else None
-        danger = o[2 * 2 + 1]
-        fuse0, fuse1 = o[2], o[3]
-        # 危险覆盖（D 键开关）
-        if self.show_danger:
-            danger_ov = pygame.Surface((self.W * CELL, self.H * CELL),
-                                       pygame.SRCALPHA)
-            for r in range(self.H):
-                for c in range(self.W):
-                    dv = float(danger[r, c])
-                    if dv > 0:
-                        alpha = min(90, int(110 * dv))
-                        pygame.draw.rect(
-                            danger_ov, (255, 60, 60, alpha),
-                            (c * CELL, r * CELL, CELL, CELL))
-            s.blit(danger_ov, (0, 0))
-        # 格子实体：墙/砖 + 宝箱
-        for r in range(self.H):
-            for c in range(self.W):
-                x, y = c * CELL, r * CELL
-                if float(wall[r, c]) > 0.5:
-                    pygame.draw.rect(s, (96, 88, 78), (x, y, CELL, CELL))
-                    pygame.draw.rect(s, (120, 110, 98), (x, y, CELL, CELL), 2)
-                elif crate is not None and float(crate[r, c]) > 0.5:
-                    pygame.draw.rect(s, (200, 170, 40),
-                                     (x + CELL // 4, y + CELL // 4,
-                                      CELL // 2, CELL // 2), border_radius=4)
-        # 泡泡（引信 >0）：蓝圈，随引信透明度变化
-        for r in range(self.H):
-            for c in range(self.W):
-                for fv, col in ((float(fuse0[r, c]), (90, 170, 255)),
-                                (float(fuse1[r, c]), (255, 130, 90))):
-                    if fv > 0:
-                        x, y = c * CELL, r * CELL
-                        rad = int(CELL * 0.36)
-                        pygame.draw.circle(s, col, (x + CELL // 2, y + CELL // 2),
-                                           rad, 2)
-        # 角色：位置通道重心反推亚格位置；自己(通道0)=绿、对手(通道1)=红
-        for ch, col, tag in ((0, (80, 220, 120), "自己"), (1, (240, 100, 100), "对手")):
-            pos = player_center(o[ch])
-            if pos is None:
-                continue
-            py_, px_ = pos
-            x, y = int(px_ * CELL), int(py_ * CELL)
-            pygame.draw.circle(s, col, (x, y), int(CELL * 0.38))
-            pygame.draw.circle(s, (255, 255, 255), (x, y), int(CELL * 0.38), 2)
-        # HUD：tick 进度 / 动作 / 奖励 / meta
+        o = torch.from_numpy(self.obs[self.t].astype(np.float32))
+        self.fake.set_frame(o, self.cfg)
+        if self._static is None:
+            self._static = build_static(self.res, self.fake)
+        # face：位移方向（逐 tick 近似）
+        if self.t > 0:
+            fx = FakeSim(self.cfg)
+            fx.set_frame(torch.from_numpy(self.obs[self.t - 1].astype(np.float32)),
+                         self.cfg)
+            dp = self.fake.pos[0] - fx.pos[0]
+            for pid in range(2):
+                dx, dy = float(dp[pid, 1]), float(dp[pid, 0])
+                if abs(dx) > 0.05 or abs(dy) > 0.05:
+                    self.face[pid] = 0 if dy < 0 else 1 if dy > 0 \
+                        else 2 if dx < 0 else 3
+        self.anim[0] = int(self.t / 10.0 * WALK_HZ) % 4
+        self.anim[1] = self.anim[0]
+        draw_grid(s, self.res, self.fake, None, self.fake.pos[0],
+                  self.face, self.anim, None, static=self._static)
+        # HUD：tick 进度 / 动作 / 奖励 / meta（叠在真实画面上）
         act = self.rec["action"][self.t]
         rew = float(self.rec["reward"][self.t])
-        meta = self.rec["meta"]
+        meta = self.meta
         done = bool(self.rec["done"][self.t])
         hx = 12
         hud = self.font.render(
