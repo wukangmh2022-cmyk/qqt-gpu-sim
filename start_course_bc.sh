@@ -9,6 +9,8 @@
 #   → flee 追击（对手逃跑才追、不限距离）
 # 课程结束（time-budget 存盘）→ python -m train.bc --resume 最终ckpt --epochs 3
 #   用人类数据收尾校准（BC 收尾）。
+# 2026-08-07 服务器迁移（dl 10017 到期 → 10630）：--resume 改为 ckpt/course_bc_209m.pt，
+#   从迁移时的 209M 快照续训（warmup 已过，直接固定陪练+池阶段）。
 export OPENBLAS_NUM_THREADS=8 OMP_NUM_THREADS=8
 source /opt/dtk-26.04/env.sh >/dev/null 2>&1
 cd /root
@@ -23,7 +25,7 @@ nohup python -m train.train --backend torch --device cuda --arch mlp --single-st
   --fixed-ckpt rw8=private_data/duel_rw8.pt --fixed-ckpt 5x2=private_data/duel_5x2.pt \
   --fixed-ckpt 5x3=private_data/duel_5x3.pt --fixed-ckpt cnn=private_data/duel_cnn.pt \
   --snapshot-every 20 --time-budget 43200 --seed 0 --oversample-dying 3 \
-  --resume ckpt/bc_init.pt --ckpt private_data/duel_course.pt \
+  --resume ckpt/course_bc_209m.pt --ckpt private_data/duel_course.pt \
   --log-csv private_data/train_course_bc.csv \
   > train_course_bc.log 2>&1 < /dev/null &
-echo "course_bc started pid $!"
+echo "course_bc resumed pid $!"

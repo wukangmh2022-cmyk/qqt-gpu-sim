@@ -385,7 +385,8 @@ class SimConfig:
     win_hp_scaled: bool = True   # True = 终局奖励按**剩余血量比例**给（见上方注释，
                                  # 反"拿血换命"的 reward-hacking）；
                                  # False = 旧离散 ±win_bonus（只看胜负不看血量）
-    danger_penalty: float = 0.05   # 0.02 → 0.05：危险区站桩要更疼（实测 AI 敢沿雷线走）
+    danger_penalty: float = 0.05   # 0.02 → 0.05：危险区站桩要更疼（实测 AI 敢沿雷线走）；
+                                   # 乘 _explore_coef 随探索退火衰减 → 后期归零（重头训方案）
     passivity_ticks: int = 20      # 2 秒没放泡开始算被动（60→20：旧值 6 秒太松，
                                    # 约束不住"满预算一股脑全丢"；收紧后"没在放炮"
                                    # 有成本 → 学选择性放炮/留炮节奏）

@@ -8,11 +8,12 @@
 
 ## 演示
 
-| 对打实况（vs 寻路 AI / 固定陪练） | 人类录像回放（BC 数据来源） |
-|---|---|
-| ![对打 astar](docs/gameplay_astar.gif) | ![对打录屏](docs/gameplay_duel.gif) |
+<div align="center">
+<video src="docs/demo_candidates/cand_07_hunter_vs_cnn_矿洞.webm" width="520" controls muted loop preload="none"></video>
+<br><sub>实况对打：纯进攻寻路 AI（hunter） vs CNN 模型 · 矿洞皮肤</sub>
+</div>
 
-*录制自真实对局：左 = 模型 vs 寻路 AI；右 = 人类对战回放。完整版见 `play/` 启动器（支持双模型对打 + 人类录像 + 回放）。*
+*更多对局演示（open/corridor 多皮肤、人类录像回放、实况对打）见 `docs/demo_candidates/preview.html`。完整版见 `play/` 启动器（双模型对打 + 人类录像 + 回放）。*
 
 ---
 

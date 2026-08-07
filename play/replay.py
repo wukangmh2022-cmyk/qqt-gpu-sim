@@ -100,6 +100,10 @@ class ReplaySim:
         self.opp_net = None
         if isinstance(opp, str) and opp.startswith("bot:"):
             self.opp_bot = make_bot(self.sim, opp.split(":", 1)[1])
+        elif isinstance(opp, str) and "human" in opp:
+            # 对手是人类：录像只存了人类侧动作（对手侧没数据）→ 用 astar 当
+            # 对手重放（有互动；否则对手 idle 站着画面呆）。
+            self.opp_bot = make_bot(self.sim, "astar")
         elif isinstance(opp, str) and opp.endswith(".pt"):
             ck = os.path.join(PROJ, "ckpt", opp)
             if os.path.exists(ck):
@@ -108,7 +112,7 @@ class ReplaySim:
             else:
                 self.opp_bot = make_bot(self.sim, "idle")   # ckpt 不在本地 → 兜底
         else:
-            self.opp_bot = make_bot(self.sim, "idle")       # 对手是人类/未知 → idle
+            self.opp_bot = make_bot(self.sim, "idle")       # 对手未知 → 兜底
 
     def step(self, t: int) -> tuple:
         """推进到 tick t（人类 replay act[t]，对手 AI 决策）。返回 (info, obs)。"""

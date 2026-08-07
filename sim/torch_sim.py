@@ -644,6 +644,7 @@ class BatchedSim:
         """
         cfg = self.cfg
         n = self.num_envs
+        p = cfg.n_players                       # chase 块用（fleeing 张量）
         alive0 = self.alive.clone()
         hp_before = self.hp.clone()
         pos_before = self.pos.clone()       # 接近奖励：本 tick 移动前的位置
@@ -907,12 +908,15 @@ class BatchedSim:
         # 危险区站桩罚：站在"被在场泡泡爆炸范围覆盖"的格每 tick 扣分，
         # 大小 × danger值（1-(fuse-1)/FUSE，越接近爆炸越疼）。
         # danger_map 和观测危险通道同源（同一状态、同一函数）→ 网络有直接的监督。
+        # **乘 _explore_coef（探索退火）**：前期防自杀引导（站自己泡旁要疼），
+        # 后期归零 —— 和放炮塑形一起退掉，只靠真实胜负信号（hit/suicide/win）。
         danger = danger_map(self.fuse, self.wall, self._blast_map(), cfg.fuse,
                             self.brick)
         cell = center_cell(self.pos)
         flat = cell[..., 0] * cfg.width + cell[..., 1]
         standing = danger.view(n, -1).gather(1, flat)
-        reward = reward - cfg.danger_penalty * standing * alive0.float()
+        reward = reward - self._explore_coef * cfg.danger_penalty * standing \
+            * alive0.float()
         # 久不放炮罚：**有泡泡预算（还能放）**但连续 passivity_ticks tick 没放才扣；
         # 放满了（在场泡数达到当前档位上限）不扣 —— 只有消极摆烂被罚。
         has_budget = torch.zeros((n, cfg.n_players), dtype=torch.bool, device=d)
