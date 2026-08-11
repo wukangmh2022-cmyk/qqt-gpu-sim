@@ -13,7 +13,7 @@
 
 (() => {
   const Q = window.QQT;
-  const { Sim, MLPModel, CFG, DIRS, MOVE_IDLE, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_UP } = Q;
+  const { Sim, MLPModel, CNNModel, CFG, DIRS, MOVE_IDLE, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_UP } = Q;
 
   const H = Q.H, W = Q.W, N = Q.N;
   const CELL = 60;                 // 与 play/duel.py 一致：素材原生 40px/格 × 1.5
@@ -57,13 +57,14 @@
   // 敌/我方 AI 选择：'__hunter__'（规则）或模型名。模型按需懒加载到缓存。
   // 敌人默认 = 列表第一个（ELO 最高）；观战我方默认 = 同样的最强模型。
   let enemySel = null, p0Sel = null;
-  const modelCache = new Map();      // name → MLPModel（懒加载缓存）
+  const modelCache = new Map();      // name → MLPModel/CNNModel（懒加载缓存）
   async function ensureModel(name) {
     let m = modelCache.get(name);
     if (m) return m;
     const resp = await fetch(`models/${name}.json`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    m = new MLPModel(await resp.json());
+    const doc = await resp.json();
+    m = doc.meta.arch === 'cnn' ? new CNNModel(doc) : new MLPModel(doc);
     modelCache.set(name, m);
     return m;
   }

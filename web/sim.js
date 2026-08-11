@@ -740,6 +740,133 @@
     }
   }
 
+  // ---------------------------------------------------------------- CNN 模型
+  // train/model.py arch="cnn" 的浏览器移植：conv0(3×3) → [LN(16)+ReLU] →
+  // conv(16→32) → [LN+ReLU] → conv(32→64) → [LN+ReLU] → conv1×1(64→8) →
+  // [LN+ReLU] → flatten(8·h·w) → shared MLP(128→128) → 双头。
+  // 与 MLP 的差异只在特征提取：conv 里的 LayerNorm 归一化范围是**整个
+  // (C,H,W) 三维**（weight/bias 逐元素），shared 层与 MLPModel 完全同构
+  // （weight key 同名，复用 _lnRelu/_sampleMasked）。pid=0 视角已折进
+  // conv0 输入通道（deploy/export_ckpt.py::fold_conv_perm_pid0）。
+  class CNNModel extends MLPModel {
+    forward(obs) {
+      const [C, h, w] = this.obsShape;
+      const N2 = h * w;
+      const T = (n) => this.T(n);
+
+      // 3×3 卷积（padding=1 保持分辨率）：先把输入零填充到 (H+2)×(W+2)，
+      // 内层无边界分支，kernel 3×3 显式展开成 9 次读（比 44ms 的带分支
+      // 版本快 ~4×，AI 对打双模型也要保证 10Hz 逻辑预算内）。
+      const conv3 = (inp, inC, outC, Wt, Bt) => {
+        const hh = h + 2, ww = w + 2, PW = hh * ww;
+        const pad = new Float64Array(inC * PW);
+        for (let i = 0; i < inC; i++) {
+          const src = i * N2, dst = i * PW + hh + 1;
+          for (let r = 0; r < h; r++)
+            for (let c2 = 0; c2 < w; c2++)
+              pad[dst + r * ww + c2] = inp[src + r * w + c2];
+        }
+        const out = new Float64Array(outC * N2);
+        for (let o = 0; o < outC; o++) {
+          const bo = Bt[o], wb = o * inC * 9;
+          for (let r = 0; r < h; r++) {
+            const pr = r * ww;
+            for (let cc = 0; cc < w; cc++) {
+              let s = bo;
+              for (let i = 0; i < inC; i++) {
+                const base = i * PW + pr + cc, w9 = wb + i * 9;
+                s += Wt[w9] * pad[base] + Wt[w9 + 1] * pad[base + 1]
+                  + Wt[w9 + 2] * pad[base + 2] + Wt[w9 + 3] * pad[base + ww]
+                  + Wt[w9 + 4] * pad[base + ww + 1] + Wt[w9 + 5] * pad[base + ww + 2]
+                  + Wt[w9 + 6] * pad[base + 2 * ww]
+                  + Wt[w9 + 7] * pad[base + 2 * ww + 1]
+                  + Wt[w9 + 8] * pad[base + 2 * ww + 2];
+              }
+              out[o * N2 + r * w + cc] = s;
+            }
+          }
+        }
+        return out;
+      };
+      // 1×1 卷积 = 每像素跨通道加权和
+      const conv1x1 = (inp, inC, outC, Wt, Bt) => {
+        const out = new Float64Array(outC * N2);
+        for (let o = 0; o < outC; o++) {
+          const bo = Bt[o], wob = o * inC;
+          for (let i = 0; i < N2; i++) {
+            let s = bo;
+            for (let cc = 0; cc < inC; cc++) s += Wt[wob + cc] * inp[cc * N2 + i];
+            out[o * N2 + i] = s;
+          }
+        }
+        return out;
+      };
+      // 3D LayerNorm：mean/var 统计整个 C*H*W（每样本一个标量对），w/b 逐元素
+      const ln3dRelu = (x, ww, bb) => {
+        let mean = 0;
+        for (let i = 0; i < x.length; i++) mean += x[i];
+        mean /= x.length;
+        let v = 0;
+        for (let i = 0; i < x.length; i++) v += (x[i] - mean) * (x[i] - mean);
+        const std = Math.sqrt(v / x.length + 1e-5);
+        for (let i = 0; i < x.length; i++) {
+          x[i] = Math.max(0, (x[i] - mean) / std * ww[i] + bb[i]);
+        }
+      };
+
+      let x = conv3(obs, C, 16, T('conv0_w'), T('conv0_b'));
+      ln3dRelu(x, T('cn1_w'), T('cn1_b'));
+      x = conv3(x, 16, 32, T('conv1_w'), T('conv1_b'));
+      ln3dRelu(x, T('cn2_w'), T('cn2_b'));
+      x = conv3(x, 32, 64, T('conv2_w'), T('conv2_b'));
+      ln3dRelu(x, T('cn3_w'), T('cn3_b'));
+      x = conv1x1(x, 64, 8, T('conv3_w'), T('conv3_b'));
+      ln3dRelu(x, T('cn4_w'), T('cn4_b'));
+
+      // flatten(8·h·w) → shared MLP（与 MLPModel 同构，weight key 同名）
+      const inDim = 8 * N2;
+      const W1 = T('shared0_w'), b1 = T('shared0_b');
+      const ln1w = T('ln1_w'), ln1b = T('ln1_b');
+      const W2 = T('shared3_w'), b2 = T('shared3_b');
+      const ln2w = T('ln2_w'), ln2b = T('ln2_b');
+      const f = new Float64Array(128);
+      for (let i = 0; i < 128; i++) {
+        let s = b1[i];
+        for (let j = 0; j < inDim; j++) s += W1[i * inDim + j] * x[j];
+        f[i] = s;
+      }
+      this._lnRelu(f, ln1w, ln1b);
+      const h2 = new Float64Array(128);
+      for (let i = 0; i < 128; i++) {
+        let s = b2[i];
+        for (let j = 0; j < 128; j++) s += W2[i * 128 + j] * f[j];
+        h2[i] = s;
+      }
+      this._lnRelu(h2, ln2w, ln2b);
+
+      // 头：Linear(128→64)→ReLU→Linear(64→out)
+      const head = (w0, b0, w2, b2, outDim) => {
+        const h = new Float64Array(64);
+        for (let i = 0; i < 64; i++) {
+          let s = b0[i];
+          for (let j = 0; j < 128; j++) s += w0[i * 128 + j] * h2[j];
+          h[i] = Math.max(0, s);
+        }
+        const out = new Float64Array(outDim);
+        for (let i = 0; i < outDim; i++) {
+          let s = b2[i];
+          for (let j = 0; j < 64; j++) s += w2[i * 64 + j] * h[j];
+          out[i] = s;
+        }
+        return out;
+      };
+      return {
+        move: head(T('move0_w'), T('move0_b'), T('move2_w'), T('move2_b'), 5),
+        bomb: head(T('bomb0_w'), T('bomb0_b'), T('bomb2_w'), T('bomb2_b'), 2),
+      };
+    }
+  }
+
   // ---------------------------------------------------------------- 规则 AI
   // sim/bots.py::astar_attack(eat_crates=True) 的标量移植 —— 启动器的「纯进攻
   // 寻路 hunter」：恒 aggressive（逼近+放泡），成长属性 ≥2 项不满 70% 且有
@@ -794,13 +921,20 @@
       const rIdx = Math.min(Math.max(Math.floor(r), 0), H - 1);
       const cIdx = Math.min(Math.max(Math.floor(c), 0), W - 1);
 
-      // 威胁区：自己名下在场泡的爆炸范围（膨胀 growthBlastMax 次，绕行惩罚）
+      // 威胁区：自己名下在场泡的爆炸范围（绕行惩罚）。
+      // **膨胀轮数 = 当前 blastCap**（不是 growthBlastMax 上限）：Python 端
+      // 用 7 是训练 batch 里各 env 威力不同的工程妥协（避免每 tick 同步读
+      // max），单局下 7 轮把威胁区膨胀到 60% 场地 → hunter 自己的泡堵死
+      // 逃生/放泡空间 → 贴脸后 canEscape 恒 false、逼近打分全被惩罚 →
+      // 发呆（Python 版 open 实测 IDLE 97%）。用当前威力膨胀威胁区才准确。
+      // **每轮保留源格**（Python: nb = threat.clone() 后 4 邻扩张）。
       const threat = new Uint8Array(N);
       for (let i = 0; i < N; i++) {
         if (sim.owner[i] === pid && sim.fuse[i] > 0) threat[i] = 1;
       }
-      for (let k = 0; k < CFG.growthBlastMax; k++) {
-        const nb = new Uint8Array(N);
+      const thrRounds = Math.max(1, sim.blastCap[pid]);
+      for (let k = 0; k < thrRounds; k++) {
+        const nb = new Uint8Array(threat);        // 保留源格（= clone）
         for (let i = 0; i < N; i++) {
           if (!threat[i]) continue;
           const rr = (i / W) | 0, cc = i % W;
@@ -988,7 +1122,7 @@
     H, W, N, N_PLAYERS, N_MOVES, N_BOMB,
     MOVE_UP, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_IDLE,
     DIRS, EPS, CFG,
-    Sim, MLPModel, HunterAI, mulberry32, resolveAxis, decodeB64,
+    Sim, MLPModel, CNNModel, HunterAI, mulberry32, resolveAxis, decodeB64,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = QQT;
   else root.QQT = QQT;

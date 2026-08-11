@@ -164,11 +164,12 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   console.log(`当前模型显示: ${curText} ✔`);
 
   // 敌人 AI 下拉已有选项（模型列表 + 规则 Hunter）
-  if (els['enemy-ai'].children.length === 0) {
-    console.error('FAIL: 敌人 AI 下拉列表为空');
+  const aiCount = els['enemy-ai'].children.length;
+  if (aiCount !== 8) {
+    console.error(`FAIL: 敌人 AI 下拉应 8 个候选（7 模型 + 规则 Hunter），实际 ${aiCount}`);
     process.exit(1);
   }
-  console.log(`敌人 AI 下拉: ${els['enemy-ai'].children.length} 个候选（模型+规则）✔`);
+  console.log(`敌人 AI 下拉: ${aiCount} 个候选（7 模型 + 规则 Hunter）✔`);
 
   // 点击「应用」重载当前选中敌人 AI（默认 = 最强模型），不炸
   const click = (id) => (els[id].listeners['click'] || []).forEach((fn) => fn());
@@ -223,6 +224,48 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   els['p0-ai'].value = defaultModel;
   (els['p0-ai'].listeners['change'] || []).forEach((fn) => fn());
   await wait(300);
+
+  // CNN 模型（duel_cnn）出现在下拉 + 按 arch 用 CNNModel 加载 + 能决策对局
+  const cnnOpt = [...els['enemy-ai'].children].find((o) => o.value === 'duel_cnn');
+  if (!cnnOpt) {
+    console.error('FAIL: 敌人 AI 下拉缺少 CNN 模型 duel_cnn');
+    process.exit(1);
+  }
+  els['enemy-ai'].value = 'duel_cnn';
+  (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(1200);                    // 1.4MB 权重加载 + base64 解码
+  const cnnModel = qqt.modelCache.get('duel_cnn');
+  if (!cnnModel) {
+    console.error('FAIL: duel_cnn 未加载进 modelCache');
+    process.exit(1);
+  }
+  if (!(cnnModel instanceof QQT.CNNModel)) {
+    console.error(`FAIL: duel_cnn 应按 CNNModel 加载（实际 ${cnnModel.constructor.name}）`);
+    process.exit(1);
+  }
+  // 无头对局：CNN 当 P0 vs 规则 Hunter（P1），验证 encodeObs→forward→采样全链路
+  {
+    const sim = new QQT.Sim(7);
+    sim.reset('open');
+    const hunter = new QQT.HunterAI();
+    const rng = QQT.mulberry32(1);
+    let steps = 0;
+    while (!sim.done && steps < 600) {
+      const a0 = cnnModel.act(sim, 0, rng);
+      const a1 = hunter.act(sim, 1);
+      if (a0[0] < 0 || a0[0] > 4 || a0[1] < 0 || a0[1] > 1) {
+        console.error(`FAIL: CNN 输出非法动作 ${a0}`);
+        process.exit(1);
+      }
+      sim.step([a0, a1]);
+      steps++;
+    }
+    console.log(`CNN 模型加载 + 对局完成（${steps}tick，winner=${sim.winner}）✔`);
+  }
+  // 恢复默认敌人
+  els['enemy-ai'].value = defaultModel;
+  (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(400);
 
   // 人物皮肤下拉：3 种候选（海王子/小虾米/火影），切换后重开不炸
   if (els['skin'].children.length !== 3) {

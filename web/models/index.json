@@ -12,7 +12,7 @@
    "global_step": 4358455296,
    "elo": 3957.1,
    "source": "duel_nobc_e3970.pt",
-   "generated_at": "2026-08-11 17:12 UTC"
+   "generated_at": "2026-08-11 18:57 UTC"
   },
   {
    "name": "duel_nobc_4B",
@@ -26,7 +26,7 @@
    "global_step": 4000055296,
    "elo": 3784.9,
    "source": "duel_nobc_4B.pt",
-   "generated_at": "2026-08-11 17:12 UTC"
+   "generated_at": "2026-08-11 18:57 UTC"
   },
   {
    "name": "duel_nobc_3B",
@@ -40,7 +40,7 @@
    "global_step": 3001655296,
    "elo": 3461.2,
    "source": "duel_nobc_3B.pt",
-   "generated_at": "2026-08-11 17:12 UTC"
+   "generated_at": "2026-08-11 18:57 UTC"
   },
   {
    "name": "course_1023m",
@@ -54,7 +54,7 @@
    "global_step": 1009975296,
    "elo": 2893.1,
    "source": "course_1023m.pt",
-   "generated_at": "2026-08-11 17:12 UTC"
+   "generated_at": "2026-08-11 18:57 UTC"
   },
   {
    "name": "course_bc_571m",
@@ -68,7 +68,7 @@
    "global_step": 562298880,
    "elo": 1442.2,
    "source": "course_bc_571m.pt",
-   "generated_at": "2026-08-11 17:12 UTC"
+   "generated_at": "2026-08-11 18:57 UTC"
   },
   {
    "name": "duel_course_453M",
@@ -82,7 +82,21 @@
    "global_step": 446955520,
    "elo": 1995.1,
    "source": "duel_course_453M.pt",
-   "generated_at": "2026-08-11 17:12 UTC"
+   "generated_at": "2026-08-11 18:57 UTC"
+  },
+  {
+   "name": "duel_cnn",
+   "arch": "cnn",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 300613632,
+   "elo": 2107.3,
+   "source": "duel_cnn.pt",
+   "generated_at": "2026-08-11 18:57 UTC"
   }
  ]
 }
