@@ -28,10 +28,12 @@ mv = torch.randint(0, 5, (N, 2), device=dev)
 acts = torch.stack([mv, torch.ones(N, 2, dtype=torch.long, device=dev)], dim=-1)
 for _ in range(15):
     sim.step(acts, auto_reset=False)
-torch.synchronize() if hasattr(torch, "synchronize") else torch.cuda.synchronize()
-
 def sync():
-    torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize()
+    if dev == "cuda":
+        torch.cuda.synchronize()
+    elif dev == "mps":
+        torch.mps.synchronize()
+sync()
 
 print(f"=== 1. 在场泡数计数 ===")
 owner, fuse = sim.owner, sim.fuse
