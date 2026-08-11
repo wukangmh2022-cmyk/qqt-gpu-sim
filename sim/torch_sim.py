@@ -791,11 +791,15 @@ class BatchedSim:
         # 上限（rays 的 max() 是 capture 内非法的 host 同步；空档 pad 被
         # graph 的固定序列吸收，无 launch 开销）+ chain_cap 固定轮（cap=4，
         # 910B 实测爆炸链深 max≤4 —— 比固定 max_chain=16 少 4 倍连锁 pad）。
+        # **非 graph 也传 blast_max_hint（2026-08-11）**：blast_hint 已在浅队列
+        # 同步算好（= bomb_blast 实际 max，resolve 的 _blast_map() 同源）→
+        # rays 免每次 int(blast_cell.max()) 深队列同步；hint==实际 max 无空轮
+        # pad，位级不变（blast_max_hint 只要 ≥ 实际档位即逐位一致）。
         covered, triggered = resolve_explosions(
             self.fuse, self.owner, self.wall, self._blast_map(),
             cfg.max_chain, self.brick,
             early_exit=not self._graph_mode,
-            blast_max_hint=cfg.growth_blast_max if self._graph_mode else None,
+            blast_max_hint=blast_hint,
             chain_cap=None if not self._graph_mode else 4,
         )
         # 爆炸时刻的连锁兑现（chain_blast_bonus）：被**连锁提前点燃**的泡每颗

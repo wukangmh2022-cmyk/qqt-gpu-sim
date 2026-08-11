@@ -276,7 +276,7 @@ def danger_map(
                     fd1 = _shift(fd_p, drow, dcol) * passable
                     fd1 = fd1 - one_buf          # 张量操作数免 item 同步
                     keep = fd1 >= 0          # 第 b 格（fd1=0）也记录；耗尽才停
-                    fw1 = torch.where(keep, fw1, 0.0)   # 标量 0：省 zeros_like 分配
+                    fw1 = fw1 * keep          # bool×float32 提升：keep=False→0（省 where dispatch）
                     spread = torch.maximum(spread, fw1, out=spread)  # in-place 省分配
                     fw1 = fw1 * not_solid    # 再挡穿透：泡/brick 记录后不穿
                     fd1 = fd1 * not_solid

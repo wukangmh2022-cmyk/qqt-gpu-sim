@@ -31,7 +31,11 @@ if _HAS_TRITON:
         RAD: tl.constexpr, STEP: tl.constexpr, EPS: tl.constexpr,
     ):
         """每 program 一个 (env, player)。与 sim/move.py::move_players 逐位一致。"""
-        pid = tl.program_id(0)
+        # 2D grid (p, n)：program_id(1)=env、program_id(0)=player。
+        # 1D grid (n*p,) 在 N≥32768（grid≥65536）触发 triton-ascend 上限
+        # （"grid should be less than 65536"，2026-08-11 实测）——拆二维后
+        # 每维 < 65536，N 无上限，结果逐 program 独立位级不变。
+        pid = tl.program_id(1) * P + tl.program_id(0)
         env = pid // P
         me = pid % P
         base = env * P * 2 + me * 2
@@ -449,7 +453,7 @@ def move_players_triton(cfg, pos, move, alive, blocked, speed_mult=None):
     else:
         speed_mult = speed_mult.contiguous()
     out = torch.empty_like(pos_c)
-    grid = (n * p,)
+    grid = (p, n)
     _move_players_kernel[grid](
         pos_c, move, alive, blocked, out, speed_mult, n,
         P=p, H=h, W=w, RAD=rad, STEP=step, EPS=1e-4,
