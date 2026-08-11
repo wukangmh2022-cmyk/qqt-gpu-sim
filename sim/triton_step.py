@@ -8,7 +8,8 @@ place_*/hit_attr/combo/chain/growth 全关 → 状态无奖励副作用）。
 """
 import torch
 
-from .triton_sim import place_bombs_triton, move_players_triton, resolve_triton
+from .triton_sim import (place_bombs_triton, move_players_triton,
+                         resolve_triton, danger_triton)
 from .torch_sim import center_cell
 
 
@@ -166,6 +167,16 @@ def triton_step_full(sim, actions):
     n_alive = sim.alive.sum(dim=1)
     done = (n_alive <= 1) | (sim.t >= cfg.max_steps)
 
+    # 11.5 危险图（triton 阶段 A 连锁 + B 扩散，与 torch step 同源同语义）。
+    #     计算后写入 _dng_cache/_dng_sig —— observe() 直接复用（省掉 torch 侧
+    #     每 tick 重算 ~44ms 的 danger_map；triton 版 ~1.6ms @N=8192）。
+    blast_map = sim._blast_map()
+    danger = danger_triton(sim.fuse, sim.wall, sim.fuse > 0, sim.brick,
+                           blast_map, cfg.fuse, cfg.max_chain,
+                           early_exit=not sim._graph_mode)
+    sim._dng_cache = danger
+    sim._dng_sig = sim._dng_signature()
+
     # 12. 稠密伤害 + 基础奖励
     dmg = (hp_before - sim.hp.to(torch.int32)).clamp(min=0).float()
     dealt = dmg.sum(dim=1, keepdim=True) - dmg
@@ -214,6 +225,15 @@ def triton_step_full(sim, actions):
         for pl in range(cfg.n_players):
             sim.crate.view(n, -1)[torch.arange(n, device=d),
                                   flat[:, pl]] = False
+
+    # 15.5 危险区站桩罚（与 torch step 同公式：乘探索退火 _explore_coef）。
+    #      danger 已在 11.5 由 triton 计算并缓存，这里直接 gather 脚下格。
+    if cfg.danger_penalty > 0:
+        cell = center_cell(sim.pos)
+        flat = (cell[..., 0] * cfg.width + cell[..., 1])
+        standing = danger.view(n, -1).gather(1, flat)
+        reward = reward - sim._explore_coef * cfg.danger_penalty \
+            * standing * alive0.float()
 
     # 16. combo 连击
     if cfg.combo_reward > 0:

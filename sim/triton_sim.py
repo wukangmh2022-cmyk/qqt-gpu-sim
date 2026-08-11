@@ -314,6 +314,106 @@ if _HAS_TRITON:
                 cum = cum | (wv | bmb | brk)
         tl.store(out + base, tl.where(wself, 0.0, dng), mask=m)
 
+    @triton.jit
+    def _danger_stageA_round_kernel(front, fdist, w, bombed, wall, brick, blast_f,
+                                    fnew, fdnew, HW, NENV,
+                                    H: tl.constexpr, W: tl.constexpr,
+                                    BMAX: tl.constexpr, BLOCK: tl.constexpr):
+        """危险图阶段 A 单轮（torch danger_map max_chain>1 一轮的逐位等价）。
+
+        每 cell gather：从 4 方向距离 ≤BMAX 的波前源（front>0，剩余距离 fdist）
+        接收最大到达权重。规则与 torch 阶段 A 一致（先记录后挡）：
+          - 源 = 本轮波前（front>0 的炮格），剩余距离 fdist[源]（>= 到达距离才记录）；
+          - 途中墙/泡/brick 挡（cum 累积，同 resolve/rays 规则）；
+          - 到达值 = 源权重（路径全通；挡/墙都算到不了——passable∈{0,1} 乘法等价门控）；
+          - **只有炮格接收**（spread×bombed —— v1 非炮格混入 w 的 bug 防御）。
+        单轮内顺带完成整轮状态更新（全部逐 cell）：
+          newly = (spread>w)&bombed；w = max(w,spread)；fnew/fdnew = where(newly, spread, blast_f)。
+        """
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        total = HW * NENV
+        m = offs < total
+        nenv = offs // HW
+        cidx = offs % HW
+        h = cidx // W
+        wc = cidx % W
+        base = nenv * HW + cidx
+        wself = tl.load(wall + base, mask=m, other=True)
+        bmb_c = tl.load(bombed + base, mask=m, other=False)
+        spread = tl.zeros((BLOCK,), tl.float32)
+        for d in tl.static_range(4):
+            dr = -1 if d == 0 else (1 if d == 1 else 0)
+            dc = -1 if d == 2 else (1 if d == 3 else 0)
+            cum = tl.zeros((BLOCK,), tl.int1)
+            for step in tl.static_range(1, BMAX + 1):
+                gh = h + dr * step
+                gw = wc + dc * step
+                ok = (gh >= 0) & (gh < H) & (gw >= 0) & (gw < W)
+                gidx = nenv * HW + gh * W + gw
+                gm = m & ok
+                wv = tl.load(wall + gidx, mask=gm, other=True)
+                bmb = tl.load(bombed + gidx, mask=gm, other=False)
+                brk = tl.load(brick + gidx, mask=gm, other=False)
+                fv = tl.load(front + gidx, mask=gm, other=0.0)
+                fdv = tl.load(fdist + gidx, mask=gm, other=0.0)
+                cand = tl.where((fv > 0.0) & (fdv >= step) & (cum == 0) & (~wv),
+                                fv, 0.0)
+                spread = tl.maximum(spread, cand)
+                cum = cum | (wv | bmb | brk)
+        spread = tl.where(wself, 0.0, spread)      # 墙格无接收
+        spread = tl.where(bmb_c, spread, 0.0)      # 只有炮格接收（v1 bug 防御）
+        w_c = tl.load(w + base, mask=m, other=0.0)
+        newly = (spread > w_c) & bmb_c
+        tl.store(w + base, tl.maximum(w_c, spread), mask=m)
+        tl.store(fnew + base, tl.where(newly, spread, 0.0), mask=m)
+        tl.store(fdnew + base,
+                 tl.where(newly,
+                          tl.load(blast_f + base, mask=m, other=0.0), 0.0),
+                 mask=m)
+
+    @triton.jit
+    def _danger_diffuse_kernel(weight, wall, bombed, brick, blst, out,
+                               HW, NENV, H: tl.constexpr, W: tl.constexpr,
+                               BMAX: tl.constexpr, BLOCK: tl.constexpr):
+        """危险图阶段 B：从**已修正权重**（阶段 A 后）扩散（_danger_kernel 同款扫描）。
+
+        与 danger_map(max_chain=1) 的 _danger_kernel 唯一差别：源权重直接读
+        传入的 weight 格（阶段 A 修正过），不再从 fuse 重算。逐位等价由
+        verify_triton_dangerA.py 固化（torch danger_map max_chain=16 对拍）。
+        """
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        total = HW * NENV
+        m = offs < total
+        nenv = offs // HW
+        cidx = offs % HW
+        h = cidx // W
+        wc = cidx % W
+        base = nenv * HW + cidx
+        wself = tl.load(wall + base, mask=m, other=True)
+        w_self = tl.load(weight + base, mask=m, other=0.0)
+        dng = tl.where(wself, 0.0, w_self)          # seed = 自身权重（墙格恒 0）
+        for d in tl.static_range(4):
+            dr = -1 if d == 0 else (1 if d == 1 else 0)
+            dc = -1 if d == 2 else (1 if d == 3 else 0)
+            cum = tl.zeros((BLOCK,), tl.int1)
+            for step in tl.static_range(1, BMAX + 1):
+                gh = h + dr * step
+                gw = wc + dc * step
+                ok = (gh >= 0) & (gh < H) & (gw >= 0) & (gw < W)
+                gidx = nenv * HW + gh * W + gw
+                gm = m & ok
+                wv = tl.load(wall + gidx, mask=gm, other=True)
+                bmb = tl.load(bombed + gidx, mask=gm, other=False)
+                brk = tl.load(brick + gidx, mask=gm, other=False)
+                bv = tl.load(blst + gidx, mask=gm, other=0)
+                sw = tl.load(weight + gidx, mask=gm, other=0.0)
+                cand = tl.where((sw > 0.0) & (bv >= step) & (cum == 0), sw, 0.0)
+                dng = tl.maximum(dng, cand)
+                cum = cum | (wv | bmb | brk)
+        tl.store(out + base, tl.where(wself, 0.0, dng), mask=m)
+
 
 # ---------------- wrappers ----------------
 
@@ -431,22 +531,70 @@ def resolve_triton(fuse, owner, wall, bomb_blast, brick, max_chain=16,
 
 
 def danger_triton(fuse, wall, bombed, brick, blast, fuse_max,
-                  b_max=7, exp=2.0):
-    """危险图阶段 B（per-cell 权重传播，与 danger_map(max_chain=1) 一致）。
+                  b_max=7, exp=2.0, max_chain=1, early_exit=True):
+    """危险图（阶段 A 连锁修正 + 阶段 B 扩散），与 torch danger_map 逐位等价。
 
-    返回 float32 (N,H,W) 危险图。阶段 A（连锁修正）待补。
+    - max_chain=1：阶段 B only（走 _danger_kernel 原路径，行为不变）。
+    - max_chain>1：阶段 A 波前连锁（每轮 _danger_stageA_round_kernel）修正
+      炮格权重 → 阶段 B 用修正权重扩散（_danger_diffuse_kernel）。
+      阶段 A 空场短路 / 早退语义与 torch danger_map 相同（DANGER_CHECK_EVERY=2）。
     """
     if not _HAS_TRITON:
         raise RuntimeError("triton 不可用")
     import torch
     n, h, w = fuse.shape
     hw = h * w
-    out = torch.empty((n, h, w), dtype=torch.float32, device=fuse.device)
+    dev = fuse.device
     BLOCK = 1024
     grid = ((hw * n + BLOCK - 1) // BLOCK,)
-    _danger_kernel[grid](
-        fuse.contiguous(), wall.contiguous(), bombed.contiguous(),
-        brick.contiguous(), blast.to(torch.int32).contiguous(), out,
-        hw, n, h, w, BMAX=max(1, int(b_max)), BLOCK=BLOCK,
-        FUSE_MAX=int(fuse_max), EXP=float(exp))
+    BMAX = max(1, int(b_max))
+    if max_chain <= 1:
+        # 阶段 B only：原路径（kernel 内从 fuse 算权重，bitwise 已验证）
+        out = torch.empty((n, h, w), dtype=torch.float32, device=dev)
+        _danger_kernel[grid](
+            fuse.contiguous(), wall.contiguous(), bombed.contiguous(),
+            brick.contiguous(), blast.to(torch.int32).contiguous(), out,
+            hw, n, h, w, BMAX=BMAX, BLOCK=BLOCK,
+            FUSE_MAX=int(fuse_max), EXP=float(exp))
+        return out
+    # ---- 阶段 A：权重 + 连锁修正（语义同 torch danger_map max_chain>1）----
+    w_raw = 1.0 - (fuse.float() - 1.0) / float(fuse_max)
+    weight = torch.where(bombed, w_raw.clamp_min(0.0).pow(exp),
+                         torch.zeros_like(fuse, dtype=torch.float32))
+    if early_exit and not bool(bombed.any()):
+        return torch.zeros_like(fuse, dtype=torch.float32)   # 空场短路
+    blast_f = torch.where(bombed, blast.float(), torch.zeros_like(weight))
+    front_a = torch.where(bombed, weight, torch.zeros_like(weight))
+    fdist_a = blast_f.clone()
+    front_b = torch.empty_like(front_a)
+    fdist_b = torch.empty_like(front_a)
+    w_c = weight
+    w_b = bombed.contiguous()
+    wal_c = wall.contiguous()
+    brk_c = brick.contiguous()
+    bf_c = blast_f.contiguous()
+    _DANGER_CHECK_EVERY = 2    # 与 sim/blast.py DANGER_CHECK_EVERY 一致
+    for i in range(max_chain):
+        # 乒乓缓冲：输入/输出必须异体（同体会竞态——kernel 读 front 时另一
+        # block 正在写它）
+        if i % 2 == 0:
+            _danger_stageA_round_kernel[grid](
+                front_a.contiguous(), fdist_a.contiguous(), w_c, w_b,
+                wal_c, brk_c, bf_c, front_b, fdist_b,
+                hw, n, h, w, BMAX=BMAX, BLOCK=BLOCK)
+            newly_cur = front_b
+        else:
+            _danger_stageA_round_kernel[grid](
+                front_b.contiguous(), fdist_b.contiguous(), w_c, w_b,
+                wal_c, brk_c, bf_c, front_a, fdist_a,
+                hw, n, h, w, BMAX=BMAX, BLOCK=BLOCK)
+            newly_cur = front_a
+        if early_exit and i % _DANGER_CHECK_EVERY == 0 \
+                and not bool((newly_cur > 0).any()):
+            break
+    # ---- 阶段 B：用修正权重扩散 ----
+    out = torch.empty((n, h, w), dtype=torch.float32, device=dev)
+    _danger_diffuse_kernel[grid](
+        w_c, wal_c, w_b, brk_c, blast.to(torch.int32).contiguous(), out,
+        hw, n, h, w, BMAX=BMAX, BLOCK=BLOCK)
     return out
