@@ -211,6 +211,26 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     console.error(`FAIL: 观战勾选后 p0-ai-wrap 未显示（display=${els['p0-ai-wrap'].style.display}）`);
     process.exit(1);
   }
+  // 观战「我方：」默认策略已初始化（修 p0Sel=null → aiOf 返回 IDLE 站着不动）
+  if (qqt.p0Sel === null || qqt.p0Sel !== els['p0-ai'].value) {
+    console.error(`FAIL: 观战我方默认策略未初始化（p0Sel=${qqt.p0Sel}）`);
+    process.exit(1);
+  }
+  // 默认模型观战：P0 应能动（有位置变化），不是站着 —— 等几 tick 看 pos
+  {
+    const y0 = qqt.sim.pos[0], x0 = qqt.sim.pos[1];
+    let moved = false;
+    for (let k = 0; k < 25; k++) {
+      await wait(120);
+      const d = Math.abs(qqt.sim.pos[0] - y0) + Math.abs(qqt.sim.pos[1] - x0);
+      if (d > 1e-6) { moved = true; break; }
+    }
+    if (!moved) {
+      console.error('FAIL: 观战默认模型 P0 站着不动（策略未生效）');
+      process.exit(1);
+    }
+  }
+  console.log('观战：我方默认模型可动（策略已生效）✔');
   // 观战 + 我方也换规则 Hunter（双规则 AI 对局）
   els['p0-ai'].value = '__hunter__';
   (els['p0-ai'].listeners['change'] || []).forEach((fn) => fn());

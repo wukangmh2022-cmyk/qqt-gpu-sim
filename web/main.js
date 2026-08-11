@@ -512,7 +512,10 @@
     fillAiSelect(elP0Ai, true);
     elEnemyAi.value = modelList[0].name;     // 默认：ELO 最高的模型
     elP0Ai.value = modelList[0].name;
-    await applyModel();            // 预加载默认敌人模型
+    // 观战「我方：」默认策略**同步初始化**（之前只在下拉 change 时赋值，
+    // 直接勾观战 → p0Sel=null → aiOf(0) 返回 IDLE → 我方站着不动）
+    p0Sel = elP0Ai.value;
+    await applyModel();            // 预加载默认敌人模型（我方默认同款，已入缓存）
   }
 
   // 应用选中的 AI（敌人）：模型名 → 加载权重；规则 Hunter → 无需权重
@@ -576,9 +579,11 @@
   // ------------------------------------------------------------ 10Hz 逻辑节拍
   function logicTick() {
     if (!running || !sim || sim.done) return;
-    // 敌人模型未就绪（正在加载/加载失败）先不推进；规则 AI 随时可用
-    if (enemySel !== HUNTER_VAL && !modelCache.has(enemySel)) return;
+    // 模型未就绪（正在加载/加载失败）先不推进：敌人 + 观战时的我方；
+    // 规则 AI 随时可用。缺这一步观战 P0 模型没进缓存 → aiOf 返回 IDLE 站着。
     const spectate = elSpectate.checked;
+    if (enemySel !== HUNTER_VAL && !modelCache.has(enemySel)) return;
+    if (spectate && p0Sel !== HUNTER_VAL && !modelCache.has(p0Sel)) return;
     const a0 = aiOf(0);
     if (!spectate) human.pendingBomb = false;
     const a1 = aiOf(1);
