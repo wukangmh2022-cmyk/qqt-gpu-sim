@@ -412,9 +412,12 @@ def _tile_sprites(sim, res: Res) -> list:
     for r in range(h):
         for c in range(w):
             if wall[r, c] and res.wall_tile is not None:
-                tw, th = res.wall_tile.get_size()
+                tiles = res.wall_tile
+                t = (tiles[(r * 7 + c * 13) % len(tiles)]
+                     if isinstance(tiles, list) else tiles)
+                tw, th = t.get_size()
                 sprites.append((r, c * CELL + (CELL - tw) // 2,
-                                r * CELL + CELL - th, res.wall_tile))
+                                r * CELL + CELL - th, t))
             elif brick is not None and brick[r, c] and res.brick_tile is not None:
                 tiles = res.brick_tile
                 t = (tiles[(r * 7 + c * 13) % len(tiles)]

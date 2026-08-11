@@ -8,7 +8,7 @@
    "scenes/中国城_z3.png",
    "scenes/中国城_z4.png"
   ],
-  "wall": null
+  "wall": "scenes/中国城_tile_003.png"
  },
  "功夫": {
   "bg": "scenes/功夫_gf.PNG",
@@ -17,7 +17,7 @@
    "scenes/功夫_z1.png",
    "scenes/功夫_z2.png"
   ],
-  "wall": null
+  "wall": "scenes/功夫_tile_119.png"
  },
  "夺宝": {
   "bg": "scenes/夺宝_db.png",
@@ -27,7 +27,7 @@
    "scenes/夺宝_z2.png",
    "scenes/夺宝_z3.png"
   ],
-  "wall": null
+  "wall": "scenes/夺宝_tile_059.png"
  },
  "抢包子": {
   "bg": "scenes/抢包子_qbz.png",
@@ -38,7 +38,7 @@
    "scenes/抢包子_z3.png",
    "scenes/抢包子_z4.png"
   ],
-  "wall": null
+  "wall": "scenes/抢包子_tile_033.png"
  },
  "比武": {
   "bg": "scenes/比武_bw.png",
@@ -57,7 +57,7 @@
    "scenes/水面_z2.png",
    "scenes/水面_z3.png"
   ],
-  "wall": null
+  "wall": "scenes/水面_tile_039.png"
  },
  "沙漠": {
   "bg": "scenes/沙漠_shamo.png",
@@ -66,7 +66,7 @@
    "scenes/沙漠_z1.png",
    "scenes/沙漠_z2.png"
   ],
-  "wall": null
+  "wall": "scenes/沙漠_tile_019.png"
  },
  "矿洞": {
   "bg": "scenes/矿洞_kd.png",
@@ -77,7 +77,7 @@
    "scenes/矿洞_z3.png",
    "scenes/矿洞_z4.png"
   ],
-  "wall": null
+  "wall": "scenes/矿洞_tile_054.png"
  },
  "野外": {
   "bg": "scenes/野外_yw.PNG",
@@ -89,7 +89,7 @@
    "scenes/野外_z4.png",
    "scenes/野外_z5.png"
   ],
-  "wall": null
+  "wall": "scenes/野外_tile_068.png"
  },
  "雪地": {
   "bg": "scenes/雪地_xd.png",
@@ -98,7 +98,7 @@
    "scenes/雪地_z1.png",
    "scenes/雪地_z2.png"
   ],
-  "wall": null
+  "wall": "scenes/雪地_tile_080.png"
  },
  "英雄": {
   "bg": "bg1.png",
@@ -107,6 +107,6 @@
    "scenes/英雄_z1.png",
    "scenes/英雄_z2.png"
   ],
-  "wall": null
+  "wall": "scenes/英雄_tile_025.png"
  }
 }

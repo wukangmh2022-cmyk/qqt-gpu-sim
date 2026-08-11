@@ -182,9 +182,14 @@
       }));
       let wall = null;
       if (sc.wall) {
-        const img = await loadImage('assets/' + sc.wall);
-        const h1 = Math.max(1, Math.round(img.height * CELL / img.width));
-        wall = scaleCanvas(img, CELL, h1);
+        // wall 可配单张或多张元件图（scenes.json 约定：除 z*（可炸砖）和底图
+        // 外都是不可炸墙元件），渲染时每格确定性随机选一张（同 brick 机制）。
+        const rels = Array.isArray(sc.wall) ? sc.wall : [sc.wall];
+        wall = await Promise.all(rels.map(async (rel) => {
+          const img = await loadImage('assets/' + rel);
+          const h1 = Math.max(1, Math.round(img.height * CELL / img.width));
+          return scaleCanvas(img, CELL, h1);
+        }));
       }
       sceneAssets[name] = { bg, brick, wall };
     }));
@@ -651,7 +656,9 @@
       for (let c = 0; c < W; c++) {
         const i = r * W + c;
         if (sim.wall[i] && sc.wall) {
-          const t = sc.wall, tw = t.width, th = t.height;
+          // 多张墙元件图：按格确定性随机（同 brick 的 (r*7+c*13) 哈希）
+          const t = sc.wall[(r * 7 + c * 13) % sc.wall.length];
+          const tw = t.width, th = t.height;
           items.push([r, () => ctx.drawImage(
             t, c * CELL + (CELL - tw) / 2, r * CELL + CELL - th)]);
         } else if (sim.brick[i] && sc.brick.length) {
