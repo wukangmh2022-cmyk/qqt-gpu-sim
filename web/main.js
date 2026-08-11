@@ -29,7 +29,7 @@
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
   const $ = (id) => document.getElementById(id);
-  const elMode = $('mode'), elScene = $('scene'),
+  const elMode = $('mode'), elScene = $('scene'), elSkin = $('skin'),
         elSpectate = $('spectate'), elDanger = $('danger'), elSound = $('sound'),
         elBgm = $('bgm'), elApplyModel = $('apply-model'), elCurModel = $('cur-model'),
         elEnemyAi = $('enemy-ai'), elP0Ai = $('p0-ai'), elP0AiWrap = $('p0-ai-wrap'),
@@ -134,21 +134,6 @@
     return c;
   }
 
-  // AI 角色染红（res.py::_tint_red）：保留明暗、色相偏红
-  function tintRed(src) {
-    const c = toCanvas(src);
-    const g = c.getContext('2d');
-    const d = g.getImageData(0, 0, c.width, c.height);
-    for (let i = 0; i < d.data.length; i += 4) {
-      const gray = 0.299 * d.data[i] + 0.587 * d.data[i + 1] + 0.114 * d.data[i + 2];
-      d.data[i] = Math.min(255, gray * 1.3);
-      d.data[i + 1] = gray * 0.3;
-      d.data[i + 2] = gray * 0.3;
-    }
-    g.putImageData(d, 0, 0);
-    return c;
-  }
-
   // 无敌罩预乘（res.py::_load_wudi）：透明区清黑 + rgb *= alpha/255，
   // 之后用 'lighter' 加法混合才不会有蓝底/边缘生硬
   function premulAlpha(src) {
@@ -203,19 +188,41 @@
       sceneAssets[name] = { bg, brick, wall };
     }));
 
-    const target = Math.round(85 * SCALE);        // 角色帧目标尺寸（CELL=60 → 128）
-    const sheet = await loadImage('assets/角色4×4精灵图.png');
-    const fw = sheet.width / 4, fh = sheet.height / 4;
-    const players = [];                           // 4 行方向 × 4 帧
-    for (let r = 0; r < 4; r++) {
-      players.push([]);
-      for (let c = 0; c < 4; c++) {
-        const fr = document.createElement('canvas');
-        fr.width = target; fr.height = target;
-        fr.getContext('2d').drawImage(sheet, c * fw, r * fh, fw, fh, 0, 0, target, target);
-        players[r].push(fr);
+    // 角色皮肤：3 种可选行走图 + 敌人固定角色c（res.py::_load_player 移植）
+    //   海王子 角色4×4精灵图.png（85px 帧）  小虾米 角色b4×4.png（100px）
+    //   火影   角色火影4x4.png（80px）       敌人   角色c4×4.png（100px）
+    const SKINS = [
+      { key: '海王子', file: '角色4×4精灵图.png', scale: 1.0 },
+      { key: '小虾米', file: '角色b4×4.png', scale: 85 / 100 },
+      { key: '火影', file: '角色火影4x4.png', scale: 85 / 80 },
+    ];
+    const ENEMY_SKIN = { file: '角色c4×4.png', scale: 85 / 100 };
+    async function loadSkinRows(file, scale) {
+      const sheet = await loadImage('assets/' + file);
+      const fw = sheet.width / 4, fh = sheet.height / 4;
+      const target = Math.max(1, Math.round(fw * SCALE * scale));
+      const rows = [];                           // 4 行方向 × 4 帧
+      for (let r = 0; r < 4; r++) {
+        rows.push([]);
+        for (let c = 0; c < 4; c++) {
+          const fr = document.createElement('canvas');
+          fr.width = target; fr.height = target;
+          fr.getContext('2d').drawImage(sheet, c * fw, r * fh, fw, fh, 0, 0, target, target);
+          rows[r].push(fr);
+        }
       }
+      return rows;
     }
+    const skinRows = {};
+    for (const sk of SKINS) skinRows[sk.key] = await loadSkinRows(sk.file, sk.scale);
+    const enemyRows = await loadSkinRows(ENEMY_SKIN.file, ENEMY_SKIN.scale);
+    elSkin.innerHTML = '';
+    for (const sk of SKINS) {
+      const opt = document.createElement('option');
+      opt.value = sk.key; opt.textContent = sk.key;
+      elSkin.appendChild(opt);
+    }
+    elSkin.value = '海王子';
     const wudi = premulAlpha(await loadImage('assets/无敌.PNG'));
     const boomImg = await loadImage('assets/bomb1.png');
     const props = [];
@@ -229,9 +236,11 @@
     }
     res = {
       scenes, sceneAssets,
-      players,
-      playerAi: players.map((row) => row.map(tintRed)),
-      wudi: scaleCanvas(wudi, target, target),
+      skins: skinRows,             // 3 种玩家皮肤
+      players: skinRows[elSkin.value],   // 当前玩家皮肤（切换后重绑）
+      enemyRows,                   // 敌人固定角色c（不再染红）
+      playerAi: enemyRows,
+      wudi: scaleCanvas(wudi, Math.round(85 * SCALE), Math.round(85 * SCALE)),
       bomb: scaleCanvas(boomImg, CELL, CELL),
       props,
       exploCenter: scaleCanvas(await loadImage('assets/爆炸中心.png'), CELL, CELL),
@@ -515,6 +524,10 @@
   elRestart.addEventListener('click', startGame);
   elBanner.addEventListener('click', () => { if (!running) startGame(); });  // 欢迎窗口点击开始
   elMode.addEventListener('change', startGame);
+  elSkin.addEventListener('change', () => {
+    if (res && res.skins) res.players = res.skins[elSkin.value];   // 换皮肤
+    startGame();
+  });
   elApplyModel.addEventListener('click', applyModel);
   elSpectate.addEventListener('change', () => {
     // 勾选观战时显示「我方：」下拉（模型 / 规则）
@@ -747,12 +760,14 @@
     ctx.globalCompositeOperation = 'source-over';
 
     // 血条（段式，最后画不被墙挡）
+    // 右移一格宽（+CELL）：帧水平中心=角色中心，但视觉主体偏右半格，血条贴
+    // 帧左上角会偏离人物头顶 —— 平移一格子正好对位（与 duel.py 一致）。
     for (const ch of chars) {
       const segW = 5, segH = 4, gap = 1;
       const color = ch.hpv > ch.mx / 3 ? '#50dc5a' : '#f04646';
       for (let i = 0; i < ch.mx; i++) {
         ctx.fillStyle = i < ch.hpv ? color : '#3c3c42';
-        ctx.fillRect(ch.blitX + i * (segW + gap), ch.blitY - 8, segW, segH);
+        ctx.fillRect(ch.blitX + CELL + i * (segW + gap), ch.blitY - 8, segW, segH);
       }
     }
     drawHUD();
@@ -855,6 +870,7 @@
   // 调试钩子（只读）：无头验证用
   window.__QQT__ = {
     get sim() { return sim; },
+    get res() { return res; },
     get model() {
       const m = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
       return m || (enemySel === HUNTER_VAL ? null : modelCache.get(modelList[0] && modelList[0].name) || null);

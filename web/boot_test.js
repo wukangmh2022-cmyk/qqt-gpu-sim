@@ -224,6 +224,23 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   (els['p0-ai'].listeners['change'] || []).forEach((fn) => fn());
   await wait(300);
 
+  // 人物皮肤下拉：3 种候选（海王子/小虾米/火影），切换后重开不炸
+  if (els['skin'].children.length !== 3) {
+    console.error(`FAIL: 皮肤下拉应 3 个候选（实际 ${els['skin'].children.length}）`);
+    process.exit(1);
+  }
+  els['skin'].value = '小虾米';
+  (els['skin'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(300);
+  if (qqt.sim && qqt.res && qqt.res.players !== qqt.res.skins['小虾米']) {
+    console.error('FAIL: 切小虾米后 res.players 未更新');
+    process.exit(1);
+  }
+  els['skin'].value = '海王子';
+  (els['skin'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(300);
+  console.log('皮肤下拉 3 候选 + 切换重开正常 ✔');
+
   // 逻辑节拍推进检查（setInterval 100ms）
   const t0 = qqt.sim.t;
   await wait(1200);
