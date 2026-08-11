@@ -7,3 +7,4 @@ ckpt/
 .DS_Store
 .env
 wheels/
+scripts/cron_dcu_watch.log
