@@ -34,11 +34,13 @@
             <option value="corridor">走廊（顶墙侧砖 · 2泡/2威/1.0速 踩箱成长）</option>
           </select>
         </label>
-        <label>场景（皮肤）
+        <label>场景（皮肤 + 背景音乐）
           <select id="scene"></select>
         </label>
         <label>AI 模型
+          <div id="cur-model" class="cur">加载中…</div>
           <select id="model"></select>
+          <button id="apply-model" type="button">应用此模型</button>
         </label>
         <label class="row">
           <input type="checkbox" id="spectate"> 观战（AI vs AI，不操作）
@@ -48,6 +50,9 @@
         </label>
         <label class="row">
           <input type="checkbox" id="sound" checked> 音效（M 键切换）
+        </label>
+        <label class="row">
+          <input type="checkbox" id="bgm" checked> 背景音乐（随场景切换）
         </label>
         <button id="restart">开始 / 重新开局（R）</button>
       </section>

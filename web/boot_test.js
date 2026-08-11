@@ -123,6 +123,39 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log('模型:', qqt.model.meta.name, ' 地图:', qqt.sim.mode);
 
+  // 当前模型信息已展示在 HUD（cur-model 元素有内容、且与加载的模型名一致）
+  const curText = els['cur-model'].textContent;
+  if (!curText || !curText.includes(qqt.model.meta.name)) {
+    console.error(`FAIL: cur-model 未显示当前模型（"${curText}"）`);
+    process.exit(1);
+  }
+  console.log(`当前模型显示: ${curText} ✔`);
+
+  // 模型下拉已有选项（模型列表加载成功）
+  if (els['model'].children.length === 0) {
+    console.error('FAIL: 模型下拉列表为空');
+    process.exit(1);
+  }
+  console.log(`模型下拉: ${els['model'].children.length} 个候选 ✔`);
+
+  // 点击「应用此模型」重载当前选中模型，不炸
+  const click = (id) => (els[id].listeners['click'] || []).forEach((fn) => fn());
+  click('apply-model');
+  await wait(400);
+  if (!qqt.model.meta.name) {
+    console.error('FAIL: apply-model 后模型丢失');
+    process.exit(1);
+  }
+  console.log('apply-model 重载正常 ✔');
+
+  // BGM 开关：勾选 → 开启（不炸）；取消勾选 → 停播
+  els['bgm'].checked = true;
+  (els['bgm'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(300);
+  els['bgm'].checked = false;
+  (els['bgm'].listeners['change'] || []).forEach((fn) => fn());
+  console.log('BGM 开关切换正常（on/off）✔');
+
   // 逻辑节拍推进检查（setInterval 100ms）
   const t0 = qqt.sim.t;
   await wait(1200);

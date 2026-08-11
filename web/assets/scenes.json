@@ -1,6 +1,7 @@
 {
  "中国城": {
   "bg": "scenes/中国城_town.png",
+  "bgm": "scenes/中国城_town.ogg",
   "brick": [
    "scenes/中国城_z1.png",
    "scenes/中国城_z2.png",
@@ -11,6 +12,7 @@
  },
  "功夫": {
   "bg": "scenes/功夫_gf.PNG",
+  "bgm": "scenes/功夫_match.ogg",
   "brick": [
    "scenes/功夫_z1.png",
    "scenes/功夫_z2.png"
@@ -19,6 +21,7 @@
  },
  "夺宝": {
   "bg": "scenes/夺宝_db.png",
+  "bgm": "scenes/夺宝_mine.ogg",
   "brick": [
    "scenes/夺宝_z1.png",
    "scenes/夺宝_z2.png",
@@ -28,6 +31,7 @@
  },
  "抢包子": {
   "bg": "scenes/抢包子_qbz.png",
+  "bgm": "scenes/抢包子_bun.ogg",
   "brick": [
    "scenes/抢包子_z1.png",
    "scenes/抢包子_z2.png",
@@ -38,6 +42,7 @@
  },
  "比武": {
   "bg": "scenes/比武_bw.png",
+  "bgm": "scenes/比武_M15.ogg",
   "brick": [
    "scenes/比武_z1.png",
    "scenes/比武_z2.png"
@@ -46,6 +51,7 @@
  },
  "水面": {
   "bg": "scenes/水面_sm.png",
+  "bgm": "scenes/水面_water.ogg",
   "brick": [
    "scenes/水面_z1.png",
    "scenes/水面_z2.png",
@@ -55,6 +61,7 @@
  },
  "沙漠": {
   "bg": "scenes/沙漠_shamo.png",
+  "bgm": "scenes/沙漠_desert.ogg",
   "brick": [
    "scenes/沙漠_z1.png",
    "scenes/沙漠_z2.png"
@@ -63,6 +70,7 @@
  },
  "矿洞": {
   "bg": "scenes/矿洞_kd.png",
+  "bgm": "scenes/矿洞_mine.ogg",
   "brick": [
    "scenes/矿洞_z1.png",
    "scenes/矿洞_z2.png",
@@ -73,6 +81,7 @@
  },
  "野外": {
   "bg": "scenes/野外_yw.PNG",
+  "bgm": "scenes/野外_field.ogg",
   "brick": [
    "scenes/野外_z1.png",
    "scenes/野外_z2.png",
@@ -84,6 +93,7 @@
  },
  "雪地": {
   "bg": "scenes/雪地_xd.png",
+  "bgm": "scenes/雪地_snow.ogg",
   "brick": [
    "scenes/雪地_z1.png",
    "scenes/雪地_z2.png"
@@ -92,6 +102,7 @@
  },
  "英雄": {
   "bg": "bg1.png",
+  "bgm": "scenes/英雄_M08.ogg",
   "brick": [
    "scenes/英雄_z1.png",
    "scenes/英雄_z2.png"

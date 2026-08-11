@@ -23,7 +23,7 @@ for f in 放炮.wav 爆炸.wav 吃道具音效.wav 生命损失音效.wav 角色
   [ -f "$RES/$f" ] && cp "$RES/$f" "$OUT/snd/"
 done
 
-# ---- 场景（bg + 砖块/墙贴图，只搬 scenes.json 里引用的文件）----
+# ---- 场景（bg + 砖块/墙贴图 + BGM，只搬 scenes.json 里引用的文件）----
 # scenes.json 的路径是相对工程根的（如 res/wall/比武/bw.png），直接使用。
 python3 - "$OUT" <<'PY'
 import json, os, shutil, sys
@@ -42,6 +42,12 @@ for name, sc in cfg["scenes"].items():
             groups[key] = [v]
         else:
             groups[key] = []
+    # BGM（ogg，懒加载不阻塞启动；体积大头但只有启用时取）
+    bgm = sc.get("bgm")
+    if bgm:
+        dst = os.path.join(out, "scenes", f"{name}_{os.path.basename(bgm)}")
+        if os.path.exists(bgm) and not os.path.exists(dst):
+            shutil.copy(bgm, dst)
     # 复制全部引用文件（按场景名前缀存放，避免 z1.png 等跨场景同名冲突）
     def dst_name(rel):
         return f"{name}_{os.path.basename(rel)}"
@@ -61,6 +67,7 @@ for name, sc in cfg["scenes"].items():
             shutil.copy("res/bg1.png", os.path.join(out, "bg1.png"))
     scene_out[name] = {
         "bg": bg_file,
+        "bgm": ("scenes/" + f"{name}_{os.path.basename(bgm)}" if bgm else None),
         "brick": ["scenes/" + dst_name(t) for t in groups["brick"]],
         "wall": ("scenes/" + dst_name(groups["wall"][0])
                  if groups["wall"] else None),

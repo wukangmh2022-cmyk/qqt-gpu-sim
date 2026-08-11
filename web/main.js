@@ -31,6 +31,7 @@
   const $ = (id) => document.getElementById(id);
   const elMode = $('mode'), elModel = $('model'), elScene = $('scene'),
         elSpectate = $('spectate'), elDanger = $('danger'), elSound = $('sound'),
+        elBgm = $('bgm'), elApplyModel = $('apply-model'), elCurModel = $('cur-model'),
         elRestart = $('restart'), elStatus = $('status'), elBanner = $('banner'),
         elLoading = $('loading'), elLoadingText = $('loading-text');
 
@@ -39,6 +40,7 @@
   let rng = null;
   let showDanger = true;            // 与启动器一致：危险图红色渐变默认常显
   let soundOn = true;
+  let bgmOn = true;
   let running = false;
   let resultShown = false;
   let prevPos = new Float64Array(4), curPos = new Float64Array(4);
@@ -221,6 +223,59 @@
     } catch (e) { /* 忽略 */ }
   }
 
+  // ------------------------------------------------------------ 背景音乐
+  // 场景 BGM（ogg）懒加载 + 循环播放；随场景切换换曲；浏览器自动播放策略
+  // 要求用户先有交互，首次按键/点击时 resume AudioContext 并开始播放。
+  const bgmBuffers = new Map();
+  let bgmSrc = null, bgmGain = null, bgmUrl = null;
+
+  async function startBgm() {
+    if (!res || !res.audio || !bgmOn) return;
+    const sc = res.scenes[elScene.value];
+    if (!sc || !sc.bgm) return;
+    const url = 'assets/' + sc.bgm;
+    if (url === bgmUrl && bgmSrc) return;      // 同一首已在播
+    if (bgmSrc) { try { bgmSrc.stop(); } catch (e) { /* */ } bgmSrc = null; }
+    try {
+      if (res.audio.state === 'suspended') await res.audio.resume();
+      let buf = bgmBuffers.get(url);
+      if (!buf) {
+        const ab = await (await fetch(url)).arrayBuffer();
+        buf = await res.audio.decodeAudioData(ab);
+        bgmBuffers.set(url, buf);
+      }
+      const src = res.audio.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      if (!bgmGain) {
+        bgmGain = res.audio.createGain();
+        bgmGain.gain.value = 0.22;             // 背景音量压低，不盖音效
+        bgmGain.connect(res.audio.destination);
+      }
+      src.connect(bgmGain);
+      src.start();
+      bgmSrc = src;
+      bgmUrl = url;
+    } catch (e) { /* 解码/网络失败静默 */ }
+  }
+
+  function stopBgm() {
+    if (bgmSrc) { try { bgmSrc.stop(); } catch (e) { /* */ } }
+    bgmSrc = null;
+    bgmUrl = null;
+  }
+
+  // 首次用户交互：解锁 AudioContext + 开 BGM（自动播放策略）
+  let audioUnlocked = false;
+  function unlockAudio() {
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+    if (res && res.audio && res.audio.state === 'suspended') res.audio.resume().catch(() => {});
+    startBgm();
+  }
+  window.addEventListener('pointerdown', unlockAudio);
+  window.addEventListener('keydown', unlockAudio);
+
   // ------------------------------------------------------------ 输入
   const KEY_TO_MV = {
     ArrowUp: 0, KeyW: 0, ArrowDown: 1, KeyS: 1,
@@ -333,6 +388,7 @@
     lastTickT = performance.now();
     running = true;
     elBanner.classList.add('hidden');
+    startBgm();               // 换场景后切 BGM（同曲则跳过）
   }
 
   // ------------------------------------------------------------ 模型加载
@@ -349,21 +405,25 @@
     for (const m of modelList) {
       const opt = document.createElement('option');
       opt.value = m.name;
-      opt.textContent = `${m.name}  (${fmtStep(m.global_step)}步 · elo ${m.elo})`;
+      opt.textContent = `${m.name}  · ${fmtStep(m.global_step)}步 · elo ${m.elo} · 导出于 ${(m.generated_at || '').slice(0, 10)}`;
       elModel.appendChild(opt);
     }
-    await loadSelectedModel();
+    await applyModel();            // 默认加载 ELO 最高的模型
   }
 
-  async function loadSelectedModel() {
+  // 应用选中的模型（下拉 + 确定按钮）
+  async function applyModel() {
     const name = elModel.value;
+    if (!name) return;
     elStatus.innerHTML = `正在加载模型 <b>${name}</b>…`;
     try {
       const resp = await fetch(`models/${name}.json`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       model = new MLPModel(await resp.json());
+      elCurModel.textContent =
+        `${model.meta.name}（${fmtStep(model.meta.global_step)}步 · elo ${model.meta.elo} · 导出于 ${(model.meta.generated_at || '').slice(0, 10)}）`;
       elStatus.innerHTML =
-        `模型：<b>${model.meta.name}</b><br>` +
+        `当前模型：<b>${model.meta.name}</b><br>` +
         `训练步数 ${fmtStep(model.meta.global_step)} · elo ${model.meta.elo}<br>` +
         `观测 ${model.meta.obs_shape.join('×')} · 参数 ${Object.values(model.tensors)
           .reduce((s, [, n]) => s + n, 0).toLocaleString()}`;
@@ -375,11 +435,15 @@
 
   elRestart.addEventListener('click', startGame);
   elMode.addEventListener('change', startGame);
-  elModel.addEventListener('change', loadSelectedModel);
+  elApplyModel.addEventListener('click', applyModel);
   elSpectate.addEventListener('change', startGame);
-  elScene.addEventListener('change', startGame);
+  elScene.addEventListener('change', () => { startGame(); startBgm(); });
   elDanger.addEventListener('change', () => { showDanger = elDanger.checked; });
   elSound.addEventListener('change', () => { soundOn = elSound.checked; });
+  elBgm.addEventListener('change', () => {
+    bgmOn = elBgm.checked;
+    if (bgmOn) startBgm(); else stopBgm();
+  });
 
   // ------------------------------------------------------------ 10Hz 逻辑节拍
   function logicTick() {
@@ -632,7 +696,11 @@
                  BOARD_PX - 18, y0 + 36);
     ctx.fillStyle = '#5a6275';
     ctx.font = '11px sans-serif';
-    ctx.fillText('方向键/WASD 移动 · 空格放泡 · D 危险图 · R 重开 · M 静音', BOARD_PX - 18, y0 + 58);
+    ctx.fillText(`方向键/WASD 移动 · 空格放泡 · D 危险图 · R 重开 · M 静音`, BOARD_PX - 18, y0 + 58);
+    ctx.fillStyle = '#5a6275';
+    ctx.font = '11px sans-serif';
+    ctx.fillText(`模型：${model ? model.meta.name : '-'}（${model ? fmtStep(model.meta.global_step) : ''}步）`,
+                 18, y0 + 78);
   }
 
   // ------------------------------------------------------------ 主循环
