@@ -575,7 +575,11 @@ class BatchedSim:
                 self.bomb_blast._version)
 
     def legal_mask(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """返回 (move_mask (N,P,5), bomb_mask (N,P,2))。"""
+        """返回 (move_mask (N,P,5), bomb_mask (N,P,2))。
+
+        2026-08-11 实测 triton 复用 move kernel 试探（位级一致）只省 6%
+        （16.3→15.4ms）—— AABB 碰撞计算量是硬成本，保留 torch 版。
+        """
         return legal_mask(
             self.cfg, self.wall, self.fuse, self.owner, self.pos, self.alive,
             self.brick, self.bombs_cap,
@@ -983,6 +987,10 @@ class BatchedSim:
         # max≤4）+ 上方提前取的 blast_hint（放泡后 max ≥ 结算后 max，恒安全）
         # → danger 零 host 同步（原来 5 次：守卫/轮检查/档位 max）。graph
         # 捕获段（_graph_mode）仍需静态固定轮 + 静态档位。
+        # **danger 保持 eager（2026-08-11 实测）**：AUTOFUSE 单段编译 x3.6-3.9
+        # 位级一致，但 step 里 blast_max_hint 每 tick 动态变化 → 编译函数
+        # 每次调用 guard 检查 + GE 图切换，调度开销吃掉融合收益（集成后
+        # 89.9ms vs eager 80.6ms 净负）。编译只适合固定输入段（obs/legal_mask）。
         danger = danger_map(self.fuse, self.wall, self._blast_map(), cfg.fuse,
                             self.brick, cfg.max_chain,
                             early_exit=not self._graph_mode,

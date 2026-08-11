@@ -244,3 +244,65 @@ move→identity          85.93 ms   （triton 单 kernel 仍 ~2.3ms 数据搬移
 - 100万 需 4.5 卡数据并行（每卡 22.2万）；当前 Dev Space 单卡（910B3）。
 - 剩余候选优化（danger 前缀扫描 cummax、reward/clear 段 in-place 合并）仅
   边际 ~5-10%，改变不了量级；triton/torch.compile/NPU graph 均已实测排除。
+
+---
+
+## 八、第四轮：AutoFuse / multistream / 段编译 / legal_mask 全面探索（2026-08-11 深夜）
+
+### 1. 训练侧整体 SPS（step + obs + legal_mask，PPO collect 口径）
+```
+纯 step        :  85.51 ms/tick  19.16万 SPS
+step+obs       :  92.35 ms/tick  17.74万 SPS  (obs 8.4ms)
+step+obs+mask  : 122.37 ms/tick  13.39万 SPS  (legal_mask 16.4ms = 13%)
+```
+- **训练侧真实 SPS = 13.4万**（比纯 step 的 20万低 33%）——legal_mask 是最大
+  非 step 单项（16.4ms，~1562 个分散小 op，无单一大头）。
+- observe 的 danger 通道复用 step 的 `_dng_cache`（每 tick 只算 1 次 danger）。
+
+### 2. AutoFuse（GE 自动融合）——本会话最重要发现
+- **使能**：`AUTOFUSE_FLAGS="--enable_autofuse=true"`（环境变量，GE 编译时读）。
+  文档：CANN AutoFuse 使能方式（Elemwise/Broadcast 默认开，reduce/concat 需
+  `--autofuse_enable_pass=reduce,concat`）。
+- **单段实测（torch.compile(backend='npu') + AutoFuse）**：
+  ```
+  max_b=1: eager 9.10ms | compiled 2.31ms | x3.94 | 位级 maxdiff=0.00e+00
+  max_b=2: eager 15.45 | compiled 4.21  | x3.67 | 位级 maxdiff=0
+  max_b=3: eager 21.38 | compiled 5.95  | x3.59 | 位级 maxdiff=0
+  max_b=4: eager 28.66 | compiled 7.69  | x3.73 | 位级 maxdiff=0
+  max_b=7: eager 49.20 | compiled 12.80 | x3.84 | 位级 maxdiff=0
+  ```
+  danger（纯张量 sync_free 段）**全档位 x3.6-3.9 且位级完全一致**（GE 融合保序）。
+- **但集成进 step 是净负**：danger 的 `blast_max_hint` 每 tick 动态变化 →
+  编译函数每次调用 dynamo guard 检查 + GE 图切换，调度开销吃掉融合收益
+  （集成后 89.9ms vs eager 80.6ms）。**结论：编译只适合"输入固定、无动态
+  常量"的段**；动态参数段（按档位变化）编译反而慢。
+- **整步编译不可行**：位级破（maxdiff 8e-10，跨段融合改浮点顺序）+ 更慢
+  （x0.71）；move 是 triton kernel 时 torchair op converter 直接报错
+  （triton_kernel_wrapper_functional 不支持）。
+- **backend='inductor' 崩溃**：CANN 8.5.2 无 PyTorch Inductor 对接
+  （BackendCompilerFailed 子进程异常）——只能走 backend='npu'（torchair）。
+- **legal_mask 编译崩溃**：TBE Subprocess task_distribute main process
+  disappeared（图太大/算子不支持）。
+
+### 3. multistream（torch.npu.Stream）实测
+- 独立 op 链：单 stream 188ms → 4 stream 55ms（**x3.42 真并行**）。
+- danger 4-stream 原型（阶段 B 单独）：x1.45；完整 danger（阶段 A+B）：
+  **x0.89 负优化** —— 阶段 A 每轮 2 组 event 同步 + 轮间强串行，同步开销 >
+  并行收益；阶段 B 单独有收益但在完整上下文被阶段 A 拖累。**已撤回**。
+- 内存搬移型 kernel（F.pad 整图搬移）受 HBM 带宽限制，并行度买不到带宽。
+- host↔NPU 带宽 18GB/s（(16384,13,13) 拷贝 0.51ms）→ 把段搬 CPU 算不划算。
+
+### 4. stack 融合复测（张量操作数时代）
+- fw+fd stack(2,n,h,w) 一次 pad：视图上仍有 item 同步（4/调用）+ 更慢
+  （stack 0.41ms vs dual 0.30ms）→ 双 pad 连续张量（现状）确认为最优。
+
+### 5. legal_mask 优化实测
+- triton 复用 move kernel 做 4 方向试探（位级对拍 5 组 PASS）：16.28 →
+  15.36ms（**x1.06**）—— 4 次 kernel 的组装开销吃掉收益，AABB 碰撞计算量
+  是硬成本。保留 torch 版（triton_sim.legal_mask_triton 留作参考）。
+
+### 6. 结论
+- 编译（AutoFuse）只对固定输入段有效，训练热路径（动态档位/分支多）不可用。
+- multistream / stack 融合 / legal_mask triton：全部实测无净收益。
+- 训练侧真实 SPS 13.4万（step 80.6 + obs 8.4 + mask 16.4 + act 杂项 17ms）；
+  单卡 100万 需执行模型级突破（多卡/换算法），非本轮手段可达。

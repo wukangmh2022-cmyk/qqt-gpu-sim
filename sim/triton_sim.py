@@ -461,6 +461,38 @@ def move_players_triton(cfg, pos, move, alive, blocked, speed_mult=None):
     return out
 
 
+def legal_mask_triton(cfg, wall, fuse, owner, pos, alive, brick,
+                      bombs_cap=None):
+    """triton 版 legal_mask：move_mask 的 4 方向试探复用 move_players_triton。
+
+    move kernel 与 torch move_players 位级一致（同 AABB 碰撞逻辑）→ 试探的
+    stop 位置与 _resolve_axis_batch 一致 → moved 判定一致。省 legal_mask 的
+    ~1562 小算子（_resolve_axis_batch×2 + 组装，910B 16.4ms）→ 4 次 move
+    kernel（融合单 kernel，实测 ~11ms）。place 保留 torch（小，can_place）。
+    """
+    if not _HAS_TRITON:
+        raise RuntimeError("triton 不可用")
+    import torch
+    from .obs import can_place
+    n, p, _ = pos.shape
+    dev = pos.device
+    blocked = wall | (fuse > 0) | (brick if brick is not None
+                                   else torch.zeros_like(wall))
+    masks = []
+    for d in range(4):
+        mv = torch.full((n, p), d, dtype=torch.long, device=dev)
+        new_pos = move_players_triton(cfg, pos, mv, alive, blocked, None)
+        moved = (new_pos - pos).abs() > 2 * 1e-4
+        masks.append(moved.any(dim=-1))
+    move_mask = torch.ones((n, p, 5), dtype=torch.bool, device=dev)
+    move_mask[..., :4] = torch.stack(masks, dim=-1)   # IDLE 恒合法
+    move_mask = (move_mask & alive.unsqueeze(-1)) | (~alive).unsqueeze(-1)
+    place = can_place(cfg, fuse, owner, pos, brick, bombs_cap) & alive
+    bomb_mask = torch.ones((n, p, 2), dtype=torch.bool, device=dev)
+    bomb_mask[..., 1] = place | ~alive
+    return move_mask, bomb_mask
+
+
 def explode_triton(src, wall, bombed, brick, blast, b_max=7):
     """爆炸传播（与 blast.rays 逐位一致）。返回 bool covered。
 
