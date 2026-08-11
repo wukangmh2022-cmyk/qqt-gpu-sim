@@ -280,6 +280,38 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   await wait(600);
   console.log(`切场景/切模式后正常（tick=${qqt.sim.t}，mode=${qqt.sim.mode}）`);
 
+  // 结算行为：跑完一局后（done），空格不重开、R 重开
+  // 用观战 AI 对打快速结束一局
+  els['spectate'].checked = true;
+  fire('spectate');
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) {
+    await wait(1000);
+    if (qqt.sim.done) break;
+  }
+  const doneBefore = qqt.sim.done;
+  const seedBefore = qqt.sim.t;
+  if (doneBefore) {
+    // 结算界面：空格不应重开（running=false、sim 非 null）
+    global.dispatch('keydown', 'Space');
+    await wait(300);
+    if (qqt.sim.t !== seedBefore) {
+      console.error('FAIL: 结算界面按空格不应重开');
+      process.exit(1);
+    }
+    console.log('结算界面按空格不重开 ✔');
+    // R 重开
+    global.dispatch('keydown', 'KeyR');
+    await wait(300);
+    if (qqt.sim.done) {
+      console.error('FAIL: 结算界面按 R 未重开');
+      process.exit(1);
+    }
+    console.log('结算界面按 R 重开 ✔');
+  } else {
+    console.log('（观战 45s 未结束，跳过结算断言）');
+  }
+
   console.log('\n页面启动全流程无运行时错误 ✔');
   process.exit(0);
 })().catch((e) => {

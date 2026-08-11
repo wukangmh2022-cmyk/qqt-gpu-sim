@@ -33,7 +33,7 @@
     maxHp: 5, invulnTicks: 30,
     stepLen: 3.0 / 10,                 // 0.3 格/tick
     // 成长（corridor 起步）
-    growthBombsStart: 2, growthBlastStart: 2, growthSpeedStart: 1.0,
+    growthBombsStart: 2, growthBlastStart: 2, growthSpeedStart: 1.6,
     growthBombsMax: 10, growthBlastMax: 7,
     growthSpeedMax: 2.1, growthSpeedStep: 0.15,
     // open 关起步 = 上限 80%（与训练一致）

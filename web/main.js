@@ -342,7 +342,8 @@
     held.add(e.code);
     if (e.code === 'Space') {
       e.preventDefault();
-      if (!running) { startGame(); return; }   // 欢迎/结算界面：空格开始新局
+      // 仅欢迎窗口（还没开局）用空格开始；结算界面用 R 重开，空格不触发
+      if (!running && sim === null) { startGame(); return; }
       human.pendingBomb = true;
     }
     if (e.code === 'KeyR') { startGame(); }
@@ -556,7 +557,9 @@
     // danger 缓存：tick 级重建（10Hz），渲染帧直接复用 —— 60fps 每帧重算
     // dangerMap（不动点传播 O(炸弹×blast)）是 AI 对打帧率低的主因
     dangerCache = sim.dangerMap();
-    face[0] = a0[0];
+    // 朝向：人类玩家（非观战）的朝向由 60Hz 帧级移动维护，10Hz tick 不覆盖
+    //（否则每 tick 把 face[0] 重置成 IDLE → 渲染回退朝下，按左/右后总朝下）
+    if (spectate) face[0] = a0[0];
     face[1] = a1[0];
     // 音效（以人类玩家为监听者，只播人类相关事件）
     if (info.placed[0]) playSnd('place');
