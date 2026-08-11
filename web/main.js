@@ -655,7 +655,7 @@
     for (let r = 0; r < H; r++) {
       for (let c = 0; c < W; c++) {
         const i = r * W + c;
-        if (sim.wall[i] && sc.wall) {
+        if (sim.wall[i] && sc.wall && sc.wall.length) {
           // 多张墙元件图：按格确定性随机（同 brick 的 (r*7+c*13) 哈希）
           const t = sc.wall[(r * 7 + c * 13) % sc.wall.length];
           const tw = t.width, th = t.height;

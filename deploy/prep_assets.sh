@@ -72,8 +72,9 @@ for name, sc in cfg["scenes"].items():
         "bg": bg_file,
         "bgm": ("scenes/" + f"{name}_{os.path.basename(bgm)}" if bgm else None),
         "brick": ["scenes/" + dst_name(t) for t in groups["brick"]],
-        "wall": ("scenes/" + dst_name(groups["wall"][0])
-                 if groups["wall"] else None),
+        # 墙元件多张（不可炸毁墙按格随机），保持列表 —— 单张是"只取第一张"的
+        # 旧缺陷，会导致同场景所有墙格共用一张图。
+        "wall": ["scenes/" + dst_name(t) for t in groups["wall"]],
     }
 json.dump(scene_out, open(os.path.join(out, "scenes.json"), "w"),
           ensure_ascii=False, indent=1)
