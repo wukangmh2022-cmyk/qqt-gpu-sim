@@ -31,16 +31,18 @@
   const $ = (id) => document.getElementById(id);
   const elMode = $('mode'), elModel = $('model'), elScene = $('scene'),
         elSpectate = $('spectate'), elDanger = $('danger'), elSound = $('sound'),
-        elRestart = $('restart'), elStatus = $('status'), elBanner = $('banner');
+        elRestart = $('restart'), elStatus = $('status'), elBanner = $('banner'),
+        elLoading = $('loading'), elLoadingText = $('loading-text');
 
   // ------------------------------------------------------------ 状态
   let sim = null, model = null, modelList = [], res = null;
   let rng = null;
-  let showDanger = false, soundOn = true;
+  let showDanger = true;            // 与启动器一致：危险图红色渐变默认常显
+  let soundOn = true;
   let running = false;
   let resultShown = false;
   let prevPos = new Float64Array(4), curPos = new Float64Array(4);
-  let explosion = null, explosionT = 0;
+  let explosion = null, explosionTrig = null, explosionT = 0;
   let lastTickT = 0;
   let gameSeed = 1;
   const face = [MOVE_DOWN, MOVE_DOWN];
@@ -48,12 +50,23 @@
 
   // ------------------------------------------------------------ 素材加载
   const imgCache = new Map();
+  let imgLoaded = 0;
   function loadImage(src) {
     if (imgCache.has(src)) return imgCache.get(src);
-    const p = new Promise((resolve, reject) => {
+    const p = new Promise((resolve) => {
       const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('加载失败: ' + src));
+      img.onload = () => {
+        imgLoaded++;
+        elLoadingText.textContent = `正在加载素材…（${imgLoaded}）`;
+        resolve(img);
+      };
+      img.onerror = () => {
+        console.warn('素材缺失（降级占位）:', src);
+        imgLoaded++;
+        const c = document.createElement('canvas');   // 透明占位，不阻塞启动
+        c.width = 40; c.height = 40;
+        resolve(c);
+      };
       img.src = src;
     });
     imgCache.set(src, p);
@@ -121,21 +134,20 @@
     }
     elScene.value = '比武';
 
-    // 预加载全部场景素材（bg + 砖块 + 墙），渲染全程同步
+    // 预加载全部场景素材（bg + 砖块 + 墙），渲染全程同步；并行加载
     const sceneAssets = {};
-    for (const name of sceneNames) {
+    await Promise.all(sceneNames.map(async (name) => {
       const sc = scenes[name];
       const bgImg = await loadImage('assets/' + sc.bg);
       // 与 build_static 一致：整体缩放（比例 = CELL/40）后左上角铺一张
       const bg = scaleCanvas(bgImg, Math.round(bgImg.width * SCALE),
                              Math.round(bgImg.height * SCALE));
-      const brick = [];
-      for (const rel of sc.brick) {
+      const brick = await Promise.all(sc.brick.map(async (rel) => {
         const img = await loadImage('assets/' + rel);
         // 与 res.py::load_one 一致：等比缩放（宽 = cell，高按比例）
         const h1 = Math.max(1, Math.round(img.height * CELL / img.width));
-        brick.push(scaleCanvas(img, CELL, h1));
-      }
+        return scaleCanvas(img, CELL, h1);
+      }));
       let wall = null;
       if (sc.wall) {
         const img = await loadImage('assets/' + sc.wall);
@@ -143,7 +155,7 @@
         wall = scaleCanvas(img, CELL, h1);
       }
       sceneAssets[name] = { bg, brick, wall };
-    }
+    }));
 
     const target = Math.round(85 * SCALE);        // 角色帧目标尺寸（CELL=60 → 128）
     const sheet = await loadImage('assets/角色4×4精灵图.png');
@@ -315,7 +327,7 @@
     sim.reset(elMode.value === 'corridor' ? 'corridor' : 'open');
     rng = Q.mulberry32(gameSeed ^ 0x13579BDF);
     human.dirStack = []; human.latch.clear(); human.move = MOVE_IDLE; human.pendingBomb = false;
-    explosion = null; resultShown = false;
+    explosion = null; explosionTrig = null; resultShown = false;
     prevPos.set(sim.pos); curPos.set(sim.pos);
     face[0] = MOVE_DOWN; face[1] = MOVE_DOWN;
     lastTickT = performance.now();
@@ -376,6 +388,9 @@
     const a0 = spectate ? model.act(sim, 0, rng) : [MOVE_IDLE, human.pendingBomb ? 1 : 0];
     if (!spectate) human.pendingBomb = false;
     const a1 = model.act(sim, 1, rng);
+    // 拾取判定：人类玩家脚下 step 前有宝箱 → step 后没有 = 吃到
+    const hc = Math.floor(sim.pos[1]), hr = Math.floor(sim.pos[0]);
+    const hadCrate = !spectate && sim.alive[0] && sim.crate[hr * W + hc] === 1;
     prevPos.set(sim.pos);
     const info = sim.step([a0, a1]);
     curPos.set(sim.pos);
@@ -383,10 +398,12 @@
     face[1] = a1[0];
     // 音效（以人类玩家为监听者，只播人类相关事件）
     if (info.placed[0]) playSnd('place');
+    if (hadCrate && !sim.crate[hr * W + hc]) playSnd('pickup');
     // 只有真的有火焰（任一格被覆盖）才播爆炸音效/显示爆炸特效
     const hasBlast = info.covered && info.covered.some((v) => v > 0);
     if (hasBlast) {
       explosion = info.covered;
+      explosionTrig = info.triggered;      // 引爆源格（step 内已清场，必须用返回掩码）
       explosionT = performance.now();
       playSnd('boom');
     }
@@ -457,37 +474,37 @@
     // 爆炸：中心格用中心图；臂图按实际爆炸格数从炸弹边缘端切片（duel.py 同款算法）
     if (explosion) {
       const age = (now - explosionT) / 1000;
-      if (age <= 0.6) {
+      if (age <= 0.6 && explosionTrig) {
         const blast = explosion;
-        // 引爆源（fuse==0 且 owner>=0）的格画中心图
+        const maxBlast = 7;   // 成长上限，与 duel.py 的 res_blast 一致（含 open 关）
+        // 引爆源格画中心图
         for (let i = 0; i < N; i++) {
-          if (sim.fuse[i] !== 0 || sim.owner[i] < 0) continue;
+          if (!explosionTrig[i]) continue;
           const r = (i / W) | 0, c = i % W;
           items.push([r, () => ctx.drawImage(res.exploCenter, c * CELL, r * CELL)]);
         }
         // 臂：从引爆源向 4 方向按实际长度画（尊重挡火规则）
         for (let i = 0; i < N; i++) {
-          if (sim.fuse[i] !== 0 || sim.owner[i] < 0) continue;
+          if (!explosionTrig[i]) continue;
           const sr = (i / W) | 0, sc = i % W;
           for (let d = 0; d < 4; d++) {
             const [dr, dc] = DIRS[d];
             let n = 0;
-            for (let k = 1; k <= CFG.blast; k++) {
+            for (let k = 1; k <= maxBlast; k++) {
               const r = sr + dr * k, c = sc + dc * k;
               if (r < 0 || r >= H || c < 0 || c >= W) break;
               if (!blast[r * W + c]) break;
               n++;
             }
             const arm = res.exploArms[['up', 'down', 'left', 'right'][d]];
+            const len = maxBlast * 40;
             for (let k = 1; k <= n; k++) {
               const r = sr + dr * k, c = sc + dc * k;
               let sx, sy;
               if (dc !== 0) {
-                const len = CFG.blast * 40;
                 sx = dc > 0 ? (arm.width - len) + (k - 1) * 40 : (n - k) * 40;
                 sy = 0;
               } else {
-                const len = CFG.blast * 40;
                 sx = 0;
                 sy = dr > 0 ? (arm.height - len) + (k - 1) * 40 : (n - k) * 40;
               }
@@ -498,6 +515,7 @@
         }
       } else {
         explosion = null;
+        explosionTrig = null;
       }
     }
 
@@ -638,8 +656,11 @@
 
   // ------------------------------------------------------------ 启动
   async function boot() {
-    await loadAssets();
-    await loadModelList();
+    elLoadingText.textContent = '正在加载素材…';
+    // 模型（开局）与素材（渲染）互不依赖，并行加载
+    await Promise.all([loadModelList(), loadAssets()]);
+    startGame();               // 两者就绪后开局
+    elLoading.classList.add('hidden');
     requestAnimationFrame(loop);
   }
   boot().catch((e) => {
@@ -652,5 +673,7 @@
     get sim() { return sim; },
     get model() { return model; },
     get running() { return running; },
+    get explosion() { return explosion; },
+    get explosionTrig() { return explosionTrig; },
   };
 })();

@@ -16,6 +16,12 @@
   <div id="layout">
     <div id="stage">
       <canvas id="game" width="780" height="876"></canvas>
+      <div id="loading">
+        <div class="box">
+          <div class="spinner"></div>
+          <div id="loading-text">正在加载素材…</div>
+        </div>
+      </div>
       <div id="banner" class="hidden"></div>
     </div>
 
@@ -38,7 +44,7 @@
           <input type="checkbox" id="spectate"> 观战（AI vs AI，不操作）
         </label>
         <label class="row">
-          <input type="checkbox" id="danger"> 显示危险图（D 键切换）
+          <input type="checkbox" id="danger" checked> 显示危险图（D 键切换，默认开）
         </label>
         <label class="row">
           <input type="checkbox" id="sound" checked> 音效（M 键切换）

@@ -21,7 +21,12 @@ function makeEl(id) {
     textContent: '',
     children: [],
     listeners: {},
-    classList: { add() {}, remove() {}, contains: () => false },
+    _classes: new Set(),
+    classList: {
+      add: (c) => { els[id]._classes.add(c); },
+      remove: (c) => { els[id]._classes.delete(c); },
+      contains: (c) => els[id]._classes.has(c),
+    },
     style: {},
     addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
     appendChild(c) { this.children.push(c); },
@@ -138,16 +143,36 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     process.exit(1);
   }
 
+  // loading 层在 boot 完成后隐藏
+  if (!els['loading'].classList.contains('hidden')) {
+    console.error('FAIL: loading 层未隐藏');
+    process.exit(1);
+  }
+  console.log('loading 层已隐藏 ✔');
+
+  // 切观战模式，等 AI 放泡爆炸，确认 explosion 掩码被设置（十字爆炸渲染的输入）
+  els['spectate'].checked = true;
+  (els['spectate'].listeners['change'] || []).forEach((fn) => fn());
+  let explosionSeen = false;
+  for (let i = 0; i < 60; i++) {
+    await wait(300);
+    const ex = qqt.explosion;
+    if (ex && ex.some((v) => v > 0)) { explosionSeen = true; break; }
+  }
+  if (!explosionSeen) {
+    console.error('FAIL: 18s 内没观察到爆炸（explosion 掩码未设置）');
+    process.exit(1);
+  }
+  console.log(`爆炸特效触发正常（tick=${qqt.sim.t}，covered 格=${qqt.explosion.filter(v => v).length}）✔`);
+
   // 换场景/换模式/观战 各触发一次 startGame，确认不炸
   const fire = (id) => (els[id].listeners['change'] || []).forEach((fn) => fn());
   els['scene'].value = '矿洞';
   fire('scene');
   els['mode'].value = 'corridor';
   fire('mode');
-  els['spectate'].checked = true;
-  fire('spectate');
   await wait(600);
-  console.log(`切场景/切模式/观战后正常（tick=${qqt.sim.t}，mode=${qqt.sim.mode}）`);
+  console.log(`切场景/切模式后正常（tick=${qqt.sim.t}，mode=${qqt.sim.mode}）`);
 
   console.log('\n页面启动全流程无运行时错误 ✔');
   process.exit(0);

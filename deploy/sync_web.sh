@@ -25,14 +25,10 @@ if [ ! -d "$WORK/.git" ]; then
 fi
 
 echo "[sync] 同步 web/ → $WORK"
-# 清掉旧文件（含已删除的），再整体拷贝
-( cd "$WORK" && git rm -rq --cached . 2>/dev/null || true )
-find "$WORK" -mindepth 1 -not -path "$WORK/.git*" -exec rm -rf {} + 2>/dev/null || true
+# 清掉旧的 web 产物（保留 .git 与游戏仓库自己的 README.md 等根文件）
+find "$WORK" -mindepth 1 -maxdepth 1 \
+  -not -name ".git" -not -name "README.md" -exec rm -rf {} +
 cp -R web/. "$WORK/"
-# 保留一份构建说明（README 已在游戏仓库里，同步时补一下链接文件）
-if [ ! -f "$WORK/README.md" ]; then
-  cp /dev/null /dev/null  # 占位：README 由游戏仓库自己维护
-fi
 
 cd "$WORK"
 git add -A
