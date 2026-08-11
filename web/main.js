@@ -245,7 +245,7 @@
       bomb: scaleCanvas(boomImg, CELL, CELL),
       props,
       point: scaleCanvas(await loadImage('assets/point.png'),
-                         Math.round(40 * SCALE), Math.round(40 * SCALE)),
+                         Math.round(40 * SCALE * 0.5), Math.round(40 * SCALE * 0.5)),
       exploCenter: scaleCanvas(await loadImage('assets/爆炸中心.png'), CELL, CELL),
       exploArms,
     };
@@ -763,25 +763,21 @@
     ctx.globalCompositeOperation = 'source-over';
 
     // 血条（段式，最后画不被墙挡）
-    // 水平：右移一格宽（+CELL）对齐人物头顶后再**回移 12px**（纯右移一格子
-    // 偏过头，视觉主体其实只偏 ~半格多）—— 最终偏移 +48px。
-    // 垂直：放在箭头（我方指示，紧贴角色头顶）上方 4px —— 箭头指向谁血条跟谁，
-    // 两个角色同一高度布局。
-    const barH = 4;
-    const arrowH = res.point.height;
+    // 水平：右移一格宽（+CELL）后再回移 12px（纯右移一格子偏过头，视觉主体
+    // 实际偏 ~半格多）—— 最终偏移 +48px。
+    // 垂直：贴角色头顶上方 8px（与旧版一致，**不随箭头移动**）。
     for (const ch of chars) {
-      const segW = 5, segH = barH, gap = 1;
+      const segW = 5, segH = 4, gap = 1;
       const color = ch.hpv > ch.mx / 3 ? '#50dc5a' : '#f04646';
-      const barY = ch.blitY - arrowH - 4 - segH;
       const barX = ch.blitX + CELL - 12;
       for (let i = 0; i < ch.mx; i++) {
         ctx.fillStyle = i < ch.hpv ? color : '#3c3c42';
-        ctx.fillRect(barX + i * (segW + gap), barY, segW, segH);
+        ctx.fillRect(barX + i * (segW + gap), ch.blitY - 8, segW, segH);
       }
     }
 
-    // 我方控制指示箭头（res/point.png 向下箭头）：非观战时**紧贴**玩家角色
-    // 头顶（血条下方），箭头尖朝下指着头；顶行角色不越画布顶。
+    // 我方控制指示箭头（res/point.png 向下箭头，已缩到 50%）：非观战时**紧贴**
+    // 玩家角色头顶（血条下方），箭头尖朝下指着头；顶行角色不越画布顶。
     if (!elSpectate.checked) {
       const me = chars.find((ch) => ch.pid === 0);
       if (me) {
