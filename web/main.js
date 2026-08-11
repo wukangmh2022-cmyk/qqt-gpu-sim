@@ -29,7 +29,7 @@
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
   const $ = (id) => document.getElementById(id);
-  const elMode = $('mode'), elModel = $('model'), elScene = $('scene'),
+  const elMode = $('mode'), elScene = $('scene'),
         elSpectate = $('spectate'), elDanger = $('danger'), elSound = $('sound'),
         elBgm = $('bgm'), elApplyModel = $('apply-model'), elCurModel = $('cur-model'),
         elEnemyAi = $('enemy-ai'), elP0Ai = $('p0-ai'), elP0AiWrap = $('p0-ai-wrap'),
@@ -37,7 +37,7 @@
         elLoading = $('loading'), elLoadingText = $('loading-text');
 
   // ------------------------------------------------------------ 状态
-  let sim = null, model = null, modelList = [], res = null;
+  let sim = null, modelList = [], res = null;
   let rng = null;
   let showDanger = true;            // 与启动器一致：危险图红色渐变默认常显
   let soundOn = true;
@@ -46,20 +46,36 @@
   let resultShown = false;
   let prevPos = new Float64Array(4), curPos = new Float64Array(4);
   let explosion = null, explosionTrig = null, explosionT = 0;
+  let dangerCache = null;           // tick 级危险图缓存（logicTick 每 step 重建）
   let lastTickT = 0;
   let gameSeed = 1;
   const face = [MOVE_DOWN, MOVE_DOWN];
   const human = { dirStack: [], latch: new Set(), move: MOVE_IDLE, pendingBomb: false };
   const hunter = new Q.HunterAI();   // 规则 AI（纯进攻寻路），可当敌/我方
+  const HUNTER_VAL = '__hunter__';   // 下拉里规则 AI 的 value 哨兵
 
-  // 玩家决策来源：'human' | 'model' | 'hunter'（观战/规则 AI 时用）
+  // 敌/我方 AI 选择：'__hunter__'（规则）或模型名。模型按需懒加载到缓存。
+  // 敌人默认 = 列表第一个（ELO 最高）；观战我方默认 = 同样的最强模型。
+  let enemySel = null, p0Sel = null;
+  const modelCache = new Map();      // name → MLPModel（懒加载缓存）
+  async function ensureModel(name) {
+    let m = modelCache.get(name);
+    if (m) return m;
+    const resp = await fetch(`models/${name}.json`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    m = new MLPModel(await resp.json());
+    modelCache.set(name, m);
+    return m;
+  }
+
+  // 玩家决策来源：'human' | '__hunter__' | 模型名（观战/规则 AI 时用）
   function aiOf(pid) {
-    const kind = pid === 0
-      ? (elSpectate.checked ? elP0Ai.value : 'human')
-      : elEnemyAi.value;
-    if (kind === 'hunter') return hunter.act(sim, pid);
-    if (kind === 'human') return [MOVE_IDLE, human.pendingBomb ? 1 : 0];
-    return model.act(sim, pid, rng);
+    if (pid === 0 && !elSpectate.checked) return [MOVE_IDLE, human.pendingBomb ? 1 : 0];
+    const sel = pid === 0 ? p0Sel : enemySel;
+    if (sel === HUNTER_VAL) return hunter.act(sim, pid);
+    const m = sel ? modelCache.get(sel) : null;
+    if (m) return m.act(sim, pid, rng);
+    return [MOVE_IDLE, 0];          // 模型还没加载好：先站着
   }
 
   // ------------------------------------------------------------ 素材加载
@@ -417,13 +433,14 @@
 
   // ------------------------------------------------------------ 开局
   function startGame() {
-    if (!model || !res) return;
+    if (!res) return;                // 模型未就绪由 logicTick 兜底等待
     gameSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
     sim = new Sim(gameSeed);
     sim.reset(elMode.value === 'corridor' ? 'corridor' : 'open');
     rng = Q.mulberry32(gameSeed ^ 0x13579BDF);
     human.dirStack = []; human.latch.clear(); human.move = MOVE_IDLE; human.pendingBomb = false;
     explosion = null; explosionTrig = null; resultShown = false;
+    dangerCache = null;             // 开局清掉旧危险图缓存
     prevPos.set(sim.pos); curPos.set(sim.pos);
     face[0] = MOVE_DOWN; face[1] = MOVE_DOWN;
     lastTickT = performance.now();
@@ -439,36 +456,55 @@
     return String(n);
   }
 
-  async function loadModelList() {
-    const resp = await fetch('models/index.json');
-    modelList = (await resp.json()).models;
-    elModel.innerHTML = '';
+  function fillAiSelect(sel, includeHunter) {
+    sel.innerHTML = '';
+    if (includeHunter) {
+      const h = document.createElement('option');
+      h.value = HUNTER_VAL;
+      h.textContent = '规则 Hunter（纯进攻寻路）';
+      sel.appendChild(h);
+    }
     for (const m of modelList) {
       const opt = document.createElement('option');
       opt.value = m.name;
       opt.textContent = `${m.name}  · ${fmtStep(m.global_step)}步 · elo ${m.elo} · 导出于 ${(m.generated_at || '').slice(0, 10)}`;
-      elModel.appendChild(opt);
+      sel.appendChild(opt);
     }
-    await applyModel();            // 默认加载 ELO 最高的模型
   }
 
-  // 应用选中的模型（下拉 + 确定按钮）
+  async function loadModelList() {
+    const resp = await fetch('models/index.json');
+    modelList = (await resp.json()).models;
+    // 敌人 AI 下拉 + 观战「我方：」下拉：都列全部模型 + 规则 Hunter
+    fillAiSelect(elEnemyAi, true);
+    fillAiSelect(elP0Ai, true);
+    elEnemyAi.value = modelList[0].name;     // 默认：ELO 最高的模型
+    elP0Ai.value = modelList[0].name;
+    await applyModel();            // 预加载默认敌人模型
+  }
+
+  // 应用选中的 AI（敌人）：模型名 → 加载权重；规则 Hunter → 无需权重
   async function applyModel() {
-    const name = elModel.value;
-    if (!name) return;
-    elStatus.innerHTML = `正在加载模型 <b>${name}</b>…`;
+    const sel = elEnemyAi.value;
+    if (!sel) return;
+    if (sel === HUNTER_VAL) {
+      enemySel = HUNTER_VAL;
+      elCurModel.textContent = '规则 Hunter（纯进攻寻路）';
+      elStatus.innerHTML = '敌人：<b>规则 Hunter</b>（纯进攻寻路 AI，无需模型权重）';
+      return;
+    }
+    elStatus.innerHTML = `正在加载模型 <b>${sel}</b>…`;
     try {
-      const resp = await fetch(`models/${name}.json`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      model = new MLPModel(await resp.json());
+      const m = await ensureModel(sel);
+      enemySel = sel;
       modelLoaded = true;
       requestAnimationFrame(updateProgress);
       elCurModel.textContent =
-        `${model.meta.name}（${fmtStep(model.meta.global_step)}步 · elo ${model.meta.elo} · 导出于 ${(model.meta.generated_at || '').slice(0, 10)}）`;
+        `${m.meta.name}（${fmtStep(m.meta.global_step)}步 · elo ${m.meta.elo} · 导出于 ${(m.meta.generated_at || '').slice(0, 10)}）`;
       elStatus.innerHTML =
-        `当前模型：<b>${model.meta.name}</b><br>` +
-        `训练步数 ${fmtStep(model.meta.global_step)} · elo ${model.meta.elo}<br>` +
-        `观测 ${model.meta.obs_shape.join('×')} · 参数 ${Object.values(model.tensors)
+        `当前模型：<b>${m.meta.name}</b><br>` +
+        `训练步数 ${fmtStep(m.meta.global_step)} · elo ${m.meta.elo}<br>` +
+        `观测 ${m.meta.obs_shape.join('×')} · 参数 ${Object.values(m.tensors)
           .reduce((s, [, n]) => s + n, 0).toLocaleString()}`;
     } catch (e) {
       elStatus.innerHTML = `模型加载失败：${e.message}`;
@@ -480,13 +516,20 @@
   elMode.addEventListener('change', startGame);
   elApplyModel.addEventListener('click', applyModel);
   elSpectate.addEventListener('change', () => {
-    // 勾选观战时显示「我方角色由什么 AI 替换」下拉
+    // 勾选观战时显示「我方：」下拉（模型 / 规则）
     elP0AiWrap.style.display = elSpectate.checked ? '' : 'none';
     startGame();
   });
   elScene.addEventListener('change', () => { stopBgm(); startGame(); });  // 先停旧曲，startGame 内再播新曲
-  elEnemyAi.addEventListener('change', startGame);   // 换敌方 AI → 重开一局
-  elP0Ai.addEventListener('change', startGame);
+  elEnemyAi.addEventListener('change', applyModel);   // 换敌人 AI → 应用并重开
+  elP0Ai.addEventListener('change', async () => {
+    // 观战「我方：」：规则 → hunter；模型 → 懒加载进缓存（不阻塞开局）
+    p0Sel = elP0Ai.value;
+    if (p0Sel !== HUNTER_VAL) {
+      try { await ensureModel(p0Sel); } catch (e) { elStatus.innerHTML = `我方模型加载失败：${e.message}`; }
+    }
+    startGame();
+  });
   elDanger.addEventListener('change', () => { showDanger = elDanger.checked; });
   elSound.addEventListener('change', () => { soundOn = elSound.checked; });
   elBgm.addEventListener('change', () => {
@@ -496,7 +539,9 @@
 
   // ------------------------------------------------------------ 10Hz 逻辑节拍
   function logicTick() {
-    if (!running || !model || !sim || sim.done) return;
+    if (!running || !sim || sim.done) return;
+    // 敌人模型未就绪（正在加载/加载失败）先不推进；规则 AI 随时可用
+    if (enemySel !== HUNTER_VAL && !modelCache.has(enemySel)) return;
     const spectate = elSpectate.checked;
     const a0 = aiOf(0);
     if (!spectate) human.pendingBomb = false;
@@ -508,6 +553,9 @@
     const info = sim.step([a0, a1]);
     curPos.set(sim.pos);
     lastTickT = performance.now();
+    // danger 缓存：tick 级重建（10Hz），渲染帧直接复用 —— 60fps 每帧重算
+    // dangerMap（不动点传播 O(炸弹×blast)）是 AI 对打帧率低的主因
+    dangerCache = sim.dangerMap();
     face[0] = a0[0];
     face[1] = a1[0];
     // 音效（以人类玩家为监听者，只播人类相关事件）
@@ -542,7 +590,8 @@
 
   function drawDangerOverlay() {
     if (!showDanger) return;
-    const d = sim.dangerMap();
+    const d = dangerCache;          // 10Hz 缓存；开局首帧尚未生成时按需算一次
+    if (!d) return;
     for (let r = 0; r < H; r++) {
       for (let c = 0; c < W; c++) {
         const v = d[r * W + c];
@@ -720,9 +769,9 @@
     ctx.fillRect(0, y0, BOARD_PX, HUD_PX);
     ctx.strokeStyle = 'rgba(255,255,255,0.08)';
     ctx.strokeRect(0, y0, BOARD_PX, HUD_PX);
-    const p0Kind = elSpectate.checked ? (elP0Ai.value === 'hunter' ? '规则 Hunter' : '模型')
-                                      : '你';
-    const p1Kind = elEnemyAi.value === 'hunter' ? '规则 Hunter' : '模型';
+    const aiName = (sel) => sel === HUNTER_VAL ? '规则 Hunter' : (sel || '模型');
+    const p0Kind = elSpectate.checked ? aiName(p0Sel) : '你';
+    const p1Kind = aiName(enemySel);
     // 第 1 行：双方状态各自合并成一行（名字 + HP/属性），右侧倒计时（无 tick）
     const colors = ['#ff6b6b', '#5aa7ff'];
     const leftHalf = BOARD_PX * 0.46;
@@ -751,7 +800,8 @@
                  BOARD_PX - 18, y0 + 32);
     ctx.fillStyle = '#5a6275';
     ctx.font = '11px sans-serif';
-    ctx.fillText(`模型：${model ? model.meta.name : '-'}（${model ? fmtStep(model.meta.global_step) : ''}步）`,
+    const em = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
+    ctx.fillText(`敌人：${em ? em.meta.name + '（' + fmtStep(em.meta.global_step) + '步）' : p1Kind}`,
                  18, y0 + 78);
   }
 
@@ -802,7 +852,13 @@
   // 调试钩子（只读）：无头验证用
   window.__QQT__ = {
     get sim() { return sim; },
-    get model() { return model; },
+    get model() {
+      const m = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
+      return m || (enemySel === HUNTER_VAL ? null : modelCache.get(modelList[0] && modelList[0].name) || null);
+    },
+    get enemySel() { return enemySel; },
+    get p0Sel() { return p0Sel; },
+    get modelCache() { return modelCache; },
     get running() { return running; },
     get explosion() { return explosion; },
     get explosionTrig() { return explosionTrig; },

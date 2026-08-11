@@ -163,14 +163,14 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log(`当前模型显示: ${curText} ✔`);
 
-  // 模型下拉已有选项（模型列表加载成功）
-  if (els['model'].children.length === 0) {
-    console.error('FAIL: 模型下拉列表为空');
+  // 敌人 AI 下拉已有选项（模型列表 + 规则 Hunter）
+  if (els['enemy-ai'].children.length === 0) {
+    console.error('FAIL: 敌人 AI 下拉列表为空');
     process.exit(1);
   }
-  console.log(`模型下拉: ${els['model'].children.length} 个候选 ✔`);
+  console.log(`敌人 AI 下拉: ${els['enemy-ai'].children.length} 个候选（模型+规则）✔`);
 
-  // 点击「应用此模型」重载当前选中模型，不炸
+  // 点击「应用」重载当前选中敌人 AI（默认 = 最强模型），不炸
   const click = (id) => (els[id].listeners['click'] || []).forEach((fn) => fn());
   click('apply-model');
   await wait(400);
@@ -180,6 +180,21 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log('apply-model 重载正常 ✔');
 
+  // 敌人 AI 切到规则 Hunter → 应用 → P1 由 hunter 决策
+  els['enemy-ai'].value = '__hunter__';
+  (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(500);
+  if (qqt.enemySel !== '__hunter__') {
+    console.error('FAIL: 敌人切规则 Hunter 后 enemySel 未更新');
+    process.exit(1);
+  }
+  console.log('敌人 AI 切到规则 Hunter 后正常 ✔');
+  // 切回默认最强模型（后续观战测试用）
+  const defaultModel = els['enemy-ai'].children[1].value;   // 第 0 项是规则 Hunter
+  els['enemy-ai'].value = defaultModel;
+  (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(400);
+
   // BGM 开关：勾选 → 开启（不炸）；取消勾选 → 停播
   els['bgm'].checked = true;
   (els['bgm'].listeners['change'] || []).forEach((fn) => fn());
@@ -188,29 +203,25 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   (els['bgm'].listeners['change'] || []).forEach((fn) => fn());
   console.log('BGM 开关切换正常（on/off）✔');
 
-  // 敌方 AI 下拉：切到规则 Hunter → 重开一局不炸，P1 由 hunter 决策
-  els['enemy-ai'].value = 'hunter';
-  (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
-  await wait(500);
-  if (!qqt.sim) { console.error('FAIL: 切敌方 AI 后 sim 丢失'); process.exit(1); }
-  console.log('敌方 AI 切到规则 Hunter 后正常 ✔');
-
-  // 观战勾选 → 「我方替换 AI」下拉显示
+  // 观战勾选 → 「我方：」下拉显示
   els['spectate'].checked = true;
   (els['spectate'].listeners['change'] || []).forEach((fn) => fn());
   if (els['p0-ai-wrap'].style.display !== '') {
     console.error(`FAIL: 观战勾选后 p0-ai-wrap 未显示（display=${els['p0-ai-wrap'].style.display}）`);
     process.exit(1);
   }
-  // 观战 + 我方也换 Hunter（双规则 AI 对局）
-  els['p0-ai'].value = 'hunter';
+  // 观战 + 我方也换规则 Hunter（双规则 AI 对局）
+  els['p0-ai'].value = '__hunter__';
   (els['p0-ai'].listeners['change'] || []).forEach((fn) => fn());
   await wait(600);
+  if (qqt.p0Sel !== '__hunter__') {
+    console.error('FAIL: 观战我方切规则 Hunter 后 p0Sel 未更新');
+    process.exit(1);
+  }
   console.log('观战：我方替换为规则 Hunter 后正常 ✔');
-  els['p0-ai'].value = 'model';
+  // 恢复：我方 = 默认最强模型
+  els['p0-ai'].value = defaultModel;
   (els['p0-ai'].listeners['change'] || []).forEach((fn) => fn());
-  els['enemy-ai'].value = 'model';
-  (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
   await wait(300);
 
   // 逻辑节拍推进检查（setInterval 100ms）

@@ -37,26 +37,17 @@
         <label>场景（皮肤 + 背景音乐）
           <select id="scene"></select>
         </label>
-        <label>AI 模型
+        <label>敌人 AI
           <div id="cur-model" class="cur">加载中…</div>
-          <select id="model"></select>
-          <button id="apply-model" type="button">应用此模型</button>
-        </label>
-        <label>敌方 AI
-          <select id="enemy-ai">
-            <option value="model" selected>模型（上方选择）</option>
-            <option value="hunter">规则 Hunter（纯进攻寻路）</option>
-          </select>
+          <select id="enemy-ai"></select>
+          <button id="apply-model" type="button">应用</button>
         </label>
         <label class="row">
           <input type="checkbox" id="spectate"> 观战（AI vs AI，不操作）
         </label>
         <label id="p0-ai-wrap" class="row" style="display:none">
-          我方角色由：
-          <select id="p0-ai">
-            <option value="model" selected>模型（上方选择）</option>
-            <option value="hunter">规则 Hunter</option>
-          </select>
+          我方：
+          <select id="p0-ai"></select>
         </label>
         <label class="row">
           <input type="checkbox" id="danger" checked> 显示危险图（D 键切换，默认开）
