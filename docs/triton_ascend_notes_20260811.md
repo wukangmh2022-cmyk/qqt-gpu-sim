@@ -306,3 +306,46 @@ step+obs+mask  : 122.37 ms/tick  13.39万 SPS  (legal_mask 16.4ms = 13%)
 - multistream / stack 融合 / legal_mask triton：全部实测无净收益。
 - 训练侧真实 SPS 13.4万（step 80.6 + obs 8.4 + mask 16.4 + act 杂项 17ms）；
   单卡 100万 需执行模型级突破（多卡/换算法），非本轮手段可达。
+
+---
+
+## 九、真实训练与 ppo_update：瓶颈真相（2026-08-12 凌晨）
+
+### 1. train.py 的设备检测 bug（910B 上一直在 CPU 训）
+- `train/train.py` 设备选择只有 `cuda if available else cpu`，**没有 npu 分支**
+  → 910B 上 `--device` 不传时模型落在 CPU（SPS 极低）。
+- 修复：启动传 `--device npu:0`；训练侧同样需要 npu 检测（PR 素材）。
+- resume 另踩 1v2 课程通道不匹配（14ch 快照 vs P=3）→ `--single-stage` 跳过。
+
+### 2. 真实训练 SPS 实测（N=2048, MLP, 910B）
+```
+[ 10] step=2.62M ... sps=17k   ← 真实训练 ~1.7万（含 collect + update + 自我博弈）
+```
+- 每 iter = collect(128 tick) + ppo_update + 对手构建。collect 里模拟器
+  （step + obs + mask）占 ~84%，**自我博弈双网络前向**（learner + 冻结对手）
+  是隐藏成本（bench 单网络测不到）。
+
+### 3. ppo_update 10x 加速实测（N=4096, rollout=128, 目标 6131→613ms）
+```
+CNN baseline (fp32):        6142 ms
+CNN autocast fp16:          7085 ms   （更慢 18%：910B fp16 无收益）
+CNN compile(AutoFuse):      6130 ms   （零效果：反向不编译/前向非瓶颈）
+CNN epochs=2:               3085 ms   （线性减半，训练超参）
+MLP baseline:                503 ms   ★ x12.21 ← 达成 10x
+```
+- **MLP 架构 = update 10x 的唯一实测路径**：GEMM（AI Core cube）效率高 +
+  参数少（192k vs 281k）+ 设备队列浅 → item 同步便宜。train.py `--arch mlp`。
+- **CNN 为何不行**：profile 显示 update 94% 时间（5.6s）在 1634 次
+  `_local_scalar_dense`（平均 3.46ms/次）——但这是**卷积慢的表象**（设备队列
+  深 → item 同步显式化等待）。用模拟器同款 _sc 张量操作数消除 loss 段标量
+  op 后**实测零收益**（6121ms 不变）→ 根因是 910B 小卷积（28 万参数 CNN、
+  131072 batch）AI Core 利用率 <2%，不是 dispatch。
+- 理论算力 3-10ms vs 实测 383ms/步 → 40-100x 效率差距，全部是 kernel 执行
+  效率问题（无 dispatch/精度/编译因素可挖）。
+
+### 4. 瓶颈结论
+- update 10x（MLP）后，瓶颈转移到 **collect**：模拟器（step 硬底 80.6ms@16384
+  + obs + mask）占 ~84%，自我博弈双网络前向是第二。
+- 完整训练 SPS 的量级：CNN @4096 ~3.9万（bench 口径）→ MLP @2048 真实 1.7万
+  （含自我博弈/评估）→ 与本地 MacBook/DCU 的 30-40k 同量级 —— **跨平台瓶颈
+  一直是网络训练效率（CNN 小卷积），不是模拟器**。
