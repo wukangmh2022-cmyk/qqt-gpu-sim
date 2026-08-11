@@ -181,3 +181,66 @@ SIMD 架构上编译/执行极差（每格 ~196 次内存操作）。torch 的 `
 4. 达成后 step ~35ms → **47万 SPS**；再叠加 1-3 的极端版（danger 4ms +
    reward 2ms + 同步 5ms）→ ~20ms → **80万+**，逼近 100万。
 5. 1000万量级需多卡（当前 Dev Space 单卡）或换算法（距离变换/前缀扫描）。
+
+---
+
+## 七、第三轮：dispatch 同步消除 + 标量 op 量化（2026-08-11 晚）
+
+> 第六节的 108ms 基线 → 80.6ms（N=16384），单卡 SPS 峰值 22.2万 @ N=65536。
+> 本节全部优化位级一致（本地 MPS old-vs-new 随机对拍 + 910B triton 全字段对拍）。
+
+### 1. danger 同步消除（107.6 → 91.1ms，commit 208e4cf）
+| 手段 | 效果 |
+|---|---|
+| `blast_hint` 提前到放泡后浅队列（~30 op）取 `int(bomb_blast.max())` | danger 内部 5 次 host 同步 → 0 |
+| `chain_cap`（sync_free 固定轮 min(max_chain, cap)） | 免 newly 轮检查同步；链长≤cap 位级一致 |
+| 2-pad 连续张量（撤 stack 融合） | stack 后 st[0]/st[1] 非连续视图上的标量 op 触发 item() |
+| `one_buf` 预分配全 1 张量（`fd1 - one_buf`） | 张量-张量 op 免 item，省 ~50 次同步 |
+
+### 2. reward 段标量 op 全量化（91.1 → 88.7ms，commit 904eaa1）
+- **根因**：torch_npu 上"张量 ±/×/÷ Python 标量"的 op 每次 dispatch 内部
+  `_local_scalar_dense`（item）同步，~0.26ms/次，94/step 是大头。
+- **修复**：`_sc(value, shape)` 缓存 `(值,shape)→全值张量`，`cfg.X*tensor`
+  换成张量-张量 op（零同步）；`_explore_coef` 退火变化时缓存自然失效。
+- 7 处替换：step_penalty / hit(dealt,dmg) / explore / chain / brick /
+  danger / combo / win（fixed 与 timeout）。
+
+### 3. resolve 免深队列 max 同步 + where→bool-mul + move grid 2D（88.7 → 80.6ms，commit 0e703dd）
+- **resolve 传 blast_max_hint**：非 graph 也用浅队列算好的 `blast_hint`
+  （与 `_blast_map()` 同源 → hint == 实际 max 无空轮 pad）→ rays 免每次
+  `int(blast_cell.max())` 深队列同步。位级不变。
+- **where→bool-mul**：`torch.where(keep, fw1, 0.0)` → `fw1 * keep`
+  （bool×float32 提升，keep=False→0.0），省 1 次 dispatch/格步；
+  本地 20 组随机 × max_chain/cap/hint 全组合位级 PASS。
+- **move grid 2D**：`(n*p,) → (p,n)`（triton-ascend 总 program <65536 硬限；
+  2D 拆后大 N 仍需 `TRITON_ALL_BLOCKS_PARALLEL=1`，driver 层限制）。
+
+### 4. N 扫描与单卡物理上限
+```
+N=   4096:  41.41 ms/tick    9.89万 SPS  每 env 10.11 µs   (launch 主导)
+N=   8192:  46.30 ms/tick   17.69万 SPS  每 env  5.65 µs
+N=  16384:  80.68 ms/tick   20.31万 SPS  每 env  4.92 µs
+N=  32768: 152.39 ms/tick   21.50万 SPS  每 env  4.65 µs
+N=  65536: 295.13 ms/tick   22.21万 SPS  每 env  4.50 µs   ← 峰值
+N= 131072: 599.01 ms/tick   21.88万 SPS  每 env  4.57 µs
+N= 262144:1205.46 ms/tick   21.75万 SPS  每 env  4.60 µs
+```
+- **SPS 饱和**在设备吞吐：每 env ~4.5µs 是 910B3 上本算法的计算硬底
+  （2200 kernel/step 的设备侧执行 + 启动，数据量 13×13×N）。
+- wall ≈ max(launch, device) 已重叠（N=4096 时 41ms ≈ launch 主导，
+  N≥16384 时 device 主导），**NPU graph 压 launch 无收益**（设备执行不变）。
+
+### 5. 分段短路实验（找最大单项）
+```
+baseline               88.20 ms
+danger→zeros           78.29 ms   ← danger_map 最大单项（~10ms，~300 op/调用）
+resolve→trivial        88.96 ms   （早退生效，非爆炸 tick 免费）
+place_predict→zeros    87.85 ms   （放泡 tick 少）
+move→identity          85.93 ms   （triton 单 kernel 仍 ~2.3ms 数据搬移）
+```
+
+### 6. 结论：单卡 100万 不可达，峰值 ~22.2万
+- 单卡 eager torch 的 SPS 上限 ≈ **22.2万 @ N=65536**（设备每 env ~4.5µs）。
+- 100万 需 4.5 卡数据并行（每卡 22.2万）；当前 Dev Space 单卡（910B3）。
+- 剩余候选优化（danger 前缀扫描 cummax、reward/clear 段 in-place 合并）仅
+  边际 ~5-10%，改变不了量级；triton/torch.compile/NPU graph 均已实测排除。
