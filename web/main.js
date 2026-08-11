@@ -209,6 +209,20 @@
           const fr = document.createElement('canvas');
           fr.width = target; fr.height = target;
           fr.getContext('2d').drawImage(sheet, c * fw, r * fh, fw, fh, 0, 0, target, target);
+          // 视觉主体顶部：帧顶常有透明留白（人物视觉头顶不在帧顶边）。
+          // 头顶指示箭头要对齐它而不是帧顶 —— 每帧检测第一个非透明像素行。
+          fr._top = 0;
+          try {
+            const g = fr.getContext('2d');
+            const d = g.getImageData(0, 0, target, target).data;
+            for (let y = 0; y < target; y++) {
+              let hit = false;
+              for (let x = 0; x < target; x++) {
+                if (d[(y * target + x) * 4 + 3] > 8) { hit = true; break; }
+              }
+              if (hit) { fr._top = y; break; }
+            }
+          } catch (e) { fr._top = 0; }
           rows[r].push(fr);
         }
       }
@@ -776,14 +790,16 @@
       }
     }
 
-    // 我方控制指示箭头（res/point.png 向下箭头，已缩到 50%）：非观战时**紧贴**
-    // 玩家角色头顶（血条下方），箭头尖朝下指着头；顶行角色不越画布顶。
+    // 我方控制指示箭头（res/point.png 向下箭头，已缩到 50%）：非观战时放在
+    // **血条下方**、紧贴角色**视觉头顶**（帧内第一个非透明像素行，不是帧顶
+    // 的透明留白）—— 箭头尖离视觉头顶 2px 指着头；顶行角色不越画布顶。
     if (!elSpectate.checked) {
       const me = chars.find((ch) => ch.pid === 0);
       if (me) {
         const aw = res.point.width, ah = res.point.height;
+        const top = me.s._top || 0;
         const ax = me.blitX + me.s.width / 2 - aw / 2;
-        const ay = Math.max(2, me.blitY - ah);
+        const ay = Math.max(2, me.blitY + top - ah - 2);
         ctx.drawImage(res.point, Math.round(ax), Math.round(ay));
       }
     }
