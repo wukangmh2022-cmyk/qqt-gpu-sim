@@ -500,3 +500,53 @@ LSTM @N=2048 → MPS OOM（BPTT 激活超 18GB 共享内存上限）
 - **架构取舍**：LSTM 慢的本质是"时序无法 flat + 局部观测逐角色 gather"，
   与硬件无关（MacBook/910B 都成立）。但代码完整可用，truncated BPTT 已进
   PPOConfig，后续想保 LSTM 可继续调 window/架构。
+
+## 十三、LSTM 1B 训练在 910B 正式启动（2026-08-12，进程 191501）
+
+### 1. 启动命令（run_train_lstm_1b.sh）
+```bash
+python3 -m train.train \
+  --arch lstm --num-envs 4096 --device npu:0 --single-stage \
+  --map-mode open --rollout-steps 128 --minibatches 1 \
+  --bptt-window 8 --max-mem-frac 0.85 \
+  --bot-opponents greedy --bot-opp-prob 1.0 \
+  --warmup-steps 1000000000 --total-steps 1000000000 \
+  --oversample-dying 1 --snapshot-every 20 --time-budget 86400 \
+  --ckpt ckpt/lstm_1b.pt --log-csv ckpt/train_lstm_1b.csv
+```
+- 从零开始（无 resume），对手 = 纯 greedy bot（避免 build_opponents 的
+  conv0.weight/shared.0.weight 键推断在 LSTM 上崩溃），bot-opp-prob=1.0
+- `--warmup-steps 1000000000` = 不切课程，单阶段到 1B（stage 名 s1-1v1-base）
+
+### 2. 首迭代 20 分钟 = 一次性 TBE 编译，不是死锁
+- 启动后 20+ 分钟日志停在 `...`（最后一行是 `[opponent] bot greedy`），无 step=
+- py-spy 多次 dump 位置在**不同函数间推进**（obs.py:281 gather →
+  ppo.py:257 _tally → ppo.py:450 _ppo_update_lstm → 又回 collect:174 legal_mask），
+  AICore 95% + R 状态 → 不是死锁，是**每个新 shape 的 kernel 首次执行触发 TBE 编译**
+- 误判修正：`~/atc_data/kernel_cache` 最新文件时间戳曾让"编译活跃"的结论站不住，
+  实际是 3.7h 前旧缓存（train_lstm_speed.py 预热已编译完大部分 kernel）——
+  最终用 **CSV 证据**确认训练在跑
+
+### 3. 关键坑：stdout 重定向是块缓冲，日志看不到迭代输出
+- `> train_lstm_1b.log 2>&1` 后 print 的 `step=` 攒在 8KB 缓冲区不落盘
+  → **tail 日志永远停在 `...`**，误导诊断
+- 真正实时的是 **CSV（`--log-csv`）**：每次迭代 writer.writerow 后落盘，
+  mtime 每 ~26s 刷一次 → 用 `tail -1 ckpt/train_lstm_1b.csv` 监控
+- 教训：910B 上长训练务必用 `python3 -u` 或依赖 CSV；py-spy 栈位置只能说明
+  "最近执行到哪"，不能区分编译/计算/缓冲（两次 dump 分别在 update 与 collect
+  恰证明迭代在循环）
+
+### 4. 实测 SPS 与学习信号（CSV，启动 ~22 分钟时）
+- **sps ≈ 17.6k**（CSV sps 列 17355/17282/17559；bench 19.6k 的 ~90%，
+  collect 的 bot 对手 + 健康度统计占差）
+- step=22.02M（每迭代 +524288 = 4096×128），每迭代 ~26s → 1B ≈ 12.5h 训练
+- 从零学习信号正常：elo 863→864、wr 0.107（对 greedy bot，纯探索阶段）、
+  ep_len 165、ent 1.61（探索充分）、suicide_rate 0.998（随机放炮自爆为主）、
+  bombs 23.5/局、danger_frac 0.778
+- snapshot-every 20 → 每 20 迭代（~8.7M steps）落一个 ckpt/lstm_1b.pt
+
+### 5. 结论
+- **LSTM 1B 训练已稳定运行**（每 ~26s/迭代，CSV 持续增长），突破 20K 未遂
+  （19.6k bench → 17.6k 实际）但足够跑 1B；若要继续压，方向是 sim.step/
+  legal_mask 的 triton 化（MacBook 上已验证 step -24%）
+- stdout 块缓冲是本次最大的"假卡死"来源，后续 910B 训练统一加 `-u`

@@ -322,9 +322,10 @@ def main() -> None:
     ap.add_argument("--total-steps", type=int, default=20_000_000,
                     help="env-step 总预算（= num_envs × tick 数）")
     ap.add_argument("--backend", default="auto", choices=["auto", "torch", "cuda"])
-    ap.add_argument("--arch", default="cnn", choices=["cnn", "mlp"],
+    ap.add_argument("--arch", default="cnn", choices=["cnn", "mlp", "lstm"],
                     help="网络架构：cnn = 3 层 3x3 卷积 + 1x1（默认）；"
-                         "mlp = 全局全连接（flat→128→128，参数更少，GEMM 更快）")
+                         "mlp = 全局全连接（flat→128→128，参数更少，GEMM 更快）；"
+                         "lstm = 局部 7×7 CNN + 相对坐标 + 全局状态 + LSTM（BombermanNet）")
     ap.add_argument("--map-mode", default="open", choices=["open", "corridor"],
                     help="open = 纯空场（默认）；corridor = 左右可炸墙 + 顶部永久墙 "
                          "+ 时间成长（speed 自动降到 3.0、对局 1800 tick）")
@@ -355,6 +356,9 @@ def main() -> None:
     ap.add_argument("--minibatches", type=int, default=PPOConfig.minibatches,
                     help="PPO 一个 epoch 切几块；minibatch = num_envs×rollout_steps/"
                          "minibatches 是峰值内存的主项，内存紧张就调大它")
+    ap.add_argument("--bptt-window", type=int, default=0,
+                    help="LSTM 架构的 BPTT 截断窗口（0 = 全序列反传；>0 只反传"
+                         "最近 W 步 —— truncated BPTT，910B 实测反向 -78%）")
     ap.add_argument("--max-mem-frac", type=float, default=0.55,
                     help="预估峰值内存占可用内存的比例上限，超了直接拒绝启动")
     ap.add_argument("--lr", type=float, default=1e-4)
@@ -446,8 +450,17 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
     random.seed(args.seed)
-    device = torch.device(
-        args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    if args.device:
+        device = torch.device(args.device)
+    else:
+        try:
+            import torch_npu  # noqa: F401
+            if torch.npu.is_available():
+                device = torch.device("npu:0")
+            else:
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        except ImportError:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if args.map_mode == "corridor":
         # corridor：左右可炸墙 + 顶部永久墙 + 时间成长。
@@ -469,7 +482,8 @@ def main() -> None:
     cstate = CurriculumState()
     pcfg = PPOConfig(rollout_steps=args.rollout_steps, lr=args.lr,
                      minibatches=args.minibatches, gae_lambda=args.gae_lambda,
-                     oversample_dying=args.oversample_dying)
+                     oversample_dying=args.oversample_dying,
+                     bptt_window=args.bptt_window)
     elo = 1000.0
     global_step = 0
     fixed_elo: dict[str, float] = {}   # 固定对手 ELO（持久化，resume 恢复）
