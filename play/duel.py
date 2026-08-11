@@ -608,12 +608,15 @@ def draw_grid(screen, res: Res, sim, obs, rpos, face, anim_frame,
             screen.blit(wudi, (wx, wy), special_flags=pygame.BLEND_ADD)
 
     # 血条统一最后画（UI 信息不被墙挡）
+    # 水平对齐：右移一格宽（+CELL）后回移 12px —— 视觉主体偏右半格多，
+    # 纯右移一格子偏过头（与 web/main.js 同一偏移 +48px）。
     for _, bx, by, _, _, _, _, hpv, mx in chars:
         seg_w, seg_h, gap = 5, 4, 1
         bar_w = mx * (seg_w + gap)
         color = (80, 220, 90) if hpv > mx / 3 else (240, 70, 70)
         for i in range(mx):
-            rect = pygame.Rect(bx + i * (seg_w + gap), by - 8, seg_w, seg_h)
+            rect = pygame.Rect(bx + CELL - 12 + i * (seg_w + gap),
+                               by - 8, seg_w, seg_h)
             pygame.draw.rect(screen, color if i < hpv else (60, 60, 66), rect)
 
     # 成长 HUD（corridor 用）：右上角显示 泡数/威力/速度 当前值。

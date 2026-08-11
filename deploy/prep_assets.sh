@@ -16,7 +16,8 @@ mkdir -p "$OUT/scenes" "$OUT/snd"
 # 角色行走图：海王子（默认）+ 小虾米 + 角色c（敌人）+ 火影
 for f in 角色4×4精灵图.png 角色b4×4.png 角色c4×4.png 角色火影4x4.png \
          bomb1.png 爆炸中心.png 向上爆炸.png 向下爆炸.png \
-         向左爆炸.png 向右爆炸.png 威力道具.png 泡泡数量道具.png 鞋子道具.png 无敌.PNG; do
+         向左爆炸.png 向右爆炸.png 威力道具.png 泡泡数量道具.png 鞋子道具.png \
+         无敌.PNG point.png; do
   cp "$RES/$f" "$OUT/$f"
 done
 

@@ -244,6 +244,8 @@
       wudi: scaleCanvas(wudi, Math.round(85 * SCALE), Math.round(85 * SCALE)),
       bomb: scaleCanvas(boomImg, CELL, CELL),
       props,
+      point: scaleCanvas(await loadImage('assets/point.png'),
+                         Math.round(40 * SCALE), Math.round(40 * SCALE)),
       exploCenter: scaleCanvas(await loadImage('assets/爆炸中心.png'), CELL, CELL),
       exploArms,
     };
@@ -590,7 +592,7 @@
     if (sim.done && !resultShown) {
       resultShown = true;
       const w = sim.winner;
-      const msg = w === null ? '平局' : (w === 0 ? '🎉 你赢了！' : '🤖 AI 赢了');
+      const msg = w === null ? '平局' : (w === 0 ? '🎉 你赢了！' : '🤖 敌人赢了');
       elBanner.innerHTML = `${msg}<span class="tip">按 R 或点「重新开局」再来一局</span>`;
       elBanner.classList.remove('hidden');
       running = false;
@@ -746,7 +748,7 @@
       }
       const z = Math.floor(gy);
       items.push([z, () => ctx.drawImage(s, blitX, blitY)]);
-      chars.push({ z, blitX, blitY, s, wudi, wx, wy, hpv: sim.hp[pid], mx: CFG.maxHp });
+      chars.push({ pid, z, blitX, blitY, s, wudi, wx, wy, hpv: sim.hp[pid], mx: CFG.maxHp });
     }
 
     // 画家算法：z 升序（远→近）绘制
@@ -761,14 +763,32 @@
     ctx.globalCompositeOperation = 'source-over';
 
     // 血条（段式，最后画不被墙挡）
-    // 右移一格宽（+CELL）：帧水平中心=角色中心，但视觉主体偏右半格，血条贴
-    // 帧左上角会偏离人物头顶 —— 平移一格子正好对位（与 duel.py 一致）。
+    // 水平：右移一格宽（+CELL）对齐人物头顶后再**回移 12px**（纯右移一格子
+    // 偏过头，视觉主体其实只偏 ~半格多）—— 最终偏移 +48px。
+    // 垂直：放在箭头（我方指示，紧贴角色头顶）上方 4px —— 箭头指向谁血条跟谁，
+    // 两个角色同一高度布局。
+    const barH = 4;
+    const arrowH = res.point.height;
     for (const ch of chars) {
-      const segW = 5, segH = 4, gap = 1;
+      const segW = 5, segH = barH, gap = 1;
       const color = ch.hpv > ch.mx / 3 ? '#50dc5a' : '#f04646';
+      const barY = ch.blitY - arrowH - 4 - segH;
+      const barX = ch.blitX + CELL - 12;
       for (let i = 0; i < ch.mx; i++) {
         ctx.fillStyle = i < ch.hpv ? color : '#3c3c42';
-        ctx.fillRect(ch.blitX + CELL + i * (segW + gap), ch.blitY - 8, segW, segH);
+        ctx.fillRect(barX + i * (segW + gap), barY, segW, segH);
+      }
+    }
+
+    // 我方控制指示箭头（res/point.png 向下箭头）：非观战时**紧贴**玩家角色
+    // 头顶（血条下方），箭头尖朝下指着头；顶行角色不越画布顶。
+    if (!elSpectate.checked) {
+      const me = chars.find((ch) => ch.pid === 0);
+      if (me) {
+        const aw = res.point.width, ah = res.point.height;
+        const ax = me.blitX + me.s.width / 2 - aw / 2;
+        const ay = Math.max(2, me.blitY - ah);
+        ctx.drawImage(res.point, Math.round(ax), Math.round(ay));
       }
     }
     drawHUD();
