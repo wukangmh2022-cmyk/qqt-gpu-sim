@@ -8,3 +8,7 @@ ckpt/
 .env
 wheels/
 scripts/cron_dcu_watch.log
+
+# 媒体/临时产物：不支持入库
+*.mp4
+res/r2v_refcheck/
