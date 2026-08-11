@@ -59,7 +59,13 @@ const ctxMock = new Proxy({}, {
 });
 
 global.window = global;
-global.addEventListener = () => {};
+const winListeners = {};
+global.addEventListener = (ev, fn) => {
+  (winListeners[ev] = winListeners[ev] || []).push(fn);
+};
+global.dispatch = (ev, e) => {
+  (winListeners[ev] || []).forEach((fn) => fn({ code: e, preventDefault() {} }));
+};
 global.removeEventListener = () => {};
 global.document = {
   getElementById: byId,
@@ -118,12 +124,36 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 (async () => {
   await wait(800);                     // boot()：素材 + 模型加载
   const qqt = global.window.__QQT__;
-  if (!qqt || !qqt.sim) {
-    console.error('FAIL: window.__QQT__.sim 未就绪');
+  if (!qqt || !qqt.model) {
+    console.error('FAIL: window.__QQT__.model 未就绪');
     console.error('status:', els['status'] && els['status']._html);
     process.exit(1);
   }
-  console.log('模型:', qqt.model.meta.name, ' 地图:', qqt.sim.mode);
+
+  // 加载完成：loading 隐藏 + 欢迎窗口（操作说明）显示，未开局（sim 未创建）
+  if (!els['loading'].classList.contains('hidden')) {
+    console.error('FAIL: loading 层未隐藏');
+    process.exit(1);
+  }
+  if (els['banner'].classList.contains('hidden')) {
+    console.error('FAIL: 欢迎窗口未显示（banner 应为可见）');
+    process.exit(1);
+  }
+  const wlHtml = els['banner']._html || '';
+  if (!wlHtml.includes('开始游戏')) {
+    console.error('FAIL: 欢迎窗口缺少操作提示（按空格开始）');
+    process.exit(1);
+  }
+  console.log('loading 已隐藏 + 欢迎窗口显示（含操作说明）✔');
+
+  // 按空格 → 开始第一局
+  global.dispatch('keydown', 'Space');
+  await wait(300);
+  if (!qqt.sim) {
+    console.error('FAIL: 按空格后未开局（sim 未创建）');
+    process.exit(1);
+  }
+  console.log('按空格开局成功:', '模型:', qqt.model.meta.name, ' 地图:', qqt.sim.mode);
 
   // 当前模型信息已展示在 HUD（cur-model 元素有内容、且与加载的模型名一致）
   const curText = els['cur-model'].textContent;
@@ -202,13 +232,6 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     console.error('FAIL: 位置非法');
     process.exit(1);
   }
-
-  // loading 层在 boot 完成后隐藏
-  if (!els['loading'].classList.contains('hidden')) {
-    console.error('FAIL: loading 层未隐藏');
-    process.exit(1);
-  }
-  console.log('loading 层已隐藏 ✔');
 
   // 切观战模式，等 AI 放泡爆炸，确认 explosion 掩码被设置（十字爆炸渲染的输入）
   els['spectate'].checked = true;

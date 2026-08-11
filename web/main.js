@@ -63,20 +63,36 @@
   }
 
   // ------------------------------------------------------------ 素材加载
+  // 进度 = 图片数 + 模型数统一折算百分比，rAF 里缓动（loading 后半段不卡顿）。
+  // 模型 JSON 只有 1.8MB（345K 参数 float32 打包），不是 ckpt 的 20MB ——
+  // 下载飞快，但旧版进度条只统计图片、模型下载时冻结在 57% 附近，观感像卡住。
   const imgCache = new Map();
-  let imgLoaded = 0;
+  let imgLoaded = 0, imgTotal = 0;
+  let modelLoaded = false;
+  let progShown = 0;                    // 显示的平滑进度（0~100）
+  function updateProgress() {
+    const imgPct = imgTotal ? (imgLoaded / imgTotal) * 100 : 0;
+    const target = modelLoaded ? 100 : imgPct * 0.9;   // 模型占最后 10%
+    progShown += (target - progShown) * 0.25;          // 一阶缓动，避免跳变
+    if (Math.abs(target - progShown) < 0.5) progShown = target;  // 收敛停止
+    elLoadingText.textContent =
+      `正在加载… ${Math.min(99, Math.round(progShown))}%`;
+    if (progShown < target) requestAnimationFrame(updateProgress);
+  }
   function loadImage(src) {
     if (imgCache.has(src)) return imgCache.get(src);
+    imgTotal++;
     const p = new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         imgLoaded++;
-        elLoadingText.textContent = `正在加载素材…（${imgLoaded}）`;
+        requestAnimationFrame(updateProgress);
         resolve(img);
       };
       img.onerror = () => {
         console.warn('素材缺失（降级占位）:', src);
         imgLoaded++;
+        requestAnimationFrame(updateProgress);
         const c = document.createElement('canvas');   // 透明占位，不阻塞启动
         c.width = 40; c.height = 40;
         resolve(c);
@@ -308,7 +324,11 @@
 
   window.addEventListener('keydown', (e) => {
     held.add(e.code);
-    if (e.code === 'Space') { human.pendingBomb = true; e.preventDefault(); }
+    if (e.code === 'Space') {
+      e.preventDefault();
+      if (!running) { startGame(); return; }   // 欢迎/结算界面：空格开始新局
+      human.pendingBomb = true;
+    }
     if (e.code === 'KeyR') { startGame(); }
     if (e.code === 'KeyD') { showDanger = !showDanger; elDanger.checked = showDanger; }
     if (e.code === 'KeyM') { soundOn = !soundOn; elSound.checked = soundOn; }
@@ -441,6 +461,8 @@
       const resp = await fetch(`models/${name}.json`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       model = new MLPModel(await resp.json());
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
       elCurModel.textContent =
         `${model.meta.name}（${fmtStep(model.meta.global_step)}步 · elo ${model.meta.elo} · 导出于 ${(model.meta.generated_at || '').slice(0, 10)}）`;
       elStatus.innerHTML =
@@ -448,13 +470,13 @@
         `训练步数 ${fmtStep(model.meta.global_step)} · elo ${model.meta.elo}<br>` +
         `观测 ${model.meta.obs_shape.join('×')} · 参数 ${Object.values(model.tensors)
           .reduce((s, [, n]) => s + n, 0).toLocaleString()}`;
-      startGame();
     } catch (e) {
       elStatus.innerHTML = `模型加载失败：${e.message}`;
     }
   }
 
   elRestart.addEventListener('click', startGame);
+  elBanner.addEventListener('click', () => { if (!running) startGame(); });  // 欢迎窗口点击开始
   elMode.addEventListener('change', startGame);
   elApplyModel.addEventListener('click', applyModel);
   elSpectate.addEventListener('change', () => {
@@ -701,33 +723,32 @@
     const p0Kind = elSpectate.checked ? (elP0Ai.value === 'hunter' ? '规则 Hunter' : '模型')
                                       : '你';
     const p1Kind = elEnemyAi.value === 'hunter' ? '规则 Hunter' : '模型';
-    const names = [
-      sim.alive[0] ? `${p0Kind}（P0）` : `${p0Kind}（P0·阵亡）`,
-      sim.alive[1] ? `${p1Kind}（P1）` : `${p1Kind}（P1·阵亡）`,
-    ];
+    // 第 1 行：双方状态各自合并成一行（名字 + HP/属性），右侧倒计时（无 tick）
     const colors = ['#ff6b6b', '#5aa7ff'];
+    const leftHalf = BOARD_PX * 0.46;
     for (let p = 0; p < 2; p++) {
-      const bx = 18 + p * (BOARD_PX / 2);
-      ctx.fillStyle = colors[p];
-      ctx.font = 'bold 15px sans-serif';
+      const name = p === 0 ? p0Kind : p1Kind;
+      const tag = sim.alive[p] ? `P${p}` : `P${p}·阵亡`;
+      const bx = 18 + p * leftHalf;
       ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.fillText(names[p], bx, y0 + 12);
+      ctx.fillStyle = colors[p];
+      ctx.font = 'bold 13px sans-serif';
+      ctx.fillText(`${name}（${tag}）`, bx, y0 + 10);
       ctx.fillStyle = '#e8e6df';
       ctx.font = '13px sans-serif';
       ctx.fillText(`HP ${sim.hp[p]}/${CFG.maxHp} · 泡 ${sim.bombsCap[p]} · 威 ${sim.blastCap[p]} · 速 ${sim.spdG[p].toFixed(2)}`,
-                   bx, y0 + 36);
+                   bx, y0 + 28);
     }
-    const sec = Math.min(sim.t / CFG.tickHz, CFG.maxSteps / CFG.tickHz).toFixed(0);
-    ctx.fillStyle = '#8b93a5';
-    ctx.font = '13px monospace';
+    // 倒计时（剩余秒，倒着走）
+    const remain = Math.max(0, Math.ceil(CFG.maxSteps / CFG.tickHz - sim.t / CFG.tickHz));
+    ctx.fillStyle = '#f5a623';
+    ctx.font = 'bold 15px monospace';
     ctx.textAlign = 'right';
-    ctx.fillText(`${sec}s / ${CFG.maxSteps / CFG.tickHz}s  tick=${sim.t}`, BOARD_PX - 18, y0 + 14);
+    ctx.fillText(`⏱ ${remain}s`, BOARD_PX - 18, y0 + 10);
     ctx.fillStyle = '#8b93a5';
+    ctx.font = '12px sans-serif';
     ctx.fillText(`地图：${sim.mode === 'open' ? '空场' : '走廊'} · ${elScene.value} · 对局 #${gameSeed % 100000}`,
-                 BOARD_PX - 18, y0 + 36);
-    ctx.fillStyle = '#5a6275';
-    ctx.font = '11px sans-serif';
-    ctx.fillText(`方向键/WASD 移动 · 空格放泡 · D 危险图 · R 重开 · M 静音`, BOARD_PX - 18, y0 + 58);
+                 BOARD_PX - 18, y0 + 32);
     ctx.fillStyle = '#5a6275';
     ctx.font = '11px sans-serif';
     ctx.fillText(`模型：${model ? model.meta.name : '-'}（${model ? fmtStep(model.meta.global_step) : ''}步）`,
@@ -754,11 +775,22 @@
   }
 
   // ------------------------------------------------------------ 启动
+  // 加载完成后显示欢迎窗口（操作说明），按空格或点击开始第一局
+  function showWelcome() {
+    elBanner.innerHTML =
+      `<div class="wl-title">💣 QQT 格斗</div>` +
+      `<span class="tip">方向键 / WASD 移动 · 空格 放泡</span>` +
+      `<span class="tip">D 危险图 · M 静音 · R 重开</span>` +
+      `<span class="tip act">按 空格 或 点击 开始游戏</span>`;
+    elBanner.classList.remove('hidden');
+  }
+
   async function boot() {
-    elLoadingText.textContent = '正在加载素材…';
+    elLoadingText.textContent = '正在加载… 0%';
     // 模型（开局）与素材（渲染）互不依赖，并行加载
     await Promise.all([loadModelList(), loadAssets()]);
-    startGame();               // 两者就绪后开局
+    await new Promise((r) => setTimeout(r, 150));   // 进度条缓动走完最后一段再切
+    showWelcome();            // 先出欢迎窗口，等玩家按空格开局
     elLoading.classList.add('hidden');
     requestAnimationFrame(loop);
   }

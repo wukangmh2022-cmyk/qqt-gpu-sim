@@ -36,11 +36,14 @@ canvas#game {
   padding: 14px 26px;
   font-size: 26px; font-weight: 700;
   text-align: center;
-  pointer-events: none;
+  cursor: pointer;               /* 欢迎窗口可点击开始 */
   white-space: nowrap;
   box-shadow: 0 6px 24px rgba(0,0,0,.5);
 }
 #banner .tip { display: block; margin-top: 8px; font-size: 13px; font-weight: 400; color: var(--dim); }
+#banner .wl-title { font-size: 30px; margin-bottom: 4px; }
+#banner .tip.act { color: var(--accent); font-weight: 700; margin-top: 14px; font-size: 15px; animation: blink 1.2s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
 #banner.hidden { display: none; }
 
 /* 启动 loading 层（素材/模型加载完成前盖在画布上） */
