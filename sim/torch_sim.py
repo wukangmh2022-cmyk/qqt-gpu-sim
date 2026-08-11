@@ -99,6 +99,11 @@ class BatchedSim:
         # combo 连击状态（combo_reward>0 时用）：不掉血连续造成伤害 = 连击，
         # 连击数越高分越多、间隔越短分越多；掉血（被打）打断连击。
         self._combo = torch.zeros((n, p), dtype=torch.long, device=d)
+        # 标量操作数缓存（2026-08-11）：torch_npu 上"张量±/×/÷ Python 标量"的
+        # op 每次 dispatch 内部 item() 同步（step 里 ~0.26ms/次）。reward 段的
+        # cfg.X * tensor 换成 预分配 (n,p) 张量操作数（张量-张量 op 零同步）。
+        # 键 = (值, shape)：cfg 常量命中缓存；_explore_coef 退火变化时自然失效。
+        self._sc_cache: dict[tuple[float, tuple], torch.Tensor] = {}
         self._last_hit = torch.full((n, p), -10**9, dtype=torch.long, device=d)
         # open 关宝箱布局缓存（懒初始化，cfg 固定）：排除格 / 随机回收池 / 十字格
         self._open_excl: torch.Tensor | None = None
@@ -661,6 +666,21 @@ class BatchedSim:
         return torch.where(self.bomb_blast > 0,
                            self.bomb_blast.long(), self.cfg.blast)
 
+    def _sc(self, value: float, shape: tuple) -> torch.Tensor:
+        """缓存的全值张量操作数（标量 op 免 item 同步的载体）。
+
+        键 = (值, shape)：cfg 常量命中缓存；`_explore_coef` 等变量值变化时
+        自然失效（旧张量成垃圾，变量低频变化可接受）。位级与 `value * t`
+        一致（逐元素乘同一标量）。
+        """
+        key = (float(value), tuple(shape))
+        b = self._sc_cache.get(key)
+        if b is None:
+            b = torch.full(shape, float(value), dtype=torch.float32,
+                           device=self.device)
+            self._sc_cache[key] = b
+        return b
+
     def _grow_player_vec(self, pl: int, hits_per_env: torch.Tensor,
                          alive_mask: torch.Tensor) -> None:
         """玩家 pl 本 tick 的成长（向量化，GPU 批量，**CUDA graph 兼容**）。
@@ -858,9 +878,12 @@ class BatchedSim:
         # 探索奖励退火：放炮三件套（place_bonus）乘 _explore_coef（论文 α），
         # 前期=1 鼓励炸墙/捡道具探索，后期随击杀能力自动归零（不再为刷分放炮）。
         # 命中/胜负/安全塑形（hit/win/danger/passivity）不乘 —— 主信号恒生效。
-        reward = (-cfg.step_penalty * alive0.float()
-                  + cfg.hit_reward * dealt - cfg.hit_reward * dmg
-                  + self._explore_coef * place_bonus * alive0.float())
+        # 标量乘用 _sc 全值张量操作数（torch_npu 标量 op 内部 item 同步，见 _sc）。
+        reward = (-self._sc(cfg.step_penalty, alive0.shape) * alive0.float()
+                  + self._sc(cfg.hit_reward, dealt.shape) * dealt
+                  - self._sc(cfg.hit_reward, dmg.shape) * dmg
+                  + self._sc(self._explore_coef, place_bonus.shape) * place_bonus
+                  * alive0.float())
         # 掉血惩罚 + 宝箱回收（**全地图模式**，hit_attr_penalty>0）：被炸到掉血的
         # 玩家，泡/威/速各扣 hit_attr_penalty 层（clamp 回各自模式的起点：open →
         # open_growth_*，corridor/ring → growth_*_start）；扣掉的以宝箱**随机可
@@ -881,7 +904,7 @@ class BatchedSim:
             pen = cfg.hit_attr_penalty
             nb = torch.clamp(self.bombs_cap - pen, min=self._lo_bombs)
             nz = torch.clamp(self.blast_cap - pen, min=self._lo_blast)
-            ns = torch.max(self.spd_g - pen * cfg.growth_speed_step,
+            ns = torch.max(self.spd_g - self._sc(pen * cfg.growth_speed_step, self.spd_g.shape),
                            self._lo_spd)
             # 实际被扣的层数（clamp 到模式起点：起点以下无层可扣）。
             # 每 env 在起点时扣 0 → 不掉层也不生箱（严格守恒，不凭空增池）。
@@ -898,7 +921,8 @@ class BatchedSim:
             # （富泡实测 ~236ms/tick，禁用回收 bool 后 288→48ms）。
             self._pending_lost.add_(lost_eff)
         # 爆炸时刻连锁兑现（探索塑形，乘退火系数）：被连锁提前点燃的泡每颗
-        reward = reward + self._explore_coef * chain_bonus_p * alive0.float()
+        reward = (reward + self._sc(self._explore_coef, chain_bonus_p.shape)
+                  * chain_bonus_p * alive0.float())
         # 接近/追击奖励已按用户要求移除（approach_reward=0 / chase_reward=0）：
         # 原代码见 git 历史。真击杀死活由 hit/终局信号管，移动节奏交给策略自由学。
         # 宝箱拾取（corridor）：角色移动后站在宝箱格上 → 掷 growth_crate_prob 开箱。
@@ -915,7 +939,7 @@ class BatchedSim:
             # 开始的物理必需（炸墙→宝箱→变强），探索奖励退火只针对"刷分放炮"
             # 的塑形（place_bonus/chain），吃箱/成长信号恒生效 —— 否则后期模型
             # 停止成长直接废掉（Pommerman 后期已吃满道具可退，我们每局重新开始）。
-            reward = reward + cfg.brick_reward * stood.float() * alive0.float()
+            reward = reward + self._sc(cfg.brick_reward, stood.shape) * stood.float() * alive0.float()
             for pl in range(cfg.n_players):
                 rb = (self._rand_buf[pl * n:(pl + 1) * n]
                       if self._rand_buf is not None
@@ -966,8 +990,9 @@ class BatchedSim:
         cell = center_cell(self.pos)
         flat = (cell[..., 0] * cfg.width + cell[..., 1]).clamp(0, cfg.height * cfg.width - 1)   # 防御（见 hit 处）
         standing = danger.view(n, -1).gather(1, flat)
-        reward = reward - self._explore_coef * cfg.danger_penalty * standing \
-            * alive0.float()
+        reward = (reward - self._sc(self._explore_coef * cfg.danger_penalty,
+                                    standing.shape)
+                  * standing * alive0.float())
         # 久不放炮罚（passivity）已按用户要求移除（passivity_penalty=0）。
         # combo 连击奖励（combo_reward>0）：**不掉血**连续造成伤害 = 连击。
         #   连击数越高分越多（combo × combo_reward × 间隔因子），间隔越短分越多
@@ -984,7 +1009,8 @@ class BatchedSim:
                 # 造成伤害 → 连击 +1（同一 tick 多击只 +1）并计分
                 inc = (dealt_me > 0).long()
                 combo_now = (c + inc) * inc      # 没造成伤害保持，造成则 +1
-                pts = (combo_now.float() * cfg.combo_reward * factor) * dealt_me.clamp(max=1).float()
+                pts = (combo_now.float() * self._sc(cfg.combo_reward, combo_now.shape)
+                       * factor * dealt_me.clamp(max=1).float())
                 reward[:, me] += pts * alive0[:, me].float()
                 self._combo[:, me] = torch.where(
                     inc.bool(), combo_now, c)
@@ -1033,12 +1059,12 @@ class BatchedSim:
                     + base * all_alive.float() * timeout_scale
         else:
             # 重头训默认：击杀固定 ±win_bonus；超时按血量差 × 退火
-            reward = reward + cfg.win_bonus * (winner.float() - loser.float())
+            reward = reward + self._sc(cfg.win_bonus, winner.shape) * (winner.float() - loser.float())
             if cfg.timeout_draw:
                 for me in range(cfg.n_players):
                     opp_hp = (hp.sum(dim=1) - hp[:, me]) / (p - 1)
                     diff = hp[:, me] - opp_hp
-                    reward[:, me] += (cfg.win_bonus / cfg.max_hp) * diff \
+                    reward[:, me] += self._sc(cfg.win_bonus / cfg.max_hp, diff.shape) * diff \
                         * all_alive.float() * timeout_scale
 
         info = {"n_alive": n_alive, "blast": covered, "trig": triggered,
