@@ -1,0 +1,60 @@
+{
+ "models": [
+  {
+   "name": "duel_nobc_3B",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 3001655296,
+   "elo": 3461.2,
+   "source": "duel_nobc_3B.pt",
+   "generated_at": "2026-08-11 16:15 UTC"
+  },
+  {
+   "name": "course_1023m",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 1009975296,
+   "elo": 2893.1,
+   "source": "course_1023m.pt",
+   "generated_at": "2026-08-11 16:15 UTC"
+  },
+  {
+   "name": "course_bc_571m",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 562298880,
+   "elo": 1442.2,
+   "source": "course_bc_571m.pt",
+   "generated_at": "2026-08-11 16:15 UTC"
+  },
+  {
+   "name": "duel_course_453M",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 446955520,
+   "elo": 1995.1,
+   "source": "duel_course_453M.pt",
+   "generated_at": "2026-08-11 16:15 UTC"
+  }
+ ]
+}

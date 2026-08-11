@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QQT 格斗 · 浏览器版</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="wrap">
+  <header>
+    <h1>💣 QQT 格斗（泡泡堂 1v1）</h1>
+    <p class="sub">训练侧 PPO 模型（MLP 345K）在浏览器里实时推理 · 原版素材渲染 · 与你对战</p>
+  </header>
+
+  <div id="layout">
+    <div id="stage">
+      <canvas id="game" width="780" height="876"></canvas>
+      <div id="banner" class="hidden"></div>
+    </div>
+
+    <aside id="panel">
+      <section>
+        <h3>⚙️ 开局设置</h3>
+        <label>地图
+          <select id="mode">
+            <option value="open" selected>空场（中心宝箱 · 8泡/6威/1.68速起步）</option>
+            <option value="corridor">走廊（顶墙侧砖 · 2泡/2威/1.0速 踩箱成长）</option>
+          </select>
+        </label>
+        <label>场景（皮肤）
+          <select id="scene"></select>
+        </label>
+        <label>AI 模型
+          <select id="model"></select>
+        </label>
+        <label class="row">
+          <input type="checkbox" id="spectate"> 观战（AI vs AI，不操作）
+        </label>
+        <label class="row">
+          <input type="checkbox" id="danger"> 显示危险图（D 键切换）
+        </label>
+        <label class="row">
+          <input type="checkbox" id="sound" checked> 音效（M 键切换）
+        </label>
+        <button id="restart">开始 / 重新开局（R）</button>
+      </section>
+
+      <section>
+        <h3>🎮 操作</h3>
+        <p>方向键 / WASD 移动 · 空格放泡<br>
+        按住移动 = 连续走（微操贴墙自动转向）<br>
+        D 危险图叠加 · M 静音 · R 重开一局</p>
+      </section>
+
+      <section>
+        <h3>📊 状态</h3>
+        <div id="status">加载模型中…</div>
+      </section>
+
+      <section class="meta">
+        <p>这是训练侧模拟器（sim/torch_sim.py）的 JS 移植：引擎规则、14 通道观测、
+        危险图、连锁爆炸全部与 Python 参考实现逐元素对拍一致；渲染沿用启动器的
+        <code>res/</code> 原版素材（角色精灵/炸弹/爆炸/场景砖块背景/道具/音效）。</p>
+        <p>权重由 <code>deploy/export_ckpt.py</code> 从 <code>ckpt/*.pt</code> 转换，
+        浏览器内用纯 JS 做 MLP 前向 + 合法动作掩码采样。</p>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<script src="sim.js"></script>
+<script src="main.js"></script>
+</body>
+</html>

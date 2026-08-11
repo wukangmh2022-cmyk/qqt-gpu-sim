@@ -6,6 +6,23 @@
 
 ---
 
+## 🎮 试玩（浏览器版）
+
+**▶️ [点这里在线玩 QQT 格斗](https://wukangmh2022-cmyk.github.io/qqt-gpu-web/)**
+
+训练好的 MLP 模型（345K 参数）在浏览器里实时推理，原版 `res/` 素材渲染（角色精灵/炸弹/爆炸/场景皮肤/音效）。方向键/WASD 移动、空格放泡，可选地图（空场/走廊）、11 个场景皮肤、4 个已导出模型（按 ELO 排序），支持观战模式。
+
+- 游戏页面部署在独立的公开仓库 [qqt-gpu-web](https://github.com/wukangmh2022-cmyk/qqt-gpu-web)（本仓库为私有，免费套餐的 Pages 只支持公开仓库）；
+- **转换工具链**（训练侧改完代码后一键更新游戏）：
+  ```bash
+  .venv/bin/python deploy/export_ckpt.py --verify   # ckpt/ → web/models/*.json（含前向自检）
+  bash deploy/prep_assets.sh                        # res/ → web/assets/（原版素材）
+  bash deploy/sync_web.sh                           # web/ → qqt-gpu-web 推送 → Pages 自动上线
+  ```
+- 引擎是 `sim/torch_sim.py` 的纯 JS 标量移植（碰撞/连锁爆炸/危险图/14 通道观测/掩码采样），与 Python 参考实现逐元素对拍一致（见 `deploy/parity_ref.py` ↔ `web/parity.js`，60 个随机状态 maxdiff < 1e-7）。
+
+---
+
 ## 演示
 
 <div align="center">
@@ -190,6 +207,9 @@ sim/           模拟器：config(规则常量) / torch_sim(BatchedSim) / blast(
 train/         model.py(ActorCritic MLP/CNN) / ppo.py(PPO) / train.py(课程主循环)
                model_pool.py(池子+ELO) / curriculum.py(旧阶段表)
 play/          启动器 + 对局（选 bot/模型 对战·观战）
+web/           浏览器版游戏（sim.js 引擎移植 + MLP 权重 + 原版素材渲染），部署到 qqt-gpu-web
+deploy/        部署工具链：export_ckpt.py(ckpt→web 权重) / prep_assets.sh(素材搬运)
+               sync_web.sh(web→游戏仓库) / parity_ref.py+parity_sweep.py(对拍参考)
 scripts/       验收：duel_arena.py(对战矩阵) / sanity_curriculum.py / acceptance_5x3.py
 bench/         吞吐/roofline 老基准
 docs/          性能优化详解（引擎层 + 算子层）

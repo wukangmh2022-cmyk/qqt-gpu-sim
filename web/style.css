@@ -1,0 +1,72 @@
+:root {
+  --bg: #14161c;
+  --panel: #1d212b;
+  --line: #2c3240;
+  --fg: #e8e6df;
+  --dim: #8b93a5;
+  --accent: #f5a623;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+}
+#wrap { max-width: 1100px; margin: 0 auto; padding: 16px 20px 40px; }
+header h1 { margin: 6px 0 2px; font-size: 22px; }
+header .sub { margin: 0 0 14px; color: var(--dim); font-size: 13px; }
+
+#layout { display: flex; gap: 18px; flex-wrap: wrap; }
+#stage { position: relative; }
+canvas#game {
+  background: #0c0e13;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: block;
+  image-rendering: pixelated;
+}
+
+#banner {
+  position: absolute; top: 32%; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 12, 18, 0.86);
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  padding: 14px 26px;
+  font-size: 26px; font-weight: 700;
+  text-align: center;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 6px 24px rgba(0,0,0,.5);
+}
+#banner .tip { display: block; margin-top: 8px; font-size: 13px; font-weight: 400; color: var(--dim); }
+#banner.hidden { display: none; }
+
+aside#panel { flex: 1; min-width: 280px; max-width: 360px; }
+aside section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+aside h3 { margin: 0 0 8px; font-size: 14px; color: var(--accent); }
+label { display: block; margin-bottom: 10px; font-size: 13px; color: var(--dim); }
+label select { width: 100%; margin-top: 4px; }
+select, button {
+  background: #262c39; color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 7px 10px; font-size: 13px;
+}
+label.row { display: flex; align-items: center; gap: 8px; color: var(--fg); }
+label.row input { accent-color: var(--accent); }
+button {
+  width: 100%; margin-top: 4px; cursor: pointer;
+  background: var(--accent); color: #1a1408; font-weight: 700;
+}
+button:hover { filter: brightness(1.1); }
+#status { font-size: 12.5px; line-height: 1.7; color: var(--fg); }
+#status b { color: var(--accent); }
+section.meta { font-size: 11.5px; color: var(--dim); line-height: 1.6; }
+section.meta code { background: #262c39; padding: 1px 4px; border-radius: 4px; }

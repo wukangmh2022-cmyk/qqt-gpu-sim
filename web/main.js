@@ -1,0 +1,656 @@
+// main.js —— 浏览器端：原版素材渲染 + 游戏主循环 + 输入 + 模型加载。
+//
+// 渲染移植自 play/duel.py::draw_grid + play/res.py：同一套 res/ 素材（角色
+// 4×4 精灵图、炸弹呼吸、爆炸臂切片、场景砖块/背景、道具图、无敌罩），
+// 同一套画家算法（z = 所在行，远→近绘制）与底边对齐锚点。
+// 玩法与 play/duel.py 对齐：人类 60Hz 帧级移动（自动转向 + AABB 滑动碰撞），
+// AI 决策与模拟推进走 10Hz；AI 用导出权重（已折 pid=0 视角）+ 合法动作掩码采样。
+//
+// 逻辑节拍用 setInterval(100ms) 驱动（rAF 在标签页后台会被浏览器节流停发，
+// 用定时器保证对局不受影响）；rAF 只做输入采样 + 渲染。
+
+'use strict';
+
+(() => {
+  const Q = window.QQT;
+  const { Sim, MLPModel, CFG, DIRS, MOVE_IDLE, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_UP } = Q;
+
+  const H = Q.H, W = Q.W, N = Q.N;
+  const CELL = 60;                 // 与 play/duel.py 一致：素材原生 40px/格 × 1.5
+  const SCALE = CELL / 40.0;
+  const BOARD_PX = CELL * W;       // 780
+  const HUD_PX = 96;
+  const TICK = 1.0 / CFG.tickHz;   // 0.1s
+  const DY = [-1, 1, 0, 0], DX = [0, 0, -1, 1];
+  const TURN_EPS = 0.4;
+  // 动作编码 → 精灵行（行序：下/左/右/上，与 res.py MOVE_TO_SPRITE_ROW 一致）
+  const MOVE_TO_SPRITE_ROW = { [MOVE_DOWN]: 0, [MOVE_LEFT]: 1, [MOVE_RIGHT]: 2, [MOVE_UP]: 3 };
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const $ = (id) => document.getElementById(id);
+  const elMode = $('mode'), elModel = $('model'), elScene = $('scene'),
+        elSpectate = $('spectate'), elDanger = $('danger'), elSound = $('sound'),
+        elRestart = $('restart'), elStatus = $('status'), elBanner = $('banner');
+
+  // ------------------------------------------------------------ 状态
+  let sim = null, model = null, modelList = [], res = null;
+  let rng = null;
+  let showDanger = false, soundOn = true;
+  let running = false;
+  let resultShown = false;
+  let prevPos = new Float64Array(4), curPos = new Float64Array(4);
+  let explosion = null, explosionT = 0;
+  let lastTickT = 0;
+  let gameSeed = 1;
+  const face = [MOVE_DOWN, MOVE_DOWN];
+  const human = { dirStack: [], latch: new Set(), move: MOVE_IDLE, pendingBomb: false };
+
+  // ------------------------------------------------------------ 素材加载
+  const imgCache = new Map();
+  function loadImage(src) {
+    if (imgCache.has(src)) return imgCache.get(src);
+    const p = new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('加载失败: ' + src));
+      img.src = src;
+    });
+    imgCache.set(src, p);
+    return p;
+  }
+
+  function toCanvas(img) {
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    c.getContext('2d').drawImage(img, 0, 0);
+    return c;
+  }
+
+  function scaleCanvas(src, w, h) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w));
+    c.height = Math.max(1, Math.round(h));
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    return c;
+  }
+
+  // AI 角色染红（res.py::_tint_red）：保留明暗、色相偏红
+  function tintRed(src) {
+    const c = toCanvas(src);
+    const g = c.getContext('2d');
+    const d = g.getImageData(0, 0, c.width, c.height);
+    for (let i = 0; i < d.data.length; i += 4) {
+      const gray = 0.299 * d.data[i] + 0.587 * d.data[i + 1] + 0.114 * d.data[i + 2];
+      d.data[i] = Math.min(255, gray * 1.3);
+      d.data[i + 1] = gray * 0.3;
+      d.data[i + 2] = gray * 0.3;
+    }
+    g.putImageData(d, 0, 0);
+    return c;
+  }
+
+  // 无敌罩预乘（res.py::_load_wudi）：透明区清黑 + rgb *= alpha/255，
+  // 之后用 'lighter' 加法混合才不会有蓝底/边缘生硬
+  function premulAlpha(src) {
+    const c = toCanvas(src);
+    const g = c.getContext('2d');
+    const d = g.getImageData(0, 0, c.width, c.height);
+    for (let i = 0; i < d.data.length; i += 4) {
+      const a = d.data[i + 3];
+      if (a === 0) { d.data[i] = d.data[i + 1] = d.data[i + 2] = 0; }
+      else {
+        d.data[i] = (d.data[i] * a / 255) | 0;
+        d.data[i + 1] = (d.data[i + 1] * a / 255) | 0;
+        d.data[i + 2] = (d.data[i + 2] * a / 255) | 0;
+      }
+    }
+    g.putImageData(d, 0, 0);
+    return c;
+  }
+
+  // 加载全部素材（失败降级：缺图用色块，保证可玩）
+  async function loadAssets() {
+    const scenes = await (await fetch('assets/scenes.json')).json();
+    const sceneNames = Object.keys(scenes);
+    elScene.innerHTML = '';
+    for (const s of sceneNames) {
+      const opt = document.createElement('option');
+      opt.value = s; opt.textContent = s;
+      elScene.appendChild(opt);
+    }
+    elScene.value = '比武';
+
+    // 预加载全部场景素材（bg + 砖块 + 墙），渲染全程同步
+    const sceneAssets = {};
+    for (const name of sceneNames) {
+      const sc = scenes[name];
+      const bgImg = await loadImage('assets/' + sc.bg);
+      // 与 build_static 一致：整体缩放（比例 = CELL/40）后左上角铺一张
+      const bg = scaleCanvas(bgImg, Math.round(bgImg.width * SCALE),
+                             Math.round(bgImg.height * SCALE));
+      const brick = [];
+      for (const rel of sc.brick) {
+        const img = await loadImage('assets/' + rel);
+        // 与 res.py::load_one 一致：等比缩放（宽 = cell，高按比例）
+        const h1 = Math.max(1, Math.round(img.height * CELL / img.width));
+        brick.push(scaleCanvas(img, CELL, h1));
+      }
+      let wall = null;
+      if (sc.wall) {
+        const img = await loadImage('assets/' + sc.wall);
+        const h1 = Math.max(1, Math.round(img.height * CELL / img.width));
+        wall = scaleCanvas(img, CELL, h1);
+      }
+      sceneAssets[name] = { bg, brick, wall };
+    }
+
+    const target = Math.round(85 * SCALE);        // 角色帧目标尺寸（CELL=60 → 128）
+    const sheet = await loadImage('assets/角色4×4精灵图.png');
+    const fw = sheet.width / 4, fh = sheet.height / 4;
+    const players = [];                           // 4 行方向 × 4 帧
+    for (let r = 0; r < 4; r++) {
+      players.push([]);
+      for (let c = 0; c < 4; c++) {
+        const fr = document.createElement('canvas');
+        fr.width = target; fr.height = target;
+        fr.getContext('2d').drawImage(sheet, c * fw, r * fh, fw, fh, 0, 0, target, target);
+        players[r].push(fr);
+      }
+    }
+    const wudi = premulAlpha(await loadImage('assets/无敌.PNG'));
+    const boomImg = await loadImage('assets/bomb1.png');
+    const props = [];
+    for (const name of ['威力道具.png', '泡泡数量道具.png', '鞋子道具.png']) {
+      props.push(scaleCanvas(await loadImage('assets/' + name), CELL, CELL));
+    }
+    const exploArms = {};
+    for (const [key, f] of [['up', '向上爆炸.png'], ['down', '向下爆炸.png'],
+                            ['left', '向左爆炸.png'], ['right', '向右爆炸.png']]) {
+      exploArms[key] = await loadImage('assets/' + f);
+    }
+    res = {
+      scenes, sceneAssets,
+      players,
+      playerAi: players.map((row) => row.map(tintRed)),
+      wudi: scaleCanvas(wudi, target, target),
+      bomb: scaleCanvas(boomImg, CELL, CELL),
+      props,
+      exploCenter: scaleCanvas(await loadImage('assets/爆炸中心.png'), CELL, CELL),
+      exploArms,
+    };
+    // 音效（Web Audio；失败静默）
+    try {
+      res.audio = new AudioContext();
+      res.snd = {};
+      const names = { place: '放炮.wav', boom: '爆炸.wav', pickup: '吃道具音效.wav',
+                      hurt: '生命损失音效.wav', die: '角色消失音效.wav' };
+      for (const [k, f] of Object.entries(names)) {
+        const buf = await (await fetch('assets/snd/' + f)).arrayBuffer();
+        res.snd[k] = await res.audio.decodeAudioData(buf);
+      }
+    } catch (e) { res.snd = {}; }
+  }
+
+  function sceneOf() {
+    return res.sceneAssets[elScene.value] || res.sceneAssets['比武'];
+  }
+
+  // ------------------------------------------------------------ 音效
+  function playSnd(name, vol) {
+    if (!soundOn || !res || !res.snd || !res.snd[name] || !res.audio) return;
+    try {
+      const src = res.audio.createBufferSource();
+      src.buffer = res.snd[name];
+      const g = res.audio.createGain();
+      g.gain.value = vol == null ? 0.6 : vol;
+      src.connect(g).connect(res.audio.destination);
+      src.start();
+    } catch (e) { /* 忽略 */ }
+  }
+
+  // ------------------------------------------------------------ 输入
+  const KEY_TO_MV = {
+    ArrowUp: 0, KeyW: 0, ArrowDown: 1, KeyS: 1,
+    ArrowLeft: 2, KeyA: 2, ArrowRight: 3, KeyD: 3,
+  };
+  const MV_KEYS = [[], [], [], []];
+  for (const k of Object.keys(KEY_TO_MV)) MV_KEYS[KEY_TO_MV[k]].push(k);
+  const held = new Set();
+
+  window.addEventListener('keydown', (e) => {
+    held.add(e.code);
+    if (e.code === 'Space') { human.pendingBomb = true; e.preventDefault(); }
+    if (e.code === 'KeyR') { startGame(); }
+    if (e.code === 'KeyD') { showDanger = !showDanger; elDanger.checked = showDanger; }
+    if (e.code === 'KeyM') { soundOn = !soundOn; elSound.checked = soundOn; }
+    const mv = KEY_TO_MV[e.code];
+    if (mv !== undefined) {
+      human.latch.add(mv);
+      if (!human.dirStack.includes(mv)) human.dirStack.push(mv);
+      e.preventDefault();
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    held.delete(e.code);
+    const mv = KEY_TO_MV[e.code];
+    if (mv !== undefined) {
+      const i = human.dirStack.indexOf(mv);
+      if (i >= 0) human.dirStack.splice(i, 1);
+    }
+  });
+
+  function sampleHumanMove() {
+    const active = new Set(human.latch);
+    for (const mv of human.dirStack) {
+      if (MV_KEYS[mv].some((k) => held.has(k))) active.add(mv);
+    }
+    human.dirStack = human.dirStack.filter((mv) => active.has(mv));
+    for (const mv of active) if (!human.dirStack.includes(mv)) human.dirStack.push(mv);
+    human.latch.clear();
+    return human.dirStack.length ? human.dirStack[human.dirStack.length - 1] : MOVE_IDLE;
+  }
+
+  // ------------------------------------------------------------ 帧级移动（duel.py 同款）
+  function blockedGrid() {
+    const b = new Uint8Array(N);
+    for (let i = 0; i < N; i++) b[i] = sim.wall[i] || sim.brick[i] || sim.fuse[i] > 0 ? 1 : 0;
+    return b;
+  }
+
+  function probeMove(pid, mv) {
+    const y = sim.pos[pid * 2], x = sim.pos[pid * 2 + 1];
+    const blocked = blockedGrid();
+    const dist = CFG.stepLen;
+    const [dy, dx] = DIRS[mv];
+    if (dy !== 0) {
+      const ny = Q.resolveAxis(y + dy * dist, dy * dist, x, y, x, blocked, CFG.radius, H, W, true);
+      return Math.abs(ny - y) > Q.EPS * 2;
+    }
+    const nx = Q.resolveAxis(x + dx * dist, dx * dist, y, y, x, blocked, CFG.radius, H, W, false);
+    return Math.abs(nx - x) > Q.EPS * 2;
+  }
+
+  function autoTurn(pid, move) {
+    if (move >= 4 || probeMove(pid, move)) return move;
+    const y = sim.pos[pid * 2], x = sim.pos[pid * 2 + 1];
+    const fx = x - Math.floor(x), fy = y - Math.floor(y);
+    let alt = null;
+    if (move === 0 || move === 1) alt = fx <= TURN_EPS ? 2 : (fx >= 1 - TURN_EPS ? 3 : null);
+    else alt = fy <= TURN_EPS ? 0 : (fy >= 1 - TURN_EPS ? 1 : null);
+    if (alt === null) return move;
+    const r = Math.floor(y), c = Math.floor(x);
+    const nr = r + DY[move] + DY[alt], nc = c + DX[move] + DX[alt];
+    if (nr >= 0 && nr < H && nc >= 0 && nc < W &&
+        !sim.wall[nr * W + nc] && !sim.brick[nr * W + nc] && sim.fuse[nr * W + nc] <= 0) {
+      return alt;
+    }
+    return move;
+  }
+
+  function frameMove(pid, mv, dt) {
+    if (mv === MOVE_IDLE || !sim.alive[pid]) return;
+    const dist = CFG.speed * sim.spdG[pid] * Math.min(dt, 0.1);
+    if (dist <= 0) return;
+    const y = sim.pos[pid * 2], x = sim.pos[pid * 2 + 1];
+    const blocked = blockedGrid();
+    const [dy, dx] = DIRS[mv];
+    if (dy !== 0) {
+      sim.pos[pid * 2] = Q.resolveAxis(y + dy * dist, dy * dist, x, y, x,
+                                       blocked, CFG.radius, H, W, true);
+    }
+    if (dx !== 0) {
+      sim.pos[pid * 2 + 1] = Q.resolveAxis(x + dx * dist, dx * dist, y, y, x,
+                                           blocked, CFG.radius, H, W, false);
+    }
+    sim.pos[pid * 2] = Math.min(Math.max(sim.pos[pid * 2], CFG.radius), H - CFG.radius);
+    sim.pos[pid * 2 + 1] = Math.min(Math.max(sim.pos[pid * 2 + 1], CFG.radius), W - CFG.radius);
+  }
+
+  // ------------------------------------------------------------ 开局
+  function startGame() {
+    if (!model || !res) return;
+    gameSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
+    sim = new Sim(gameSeed);
+    sim.reset(elMode.value === 'corridor' ? 'corridor' : 'open');
+    rng = Q.mulberry32(gameSeed ^ 0x13579BDF);
+    human.dirStack = []; human.latch.clear(); human.move = MOVE_IDLE; human.pendingBomb = false;
+    explosion = null; resultShown = false;
+    prevPos.set(sim.pos); curPos.set(sim.pos);
+    face[0] = MOVE_DOWN; face[1] = MOVE_DOWN;
+    lastTickT = performance.now();
+    running = true;
+    elBanner.classList.add('hidden');
+  }
+
+  // ------------------------------------------------------------ 模型加载
+  function fmtStep(n) {
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(0) + 'M';
+    return String(n);
+  }
+
+  async function loadModelList() {
+    const resp = await fetch('models/index.json');
+    modelList = (await resp.json()).models;
+    elModel.innerHTML = '';
+    for (const m of modelList) {
+      const opt = document.createElement('option');
+      opt.value = m.name;
+      opt.textContent = `${m.name}  (${fmtStep(m.global_step)}步 · elo ${m.elo})`;
+      elModel.appendChild(opt);
+    }
+    await loadSelectedModel();
+  }
+
+  async function loadSelectedModel() {
+    const name = elModel.value;
+    elStatus.innerHTML = `正在加载模型 <b>${name}</b>…`;
+    try {
+      const resp = await fetch(`models/${name}.json`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      model = new MLPModel(await resp.json());
+      elStatus.innerHTML =
+        `模型：<b>${model.meta.name}</b><br>` +
+        `训练步数 ${fmtStep(model.meta.global_step)} · elo ${model.meta.elo}<br>` +
+        `观测 ${model.meta.obs_shape.join('×')} · 参数 ${Object.values(model.tensors)
+          .reduce((s, [, n]) => s + n, 0).toLocaleString()}`;
+      startGame();
+    } catch (e) {
+      elStatus.innerHTML = `模型加载失败：${e.message}`;
+    }
+  }
+
+  elRestart.addEventListener('click', startGame);
+  elMode.addEventListener('change', startGame);
+  elModel.addEventListener('change', loadSelectedModel);
+  elSpectate.addEventListener('change', startGame);
+  elScene.addEventListener('change', startGame);
+  elDanger.addEventListener('change', () => { showDanger = elDanger.checked; });
+  elSound.addEventListener('change', () => { soundOn = elSound.checked; });
+
+  // ------------------------------------------------------------ 10Hz 逻辑节拍
+  function logicTick() {
+    if (!running || !model || !sim || sim.done) return;
+    const spectate = elSpectate.checked;
+    const a0 = spectate ? model.act(sim, 0, rng) : [MOVE_IDLE, human.pendingBomb ? 1 : 0];
+    if (!spectate) human.pendingBomb = false;
+    const a1 = model.act(sim, 1, rng);
+    prevPos.set(sim.pos);
+    const info = sim.step([a0, a1]);
+    curPos.set(sim.pos);
+    lastTickT = performance.now();
+    face[1] = a1[0];
+    // 音效（以人类玩家为监听者，只播人类相关事件）
+    if (info.placed[0]) playSnd('place');
+    // 只有真的有火焰（任一格被覆盖）才播爆炸音效/显示爆炸特效
+    const hasBlast = info.covered && info.covered.some((v) => v > 0);
+    if (hasBlast) {
+      explosion = info.covered;
+      explosionT = performance.now();
+      playSnd('boom');
+    }
+    if (info.died[0]) playSnd('die');
+    if (sim.done && !resultShown) {
+      resultShown = true;
+      const w = sim.winner;
+      const msg = w === null ? '平局' : (w === 0 ? '🎉 你赢了！' : '🤖 AI 赢了');
+      elBanner.innerHTML = `${msg}<span class="tip">按 R 或点「重新开局」再来一局</span>`;
+      elBanner.classList.remove('hidden');
+      running = false;
+    }
+  }
+  setInterval(logicTick, TICK * 1000);
+
+  // ------------------------------------------------------------ 渲染（draw_grid 移植）
+  function drawBoard(bg) {
+    // 背景层（build_static 的 JS 版）：缩放后从左上角铺一张
+    if (bg) ctx.drawImage(bg, 0, 0);
+    else { ctx.fillStyle = '#2d2a32'; ctx.fillRect(0, 0, BOARD_PX, BOARD_PX); }
+  }
+
+  function drawDangerOverlay() {
+    if (!showDanger) return;
+    const d = sim.dangerMap();
+    for (let r = 0; r < H; r++) {
+      for (let c = 0; c < W; c++) {
+        const v = d[r * W + c];
+        if (v <= 0.04) continue;
+        const a = Math.min(255, Math.round(20 + 235 * v));
+        ctx.fillStyle = `rgba(255,30,60,${(a / 255).toFixed(3)})`;
+        ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
+      }
+    }
+  }
+
+  // 渲染一帧：背景 → 危险区 → 画家算法精灵（墙砖/爆炸/泡/宝箱/角色）→ 无敌罩 → 血条 → HUD
+  function render(now) {
+    if (!sim || !res) return;
+    const sc = sceneOf();
+    const alpha = Math.min(1, (now - lastTickT) / (TICK * 1000));
+    drawBoard(sc.bg);
+    drawDangerOverlay();
+
+    const items = [];   // (z, drawFn)
+
+    // 墙/砖 tile：底边对齐格底（向上延伸超一格，靠 z 排序盖住上方角色脚部）
+    for (let r = 0; r < H; r++) {
+      for (let c = 0; c < W; c++) {
+        const i = r * W + c;
+        if (sim.wall[i] && sc.wall) {
+          const t = sc.wall, tw = t.width, th = t.height;
+          items.push([r, () => ctx.drawImage(
+            t, c * CELL + (CELL - tw) / 2, r * CELL + CELL - th)]);
+        } else if (sim.brick[i] && sc.brick.length) {
+          const t = sc.brick[(r * 7 + c * 13) % sc.brick.length];
+          const tw = t.width, th = t.height;
+          items.push([r, () => ctx.drawImage(
+            t, c * CELL + (CELL - tw) / 2, r * CELL + CELL - th)]);
+        }
+      }
+    }
+
+    const nowS = now / 1000;
+    const bob = Math.round(Math.sin(nowS * 2 * Math.PI) * 3);
+    const bombW = res.bomb.width, bombH = res.bomb.height;
+
+    // 爆炸：中心格用中心图；臂图按实际爆炸格数从炸弹边缘端切片（duel.py 同款算法）
+    if (explosion) {
+      const age = (now - explosionT) / 1000;
+      if (age <= 0.6) {
+        const blast = explosion;
+        // 引爆源（fuse==0 且 owner>=0）的格画中心图
+        for (let i = 0; i < N; i++) {
+          if (sim.fuse[i] !== 0 || sim.owner[i] < 0) continue;
+          const r = (i / W) | 0, c = i % W;
+          items.push([r, () => ctx.drawImage(res.exploCenter, c * CELL, r * CELL)]);
+        }
+        // 臂：从引爆源向 4 方向按实际长度画（尊重挡火规则）
+        for (let i = 0; i < N; i++) {
+          if (sim.fuse[i] !== 0 || sim.owner[i] < 0) continue;
+          const sr = (i / W) | 0, sc = i % W;
+          for (let d = 0; d < 4; d++) {
+            const [dr, dc] = DIRS[d];
+            let n = 0;
+            for (let k = 1; k <= CFG.blast; k++) {
+              const r = sr + dr * k, c = sc + dc * k;
+              if (r < 0 || r >= H || c < 0 || c >= W) break;
+              if (!blast[r * W + c]) break;
+              n++;
+            }
+            const arm = res.exploArms[['up', 'down', 'left', 'right'][d]];
+            for (let k = 1; k <= n; k++) {
+              const r = sr + dr * k, c = sc + dc * k;
+              let sx, sy;
+              if (dc !== 0) {
+                const len = CFG.blast * 40;
+                sx = dc > 0 ? (arm.width - len) + (k - 1) * 40 : (n - k) * 40;
+                sy = 0;
+              } else {
+                const len = CFG.blast * 40;
+                sx = 0;
+                sy = dr > 0 ? (arm.height - len) + (k - 1) * 40 : (n - k) * 40;
+              }
+              items.push([r, () => ctx.drawImage(arm, sx, sy, 40, 40,
+                                                 c * CELL, r * CELL, CELL, CELL)]);
+            }
+          }
+        }
+      } else {
+        explosion = null;
+      }
+    }
+
+    // 泡泡：底部贴格底线 + 垂直呼吸
+    for (let i = 0; i < N; i++) {
+      if (sim.fuse[i] <= 0) continue;
+      const r = (i / W) | 0, c = i % W;
+      const bx = c * CELL + (CELL - bombW) / 2;
+      const by = (r + 1) * CELL - bombH + bob;
+      items.push([r, () => ctx.drawImage(res.bomb, bx, by)]);
+    }
+
+    // 宝箱：三张道具图轮流展示 + 呼吸（底部贴格底线）
+    const propIdx = Math.floor(nowS * 2) % res.props.length;
+    const prop = res.props[propIdx];
+    for (let i = 0; i < N; i++) {
+      if (!sim.crate[i]) continue;
+      const r = (i / W) | 0, c = i % W;
+      const px = c * CELL + (CELL - prop.width) / 2;
+      const py = (r + 1) * CELL - prop.height + bob;
+      items.push([r, () => ctx.drawImage(prop, px, py)]);
+    }
+
+    // 角色：z = 脚所在行；帧底边 = 中心格底边；底线不越地图底
+    const chars = [];   // {z, x, y, surf, wudi, wx, wy, hpv, mx}
+    for (let pid = 0; pid < 2; pid++) {
+      if (!sim.alive[pid]) continue;
+      const rows = pid === 0 ? res.players : res.playerAi;
+      let gy, gx;
+      if (elSpectate.checked || pid === 0) {
+        gy = sim.pos[pid * 2]; gx = sim.pos[pid * 2 + 1];
+      } else {
+        gy = prevPos[2] + (curPos[2] - prevPos[2]) * alpha;
+        gx = prevPos[3] + (curPos[3] - prevPos[3]) * alpha;
+      }
+      const cx = gx * CELL, cy = gy * CELL;
+      const row = MOVE_TO_SPRITE_ROW[face[pid]] != null ? MOVE_TO_SPRITE_ROW[face[pid]] : 0;
+      const frame = (humanMoveState(pid) ? Math.floor(nowS * 8) % 4 : 0);
+      const s = rows[row][frame];
+      const blitX = Math.round(cx - s.width / 2);
+      const blitY = Math.min(Math.round(cy + CELL / 2 - s.height), H * CELL - s.height);
+      let wudi = null, wx = blitX, wy = blitY;
+      if (sim.invuln[pid] > 0) {
+        wudi = res.wudi;
+        // 无敌光晕居中于角色帧中心（近似 res.py 的 body_center）
+        wx = blitX + s.width / 2 - wudi.width / 2;
+        wy = blitY + s.height / 2 - wudi.height / 2;
+      }
+      const z = Math.floor(gy);
+      items.push([z, () => ctx.drawImage(s, blitX, blitY)]);
+      chars.push({ z, blitX, blitY, s, wudi, wx, wy, hpv: sim.hp[pid], mx: CFG.maxHp });
+    }
+
+    // 画家算法：z 升序（远→近）绘制
+    items.sort((a, b) => a[0] - b[0]);
+    for (const [, fn] of items) fn();
+
+    // 无敌罩（加法混合，UI 层最后画）
+    ctx.globalCompositeOperation = 'lighter';
+    for (const ch of chars) {
+      if (ch.wudi) ctx.drawImage(ch.wudi, ch.wx, ch.wy);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 血条（段式，最后画不被墙挡）
+    for (const ch of chars) {
+      const segW = 5, segH = 4, gap = 1;
+      const color = ch.hpv > ch.mx / 3 ? '#50dc5a' : '#f04646';
+      for (let i = 0; i < ch.mx; i++) {
+        ctx.fillStyle = i < ch.hpv ? color : '#3c3c42';
+        ctx.fillRect(ch.blitX + i * (segW + gap), ch.blitY - 8, segW, segH);
+      }
+    }
+    drawHUD();
+  }
+
+  // 角色是否在行走（动画帧推进用）
+  function humanMoveState(pid) {
+    if (pid === 0) {
+      return !elSpectate.checked && human.move !== MOVE_IDLE && sim.alive[0];
+    }
+    return face[1] !== MOVE_IDLE && sim.alive[1];
+  }
+
+  function drawHUD() {
+    const y0 = BOARD_PX;
+    ctx.fillStyle = '#10131a';
+    ctx.fillRect(0, y0, BOARD_PX, HUD_PX);
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.strokeRect(0, y0, BOARD_PX, HUD_PX);
+    const names = [
+      sim.alive[0] ? '你（P0）' : '你（P0·阵亡）',
+      sim.alive[1] ? 'AI（P1）' : 'AI（P1·阵亡）',
+    ];
+    const colors = ['#ff6b6b', '#5aa7ff'];
+    for (let p = 0; p < 2; p++) {
+      const bx = 18 + p * (BOARD_PX / 2);
+      ctx.fillStyle = colors[p];
+      ctx.font = 'bold 15px sans-serif';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillText(names[p], bx, y0 + 12);
+      ctx.fillStyle = '#e8e6df';
+      ctx.font = '13px sans-serif';
+      ctx.fillText(`HP ${sim.hp[p]}/${CFG.maxHp} · 泡 ${sim.bombsCap[p]} · 威 ${sim.blastCap[p]} · 速 ${sim.spdG[p].toFixed(2)}`,
+                   bx, y0 + 36);
+    }
+    const sec = Math.min(sim.t / CFG.tickHz, CFG.maxSteps / CFG.tickHz).toFixed(0);
+    ctx.fillStyle = '#8b93a5';
+    ctx.font = '13px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${sec}s / ${CFG.maxSteps / CFG.tickHz}s  tick=${sim.t}`, BOARD_PX - 18, y0 + 14);
+    ctx.fillStyle = '#8b93a5';
+    ctx.fillText(`地图：${sim.mode === 'open' ? '空场' : '走廊'} · ${elScene.value} · 对局 #${gameSeed % 100000}`,
+                 BOARD_PX - 18, y0 + 36);
+    ctx.fillStyle = '#5a6275';
+    ctx.font = '11px sans-serif';
+    ctx.fillText('方向键/WASD 移动 · 空格放泡 · D 危险图 · R 重开 · M 静音', BOARD_PX - 18, y0 + 58);
+  }
+
+  // ------------------------------------------------------------ 主循环
+  let prevFrame = 0;
+  function loop(now) {
+    // 人类输入 60Hz 采样 + 帧级移动
+    if (running && !elSpectate.checked) {
+      const dt = Math.min((now - prevFrame) / 1000 || 0, 0.25);
+      human.move = sampleHumanMove();
+      if (human.move !== MOVE_IDLE && sim.alive[0]) {
+        const eff = autoTurn(0, human.move);
+        frameMove(0, eff, dt);
+        human.move = eff;
+        face[0] = eff;
+      }
+    }
+    prevFrame = now;
+    render(now);
+    requestAnimationFrame(loop);
+  }
+
+  // ------------------------------------------------------------ 启动
+  async function boot() {
+    await loadAssets();
+    await loadModelList();
+    requestAnimationFrame(loop);
+  }
+  boot().catch((e) => {
+    elStatus.innerHTML = `启动失败：${e.message}`;
+    console.error(e);
+  });
+
+  // 调试钩子（只读）：无头验证用
+  window.__QQT__ = {
+    get sim() { return sim; },
+    get model() { return model; },
+    get running() { return running; },
+  };
+})();
