@@ -830,21 +830,23 @@
     const aiName = (sel) => sel === HUNTER_VAL ? '规则 Hunter' : (sel || '模型');
     const p0Kind = elSpectate.checked ? aiName(p0Sel) : '你';
     const p1Kind = aiName(enemySel);
-    // 第 1 行：双方状态各自合并成一行（名字 + HP/属性），右侧倒计时（无 tick）
+    // 第 1 行：双方状态各自合并成一行（名字 + HP/属性同排），右侧倒计时（无 tick）
     const colors = ['#ff6b6b', '#5aa7ff'];
     const leftHalf = BOARD_PX * 0.46;
     for (let p = 0; p < 2; p++) {
       const name = p === 0 ? p0Kind : p1Kind;
       const tag = sim.alive[p] ? `P${p}` : `P${p}·阵亡`;
       const bx = 18 + p * leftHalf;
+      const nameStr = `${name}（${tag}）`;
       ctx.textAlign = 'left'; ctx.textBaseline = 'top';
       ctx.fillStyle = colors[p];
       ctx.font = 'bold 13px sans-serif';
-      ctx.fillText(`${name}（${tag}）`, bx, y0 + 10);
+      const nameW = ctx.measureText(nameStr).width;
+      ctx.fillText(nameStr, bx, y0 + 10);
       ctx.fillStyle = '#e8e6df';
-      ctx.font = '13px sans-serif';
+      ctx.font = '12px sans-serif';
       ctx.fillText(`HP ${sim.hp[p]}/${CFG.maxHp} · 泡 ${sim.bombsCap[p]} · 威 ${sim.blastCap[p]} · 速 ${sim.spdG[p].toFixed(2)}`,
-                   bx, y0 + 28);
+                   bx + nameW + 8, y0 + 12);
     }
     // 倒计时（剩余秒，倒着走）
     const remain = Math.max(0, Math.ceil(CFG.maxSteps / CFG.tickHz - sim.t / CFG.tickHz));
