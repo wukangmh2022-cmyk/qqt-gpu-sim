@@ -407,3 +407,53 @@ MLP baseline:                503 ms   ★ x12.21 ← 达成 10x
   （36-41k）；910B 同配置实测 **43.2k** —— 优化没有丢分，还高了 10-20%。
 - 唯一真正"低"的是 **CNN @ N=2048 = 17k**，那是模型计算量大 14x + 显存上限
   的物理结果，不是模拟器优化的锅。
+
+## 十一、LSTM 网络（局部 7×7 + 相对坐标 + 全局状态 + LSTM）910B 实测（2026-08-12）
+
+### 1. 背景
+用户给了经典 Bomberman RL 网络（BombermanNet）：局部 7×7 视野 CNN（10→32→64 3x3
++ MaxPool）+ 相对坐标 MLP（10 目标 × (dx,dy,onehot4)=60）+ 全局状态 MLP（5 维）
++ fusion(168→256) + LSTM(256→128) + 双头。要求从零训练、测真实 SPS，层数/核大小可改。
+
+### 2. 实现（纯新增，cnn/mlp 路径零破坏）
+- `train/model.py`：`arch="lstm"` 分支（BombermanNet 结构 + 动作保留 5+2 双头）。
+  新增 `extract_fused()`：conv/rel/glob/fusion 逐帧独立部分，BPTT 时可一次喂
+  整个 (T*N, ...) 大 batch，只对 LSTM 层沿 T 展开。
+- `sim/obs.py`：新增 `local_view_features()` —— 从共享 obs 抠每角色 7×7 局部窗 +
+  相对坐标（对手+最近炸弹 topk）+ 全局标量（t/hp/danger/炸弹数/fuse）。`only_p0=True`
+  省一半 gather/topk。
+- `train/ppo.py`：RolloutBuffer 存局部特征三元组；collect 传 hidden（done 置零）；
+  `_ppo_update_lstm` BPTT（minibatch 按 env 维切，沿 T 顺序重放 LSTM）。
+- `train_lstm_speed.py`：从零训练闭环（greedy bot 对手），与 bench_dcu_parity 同口径。
+
+### 3. 性能实测（910B，完整训练 = collect 128 tick + ppo_update）
+```
+配置                      collect   update    SPS
+LSTM @N=2048 mb=4          16.1s     27.3s     5.8k
+LSTM @N=2048 mb=1          16.7s      7.0s    11.0k
+LSTM @N=4096 mb=1          18.5s      9.3s    18.5k
+LSTM @N=4096 mb=1 +only_p0 17.0s      9.2s    19.9k   ← 最优
+LSTM @N=8192                → OOM（BPTT 激活 12.25GB，N 上限 ~4096-6144）
+MLP  @N=4096（同口径）      14.0s      1.0s    35.1k   ← 对照组
+MLP  @N=20000              25.7s      3.0s    89.4k
+```
+
+### 4. 结论：LSTM 在 910B 上全面落后 MLP
+- **同口径 N=4096：MLP 35.1k vs LSTM 19.9k = 慢 1.8 倍**；N=8192 时 LSTM 直接 OOM。
+- 三个原因（都实测定位）：
+  1. **局部特征生成 16.8ms/tick**（observe 15.7 + 局部 gather/topk/零散 kernel），
+     是共享全图 obs（零搬运 + 权重置换）的**固有代价** —— 每角色要单独抠图。
+  2. **BPTT 更新**：minibatch 数线性放大（mb=4 → update 27.3s vs mb=1 → 7s），
+     因为每个 mb 都要重跑整个 T=128 的 LSTM 序列；而 MLP 的 flat 大 batch 一次算完。
+  3. **LSTM 前向本身不慢**（4.8ms/tick，纯 LSTM 层 2.3ms）—— 它走 GEMM/Cube
+     效率高，但被 1+2 拖累。
+- 纯前向快（bench_bomber_net 2.5ms）≠ 完整训练快：**LSTM 的时序本质决定了 BPTT
+  无法 flat、局部观测必须逐角色 gather** —— 这两条和 910B 的"大 batch GEMM 高效、
+  小 kernel dispatch 贵"特性相克。
+
+### 5. 建议
+- **910B 上不要用 LSTM/局部视野架构追求 SPS**。共享全图 + MLP（GEMM）是唯一
+  已验证的高吞吐路径（89.4k @N=20000）。
+- 若想要"记忆"能力：可用共享全图 MLP + 隐式位置编码替代 LSTM（网络自己记住
+  危险图历史），或接受 LSTM 的 SPS 代价做小 N 实验。
+- 代码保留（arch="lstm" 完整可用），作为论文式架构的对照实验与 PR 素材。

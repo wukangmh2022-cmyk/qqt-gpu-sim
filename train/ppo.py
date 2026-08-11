@@ -27,6 +27,8 @@ from sim.move import center_cell  # noqa: E402
 
 from sim.config import N_BOMB, N_MOVES
 
+from sim.obs import local_view_features
+
 from .model import ActorCritic
 
 
@@ -50,11 +52,21 @@ class RolloutBuffer:
     """预分配的定长 buffer；T×N 条 player-0 转移。"""
 
     def __init__(self, steps: int, num_envs: int, obs_shape, device,
-                 obs_dtype=torch.float32) -> None:
+                 obs_dtype=torch.float32, arch: str = "cnn") -> None:
         c, h, w = obs_shape
         # 观测是 env 级共享的一份，不乘 P；dtype 跟着模拟器（默认 fp16）
         self.obs = torch.zeros((steps, num_envs, c, h, w), dtype=obs_dtype,
                                device=device)
+        self.arch = arch
+        # LSTM 架构：obs 不用（共享全图），改用每角色的局部特征三元组
+        if arch == "lstm":
+            # 形状与 sim.obs.local_view_features 约定一致（MAX_T=10, GLOB=5）
+            self.local = torch.zeros((steps, num_envs, c, 7, 7),
+                                     dtype=obs_dtype, device=device)
+            self.rel = torch.zeros((steps, num_envs, 10, 6),
+                                   dtype=obs_dtype, device=device)
+            self.glob = torch.zeros((steps, num_envs, 5),
+                                    dtype=obs_dtype, device=device)
         self.mmask = torch.zeros((steps, num_envs, N_MOVES), dtype=torch.bool, device=device)
         self.bmask = torch.zeros((steps, num_envs, N_BOMB), dtype=torch.bool, device=device)
         self.act = torch.zeros((steps, num_envs, 2), dtype=torch.long, device=device)
@@ -68,7 +80,12 @@ class RolloutBuffer:
 
     def add(self, obs, mmask, bmask, act, logp, val, rew, done, dmg) -> None:
         i = self.ptr
-        self.obs[i], self.mmask[i], self.bmask[i] = obs, mmask, bmask
+        if self.arch == "lstm":
+            local, rel, glob = obs            # obs 槽位传特征三元组
+            self.local[i], self.rel[i], self.glob[i] = local, rel, glob
+        else:
+            self.obs[i] = obs
+        self.mmask[i], self.bmask[i] = mmask, bmask
         self.act[i] = act
         self.logp[i], self.val[i], self.rew[i], self.done[i] = logp, val, rew, done
         self.dmg[i] = dmg
@@ -105,7 +122,8 @@ class SelfPlayRunner:
         assert len(opponents) == n_players - 1, "对手数量必须是 P-1"
         self.buf = RolloutBuffer(
             cfg.rollout_steps, sim.num_envs, sim.cfg.obs_shape, self.device,
-            obs_dtype=torch.float16 if sim.cfg.obs_fp16 else torch.float32)
+            obs_dtype=torch.float16 if sim.cfg.obs_fp16 else torch.float32,
+            arch=learner.arch)
         # 统计量：胜/平/负计数和平均局长，用于课程晋级与日志。
         # kills = 敌方死亡数（我方赢的终局数），探索退火的 x 数据源（见 _tally）。
         # 健康度统计（collect 内累积，指导是否停下找问题）：
@@ -141,6 +159,7 @@ class SelfPlayRunner:
         self.buf.reset()
         n = sim.num_envs
         dev = self.device
+        is_lstm = self.learner.arch == "lstm"
         n_players = sim.cfg.n_players              # sim 的 SimConfig（cfg 是 PPOConfig）
         # 健康度统计缓冲（每 tick 向量累积，无 host 同步；collect 末尾一次性 sum）
         dng_ch = 2 * n_players + 1                 # 危险通道下标（与 obs 布局一致）
@@ -148,13 +167,23 @@ class SelfPlayRunner:
         st_bmb = torch.zeros(n, dtype=torch.long, device=dev)
         st_dt = torch.zeros(n, dtype=torch.long, device=dev)
         st_dv = torch.zeros(n, dtype=torch.float32, device=dev)
+        hidden = None                              # LSTM 时序状态（沿 tick 传递）
         for i in range(cfg.rollout_steps):
             obs = sim.observe()                      # (N, C, H, W) 共享
             mmask, bmask = sim.legal_mask()
             actions = torch.zeros((n, sim.cfg.n_players, 2),
                                   dtype=torch.long, device=obs.device)
             with torch.no_grad():
-                a0, logp, value = self.learner.act(obs, mmask[:, 0], bmask[:, 0], 0)
+                if is_lstm:
+                    # 每角色局部特征（player 0 喂 learner，only_p0 省一半 gather/topk）
+                    lf = local_view_features(sim.cfg, obs, sim.pos, sim.alive,
+                                             sim.t, sim.fuse, sim.hp, only_p0=True)
+                    f0 = (lf[0][:, 0], lf[1][:, 0], lf[2][:, 0])
+                    a0, logp, value, hidden = self.learner.act(
+                        f0, mmask[:, 0], bmask[:, 0], 0, hidden)
+                else:
+                    a0, logp, value = self.learner.act(
+                        obs, mmask[:, 0], bmask[:, 0], 0)
             actions[:, 0] = a0
             self._opponent_actions(obs, mmask, bmask, actions)
 
@@ -165,13 +194,19 @@ class SelfPlayRunner:
             dmg = (hp0 - sim.hp[:, 0]).clamp(min=0) > 0
             self._ep_len += 1
             self._tally(info, done)
+            # LSTM：本 tick 结束的 env 清零 hidden（下 tick 是新局首帧，从零记忆）
+            if hidden is not None and bool(done.any()):
+                dk = done.to(dev).to(hidden[0].dtype).view(1, -1, 1)
+                hidden = (hidden[0] * (1 - dk), hidden[1] * (1 - dk))
             # 掉血回收（延迟 flush，2026-08-10）：step 内只累积（零同步），
             # 这里降频 flush —— 每 4 tick 一次 + collect 末尾补一次。回收箱
             # 延迟 ≤4 tick 出（掉血补偿资源，拾取时机影响可忽略）；省 3/4 的
             # bool(lost.sum()>0) 同步（每 tick flush 在 collect 里 ~70ms/tick）。
             if i % 4 == 3:
                 sim.flush_recycle()
-            self.buf.add(obs, mmask[:, 0], bmask[:, 0], a0, logp, value,
+            # buffer 存观测：lstm 存特征三元组，否则存共享全图
+            buf_obs = f0 if is_lstm else obs
+            self.buf.add(buf_obs, mmask[:, 0], bmask[:, 0], a0, logp, value,
                          reward[:, 0], done.float(), dmg)
             # ---- 健康度统计（向量累积，零 host 同步）----
             died0 = info["died"][:, 0]
@@ -192,7 +227,15 @@ class SelfPlayRunner:
         self.ep_stats["danger_sum"] += float(st_dv.sum())
         sim.flush_recycle()    # 末尾补一次：清掉最后 ≤4 tick 累积的回收
         with torch.no_grad():
-            *_, last_val = self.learner(sim.observe(), 0)
+            if is_lstm:
+                # 用最后的 hidden 算终局 value（BPTT 的 next_val）
+                lf = local_view_features(sim.cfg, sim.observe(), sim.pos,
+                                         sim.alive, sim.t, sim.fuse, sim.hp,
+                                         only_p0=True)
+                f0 = (lf[0][:, 0], lf[1][:, 0], lf[2][:, 0])
+                *_, last_val, _ = self.learner(f0, 0, hidden)
+            else:
+                *_, last_val = self.learner(sim.observe(), 0)
         return self.buf, last_val
 
     def _tally(self, info: dict, done: torch.Tensor) -> None:
@@ -242,6 +285,9 @@ class SelfPlayRunner:
 def ppo_update(learner: ActorCritic, opt: torch.optim.Optimizer, buf: RolloutBuffer,
                last_val: torch.Tensor, cfg: PPOConfig, entropy_coef: float,
                autocast: bool = False) -> dict:
+    if learner.arch == "lstm":
+        return _ppo_update_lstm(learner, opt, buf, last_val, cfg, entropy_coef,
+                                autocast)
     adv, ret = compute_gae(buf, last_val, cfg.gamma, cfg.gae_lambda)
     flat = lambda x: x.reshape(-1, *x.shape[2:])  # noqa: E731
     obs = flat(buf.obs)
@@ -306,6 +352,98 @@ def ppo_update(learner: ActorCritic, opt: torch.optim.Optimizer, buf: RolloutBuf
                 stats["vf"] += float(vf)
                 stats["ent"] += float(ent)
                 stats["kl"] += float((old_logp[sel] - logp).mean())
+                stats["clipfrac"] += float(
+                    ((ratio - 1).abs() > cfg.clip_eps).float().mean())
+            n_updates += 1
+    return {k: v / max(1, n_updates) for k, v in stats.items()}
+
+
+def _ppo_update_lstm(learner: ActorCritic, opt: torch.optim.Optimizer,
+                     buf: RolloutBuffer, last_val: torch.Tensor,
+                     cfg: PPOConfig, entropy_coef: float,
+                     autocast: bool = False) -> dict:
+    """LSTM 架构的 PPO 更新：BPTT（truncated，沿 T 顺序重放）。
+
+    buffer 存的是每角色的局部特征三元组 (local/rel/glob) (T,N,...)。与 cnn/mlp
+    的 flat 大 batch 不同，LSTM 必须保持时序：minibatch 按 **env 维** 切
+    (T, N_sub)，hidden 从零开始、沿 T 顺序推进、遇 done 置零。每个 minibatch
+    一次 forward 链 + 一次 backward（truncated BPTT，窗口 = 整个 rollout）。
+    """
+    T, N = buf.rew.shape
+    dev = buf.rew.device
+    adv, ret = compute_gae(buf, last_val, cfg.gamma, cfg.gae_lambda)
+    adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+    old_logp, old_val = buf.logp, buf.val
+
+    stats = {"pg": 0.0, "vf": 0.0, "ent": 0.0, "kl": 0.0, "clipfrac": 0.0}
+    n_updates = 0
+    ac_ctx = (torch.autocast(device_type=dev.type)
+              if autocast and dev.type != "cpu" else nullcontext())
+
+    mb_n = max(1, N // cfg.minibatches)
+    for _ in range(cfg.epochs):
+        # 打乱 env 维，minibatch 取整个 T 序列的 N_sub 个 env
+        env_perm = torch.randperm(N, device=dev)
+        for start in range(0, N, mb_n):
+            sel = env_perm[start:start + mb_n]               # (N_sub,)
+            ns = sel.numel()
+            # 前向 BPTT：沿 T 顺序重放 LSTM
+            logp = torch.empty((T, ns), device=dev)
+            ent = torch.empty((T, ns), device=dev)
+            value = torch.empty((T, ns), device=dev)
+            with ac_ctx:
+                # 优化：conv/rel/glob/fusion 逐帧独立，一次喂整个 (T*N_sub, ...)
+                # 大 batch（910B 大 batch GEMM 效率高），只对 LSTM 层沿 T 展开。
+                l_all = buf.local[:, sel].reshape(T * ns, -1, 7, 7)
+                r_all = buf.rel[:, sel].reshape(T * ns, -1, 6)
+                g_all = buf.glob[:, sel].reshape(T * ns, -1)
+                fused_all = learner.extract_fused(l_all, r_all, g_all)
+                fused_all = fused_all.view(T, ns, -1)          # (T, N_sub, 256)
+                hidden = None
+                for t in range(T):
+                    # 每 tick 喂 (N_sub, 1, 256)，hidden 保持 (1, N_sub, 128)
+                    lo, hidden = learner.lstm(fused_all[t].unsqueeze(1), hidden)
+                    lo = lo.squeeze(1)
+                    ml = learner.move_head(lo)
+                    bl = learner.bomb_head(lo)
+                    v = learner.critic(lo).squeeze(-1)
+                    # 掩码作用在 logits（-inf 法，与 collect 的 masked_dist 一致）
+                    neg_inf = torch.finfo(ml.dtype).min
+                    mlogp = torch.where(buf.mmask[t][sel], ml,
+                                        torch.full_like(ml, neg_inf))
+                    blogp = torch.where(buf.bmask[t][sel], bl,
+                                        torch.full_like(bl, neg_inf))
+                    dm = torch.distributions.Categorical(logits=mlogp)
+                    db = torch.distributions.Categorical(logits=blogp)
+                    am, ab = buf.act[t][sel, 0], buf.act[t][sel, 1]
+                    logp[t] = dm.log_prob(am) + db.log_prob(ab)
+                    ent[t] = dm.entropy() + db.entropy()
+                    value[t] = v
+                    # 本 tick 结束的 env 清零 hidden（新局从零记忆）
+                    if bool(buf.done[t][sel].any()):
+                        dk = buf.done[t][sel].to(hidden[0].dtype).view(1, -1, 1)
+                        hidden = (hidden[0] * (1 - dk), hidden[1] * (1 - dk))
+            ratio = (logp - old_logp[:, sel]).exp()
+            pg = -torch.min(
+                ratio * adv[:, sel],
+                ratio.clamp(1 - cfg.clip_eps, 1 + cfg.clip_eps) * adv[:, sel],
+            ).mean()
+            v_clipped = old_val[:, sel] + (value - old_val[:, sel]).clamp(
+                -cfg.clip_eps, cfg.clip_eps)
+            vf = 0.5 * torch.max((value - ret[:, sel]) ** 2,
+                                 (v_clipped - ret[:, sel]) ** 2).mean()
+            loss = pg + cfg.value_coef * vf - entropy_coef * ent.mean()
+
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(learner.parameters(), cfg.max_grad_norm)
+            opt.step()
+
+            with torch.no_grad():
+                stats["pg"] += float(pg)
+                stats["vf"] += float(vf)
+                stats["ent"] += float(ent.mean())
+                stats["kl"] += float((old_logp[:, sel] - logp).mean())
                 stats["clipfrac"] += float(
                     ((ratio - 1).abs() > cfg.clip_eps).float().mean())
             n_updates += 1

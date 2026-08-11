@@ -227,3 +227,114 @@ def legal_mask(
     # 死亡角色两个头都整行放开（动作反正不会被执行），调用方不需要特殊分支
     bomb_mask[..., 1] = place | ~alive
     return move_mask, bomb_mask
+
+
+# ---------------------------------------------------------------------------
+# LSTM 架构的局部特征（arch="lstm"，见 train/model.py）。
+# 与 cnn/mlp 的共享全图观测不同，这里返回**每角色一份**的三元组：
+#   local (N, P, C, 7, 7)  以自己为中心的 7×7 局部窗口（从共享 obs 抠）
+#   rel   (N, P, MAX_T, 6) 目标相对坐标：最多 MAX_T 个 (dx, dy, type_onehot4)
+#   glob  (N, P, GLOB_FEAT) 紧凑全局标量
+# 全 GPU 张量计算、无 host 同步；只在 LSTM 架构的 collect 里调用。
+# ---------------------------------------------------------------------------
+MAX_T = 10                # 相对坐标目标槽位数（对应 train/model.py REL_FEAT=60）
+_GLOB_FEAT = 5            # 对应 train/model.py GLOB_FEAT
+
+def local_view_features(cfg: SimConfig, obs, pos, alive, t, fuse, hp,
+                        only_p0: bool = False):
+    """共享 obs (N,C,H,W) + sim 状态 → LSTM 网络的每角色特征三元组。
+
+    obs 通道布局与 encode_obs 一致（含危险图通道 2P+1）；局部窗口直接复用
+    这份已算好的共享观测（fp16/fp32 原样），不需要重新 splat。
+    `only_p0=True`：只算 player 0（训练 buffer 只存 player 0 轨迹，
+    省掉另一半角色的 gather/topk）。
+    """
+    n, p_full, _ = pos.shape
+    c, h, w = obs.shape[1], cfg.height, cfg.width
+    dev = obs.device
+    K = 7                                      # 局部窗口边长
+    half = K // 2
+    p_out = 1 if only_p0 else p_full           # 输出角色数
+    me = torch.arange(p_out, device=dev)
+    danger_ch = 2 * cfg.n_players + 1          # 危险图通道（共享布局，全图）
+
+    # ---- local：以 center_cell 为中心抠 7×7，pad 3 防贴边越界 ----
+    cell = center_cell(pos)                    # (N,P,2) 格坐标
+    pad = torch.nn.functional.pad(obs, (half, half, half, half))  # (N,C,H+6,W+6)
+    # 每个 (n, me, dy, dx) 在 pad 后的坐标
+    ys = (cell[..., 0].unsqueeze(-1).unsqueeze(-1)
+          + torch.arange(K, device=dev).view(1, 1, K, 1))          # (N,P,7,1)
+    xs = (cell[..., 1].unsqueeze(-1).unsqueeze(-1)
+          + torch.arange(K, device=dev).view(1, 1, 1, K))          # (N,P,1,7)
+    # 需要把 (N,P,7,7) 坐标映射到每个通道的 (N,H+6,W+6)
+    # pad 后坐标范围 [0, H+6)，ys/xs 可能越界（clamp 到 pad 区内的 0 值格）
+    ys = ys.clamp(0, h + 2 * half - 1)
+    xs = xs.clamp(0, w + 2 * half - 1)
+    flat_idx = ys * (w + 2 * half) + xs                            # (N,P,7,7)
+    # only_p0：只取前 p_out 个角色的窗口索引（行优先前 p_out 行）
+    flat_idx = flat_idx[:, :p_out]
+    # gather：对每个通道 c，pad[:, c] 是 (N, (H+6)(W+6))
+    local = torch.empty((n, p_out, c, K, K), dtype=obs.dtype, device=dev)
+    # flat_idx (N,P_out,7,7) → (N, P_out*49)，每行按 (p, dy, dx) 排
+    gi = flat_idx.reshape(n, p_out * K * K)                # (N, P_out*49)
+    for ch in range(c):
+        gathered = pad[:, ch].reshape(n, -1).gather(1, gi)  # (N, P_out*49)
+        local[:, :, ch] = gathered.reshape(n, p_out, K, K)
+
+    # ---- rel：目标相对坐标 (dx, dy, onehot4) ----
+    # 目标槽位：前 P-1 个 = 其他存活对手；剩余 = 场上炸弹（按距离排序，不足补 0）
+    rel = torch.zeros((n, p_out, MAX_T, 6), dtype=obs.dtype, device=dev)
+    pn = torch.arange(n, device=dev)
+    # 每个输出 me 的对手编号：完整池里除 me 外所有角色（only_p0 时 me=0 → 对手 1..P-1）
+    n_opp = p_full - 1                          # 每个角色的对手数
+    opp_base = [o for o in range(p_full) if o != 0] if only_p0 \
+        else [o for o in range(p_full) if o != 1]   # me=1 的对手列表（完整 P 时每 me 各不同）
+    # 简化：逐 me 填对手槽（me 用 p_out 个；only_p0 只 me=0）
+    for me_idx in range(p_out):
+        for i in range(n_opp):
+            opp = (me_idx + i + 1) % p_full     # me_idx 视角的第 i 个对手
+            o_pos = pos[pn, opp]                # (N,2)
+            dx = o_pos[:, 0] - pos[pn, me_idx, 0]
+            dy = o_pos[:, 1] - pos[pn, me_idx, 1]
+            ao = alive[pn, opp]
+            rel[:, me_idx, i, 0] = dx
+            rel[:, me_idx, i, 1] = dy
+            rel[:, me_idx, i, 2] = ao.to(obs.dtype)     # type0=对手
+    # 炸弹槽：fuse>0 的格子按到自己的 L1 距离排序，填 P-1..MAX_T-1
+    bomb_mask = (fuse > 0).float()                                 # (N,H,W)
+    b_slots = MAX_T - n_opp
+    if b_slots > 0:
+        gy = torch.arange(h, device=dev).view(1, h, 1)
+        gx = torch.arange(w, device=dev).view(1, 1, w)
+        for m in range(p_out):
+            cy = cell[:, m, 0]                                     # (N,)
+            cx = cell[:, m, 1]
+            dist = (gy.expand(n, h, w) - cy.view(n, 1, 1)).abs() \
+                 + (gx.expand(n, h, w) - cx.view(n, 1, 1)).abs()  # (N,H,W)
+            dist = torch.where(fuse > 0, dist,
+                               torch.full_like(dist, 1e6))
+            vals, idxs = dist.reshape(n, -1).topk(
+                min(b_slots, h * w), dim=1, largest=False)
+            for j in range(min(b_slots, h * w)):
+                gi = idxs[:, j]                                    # (N,)
+                by = (gi // w).float() - cy.float()
+                bx = (gi % w).float() - cx.float()
+                ok = (vals[:, j] < 1e5).to(obs.dtype)              # 该槽确实有炸弹
+                rel[:, m, n_opp + j, 0] = bx
+                rel[:, m, n_opp + j, 1] = by
+                rel[:, m, n_opp + j, 3] = ok                       # type1=炸弹
+
+    # ---- glob：紧凑全局标量 (t进度, 自己hp, 脚下danger, 炸弹数, fuse均值) ----
+    glob = torch.zeros((n, p_out, _GLOB_FEAT), dtype=obs.dtype, device=dev)
+    glob[..., 0] = (t.to(obs.dtype) / cfg.max_steps).unsqueeze(-1)
+    glob[..., 1] = hp[:, :p_out].to(obs.dtype) / cfg.max_hp
+    # 脚下 danger：取危险图通道在中心格的值
+    danger = obs[:, danger_ch]                                     # (N,H,W)
+    dflat = danger.reshape(n, -1)
+    glob[..., 2] = dflat.gather(1, (cell[:, :p_out, 0] * w + cell[:, :p_out, 1])
+                                .reshape(n, -1)).reshape(n, p_out)  # (N,P)
+    glob[..., 3] = bomb_mask.reshape(n, -1).sum(1).unsqueeze(-1) / cfg.max_bombs
+    glob[..., 4] = fuse.float().reshape(n, -1).sum(1).unsqueeze(-1) \
+        / (cfg.max_bombs * cfg.fuse)                               # 归一化 fuse 总量
+
+    return local, rel, glob
