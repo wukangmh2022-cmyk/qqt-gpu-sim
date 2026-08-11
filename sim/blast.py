@@ -254,13 +254,10 @@ def danger_map(
         front = torch.where(bombed, w, torch.zeros_like(w))   # 波前权重
         fdist = torch.where(bombed, blast_f, torch.zeros_like(w))  # 剩余距离
         spread = torch.zeros_like(weight)
-        # **stack 融合（2026-08-11，910B dispatch-bound 优化）**：fw/fd 两个
-        # 张量叠成 (2,n,h,w) 一次 _shift + 一次 passable 乘法（原来 2 pad + 2 mul）。
-        # **注意**：not_solid 必须在 maximum() **之后**乘（先记录后挡穿透），
-        # 不能并进 shift 的 gate —— 否则 solid 格的记录值被提前清零，语义不同。
-        # 逐位一致（F.pad 按通道独立、元素级乘法可结合），verify_danger_v2 对拍。
-        # 同步免除模式（chain_cap≠None）：固定轮无 newly 检查（结果对链长
-        # ≤cap 逐位一致）；动态早退每 CHECK_EVERY 轮一次 bool(any()) 同步。
+        # **阶段 A 保持单 stream（2026-08-11 实测）**：4-stream 并行每轮 2 组
+        # event 同步 + 轮间强串行（front/fdist 每轮更新），rounds×2 组同步开销
+        # 吃掉并行收益（完整 danger 4-stream 实测 x0.92 负优化）。阶段 B
+        # 无轮间依赖，4-stream 才净赚（单独实测 x1.45）。
         rounds = min(max_chain, chain_cap) if sync_free else max_chain
         for i in range(rounds):
             spread.zero_()
@@ -302,16 +299,19 @@ def danger_map(
     # （blast_f / max_b 统一来自上方，阶段 B 不再重算）
     fw = seed.clone()
     fd = torch.where(bombed, blast_f, torch.zeros_like(seed))
+    # **阶段 B 保持单 stream（2026-08-11 实测）**：4-stream 并行单独原型 x1.45，
+    # 但在完整 danger 上下文里 stream 切换 + event 同步吃掉收益（实测 x0.89
+    # 负优化）—— 内存搬移型 kernel 受 HBM 带宽限制，并行度买不到带宽。
     for drow, dcol in _DIRS:
-            fw_p, fd_p = fw, fd
-            for _ in range(max_b):
-                fw1 = _shift(fw_p, drow, dcol) * passable   # 同阶段 A：连续张量免 item 同步
-                fd1 = _shift(fd_p, drow, dcol) * passable
-                fd1 = fd1 - one_buf          # 张量操作数免 item 同步
-                keep = fd1 >= 0          # 第 b 格（fd1=0）也记录；耗尽才停
-                fw1 = torch.where(keep, fw1, 0.0)   # 标量 0：省 zeros_like 分配
-                danger = torch.maximum(danger, fw1, out=danger)  # 先记录（覆盖泡格）
-                fw1 = fw1 * not_solid    # 再挡穿透：泡/brick 记录后不穿
-                fd1 = fd1 * not_solid
-                fw_p, fd_p = fw1, fd1
+        fw_p, fd_p = fw, fd
+        for _ in range(max_b):
+            fw1 = _shift(fw_p, drow, dcol) * passable   # 同阶段 A：连续张量免 item 同步
+            fd1 = _shift(fd_p, drow, dcol) * passable
+            fd1 = fd1 - one_buf          # 张量操作数免 item 同步
+            keep = fd1 >= 0          # 第 b 格（fd1=0）也记录；耗尽才停
+            fw1 = fw1 * keep         # bool×float32 提升（同阶段 A）
+            danger = torch.maximum(danger, fw1, out=danger)  # 先记录（覆盖泡格）
+            fw1 = fw1 * not_solid    # 再挡穿透：泡/brick 记录后不穿
+            fd1 = fd1 * not_solid
+            fw_p, fd_p = fw1, fd1
     return danger
