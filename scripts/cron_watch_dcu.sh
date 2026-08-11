@@ -11,11 +11,11 @@ _ENV_F="$(cd "$(dirname "$0")/.." && pwd)/.env"
 HOST="root@${DCU_HOST:-ssh.zzai.scnet.cn}"
 PORT="${DCU_PORT:-10630}"
 PASS="${DCU_PASS:-YOUR_PASSWORD}"
-# 2026-08-10 19:0x 起：no-BC 1.5B 续跑 2.5B（brick_reward 0.10，resume duel_nobc.pt，20000 envs）
+# 2026-08-11 08:3x 起：no-BC 3B 续跑 3.5B（brick 0.15、退火 k=0.6、+CNN 敌人、hunter 降频）
 CSV="/root/ckpt/train_nobc2.5B.csv"
 LOG="/root/train_nobc2.5B.log"
 CKPT="/root/private_data/duel_nobc2.5B.pt"
-TOTAL_STEPS=3000000000        # --total-steps 上限(2026-08-11 00:3x 起续训到 3B)，达到后不自动重启
+TOTAL_STEPS=3500000000        # --total-steps 上限，达到后不自动重启
 
 BASE="/Users/pippo/operater-dev/qqt-gpu-sim"
 STATE_LOG="$BASE/scripts/cron_dcu_watch.log"     # 每轮健康记录（追加）
@@ -30,8 +30,8 @@ BACKUP_NAME="duel_nobc_1.2B.pt"
 RESTART_WAIT=60
 MAX_CONSEC_FAIL=2
 
-# 与 relaunch_nobc2.5b.sh 一致（no-BC 1.5B 续跑 2.5B），fallback 直接调服务器脚本防配置漂移
-RELAUNCH_CMD='cd /root && bash /root/relaunch_nobc2.5b.sh'
+# 与 relaunch_nobc3.5b.sh 一致（no-BC 3B 续跑 3.5B），fallback 直接调服务器脚本防配置漂移
+RELAUNCH_CMD='cd /root && bash /root/relaunch_nobc3.5b.sh'
 
 ssh_run() { sshpass -p "$PASS" ssh -o ConnectTimeout=30 -o StrictHostKeyChecking=no \
   -o ServerAliveInterval=15 "$HOST" -p "$PORT" "$1" 2>&1; }
@@ -154,7 +154,7 @@ if [ "$alive" = "0" ]; then
   # 无历史进程时才用下方 RELAUNCH_CMD fallback
   cur=$(ssh_run 'ps -eo args | grep "python -m train.train" | grep -v grep | tail -1' | tr -d '\r')
   if [[ "$cur" == python* ]]; then
-    ssh_run "cd /root && source /opt/dtk-26.04/env.sh >/dev/null 2>&1 && nohup $cur > train_1023m_finetune.log 2>&1 < /dev/null &"
+    ssh_run "cd /root && source /opt/dtk-26.04/env.sh >/dev/null 2>&1 && nohup $cur > \"$LOG\" 2>&1 < /dev/null &"
   else
     ssh_run "$RELAUNCH_CMD"
   fi

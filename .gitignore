@@ -6,3 +6,4 @@ ckpt/
 
 .DS_Store
 .env
+wheels/

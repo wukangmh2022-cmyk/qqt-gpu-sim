@@ -124,3 +124,7 @@ root@ssh.zzai.scnet.cn:Permissiondenied(publickey,password,keyboard-interactive)
 [08-11 08:19:12] ⚠ 异常 alive=0 errs=0 step=3001655296 +0步 | 最近error: 
 [08-11 08:19:12] 训练已达 total-steps 上限（��，不自动重启，等人工处理（可 BC 收尾）。
 [08-11 08:19:12] learner.act profile 已做过（rm /tmp/dcu_cron_learner_act_profiled 可重跑），跳过
+[08-11 08:30:53] 事件:3.5B 新阶段启动(PID 121870)——brick_reward 0.15、退火放慢 k=0.6(α 目标 0.15-0.25,恢复危险/吃箱信号~10x)、敌人池加回 CNN 300M、hunter 降频(astar 常驻+bot-opp-prob 0.15)、lr 3e-4 保持;resume 3B(elo 3461.2);监控已更新(alpha 参考值变更勿误报)
+[08-11 08:34:12] OK alive=1 step=3011895296 sps=35839
+[08-11 08:58:21] OK alive=1 step=3050295296 sps=38250 +38400000步
+[08-11 09:04:16] OK alive=1 step=3060535296 sps=39165 +10240000步
