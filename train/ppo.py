@@ -46,6 +46,7 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     lr: float = 3e-4
     oversample_dying: int = 3   # 濒死/死亡帧过采样倍率（1 = 关闭）
+    bptt_window: int = 0        # LSTM BPTT 截断窗口（0 = 全序列反传；>0 只反传最近 W 步）
 
 
 class RolloutBuffer:
@@ -400,8 +401,14 @@ def _ppo_update_lstm(learner: ActorCritic, opt: torch.optim.Optimizer,
                 fused_all = learner.extract_fused(l_all, r_all, g_all)
                 fused_all = fused_all.view(T, ns, -1)          # (T, N_sub, 256)
                 hidden = None
+                window = getattr(cfg, "bptt_window", 0)
                 for t in range(T):
                     # 每 tick 喂 (N_sub, 1, 256)，hidden 保持 (1, N_sub, 128)
+                    # truncated BPTT：每隔 window 步 detach hidden，打断反向链
+                    # （反向深度从 T 降到 window —— LSTM-RL 标准做法，近似线性
+                    #  降反向成本；0 = 全序列反传）
+                    if window > 0 and t % window == 0 and hidden is not None:
+                        hidden = (hidden[0].detach(), hidden[1].detach())
                     lo, hidden = learner.lstm(fused_all[t].unsqueeze(1), hidden)
                     lo = lo.squeeze(1)
                     ml = learner.move_head(lo)

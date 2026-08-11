@@ -457,3 +457,46 @@ MLP  @N=20000              25.7s      3.0s    89.4k
 - 若想要"记忆"能力：可用共享全图 MLP + 隐式位置编码替代 LSTM（网络自己记住
   危险图历史），或接受 LSTM 的 SPS 代价做小 N 实验。
 - 代码保留（arch="lstm" 完整可用），作为论文式架构的对照实验与 PR 素材。
+
+## 十二、LSTM 网络在本地 MacBook（MPS）实测 + Triton 化（2026-08-12）
+
+### 1. 背景
+用户不愿放弃 LSTM/CNN 架构，要求测本地 MacBook 吞吐，能 Triton 更好。
+
+### 2. 环境
+- MacBook Apple Silicon (arm64)，torch 2.13.0 + MPS 可用，triton 3.8.0（MPS 后端可用）
+
+### 3. 实测（完整训练 = collect 128 tick + ppo_update，同 910B 口径）
+```
+配置                                      collect  update   SPS
+LSTM @N=1024 纯 torch                      14.7s    32.5s    2.8k
+MLP  @N=1024 纯 torch（同口径对照）         10.5s     4.2s    9.0k   ← LSTM 慢 3.2x
+LSTM @N=1536 纯 torch                       —        —       3.2k
+LSTM @N=1024 +triton step                  10.1s    30.0s    3.3k   (+18%)
+LSTM @N=1536 +triton step                  13.3s    48.7s    3.2k   （BPTT 随 N 线性涨）
+LSTM @N=1024 +triton step +bptt_window=4    8.8s    20.8s    4.4k   ← 最优（总 +57%）
+LSTM @N=2048 → MPS OOM（BPTT 激活超 18GB 共享内存上限）
+```
+
+### 4. 瓶颈剖析（N=1024，MPS）
+- **collect ~16ms/tick**：obs+mask+feat+act ~16ms（其中 LSTM 网络前向仅 1.2ms，
+  其余是模拟器 observe/legal_mask）+ **sim.step ~33ms/tick（最大单项）**
+- **BPTT update 32.5s**：extract_fused(T*N=131072) 1.26s + LSTM 128 步前向 174ms
+  + **128 步反向 4.96s（最大头）**，×4 epochs
+- 网络本身极快（extract_fused 0.6ms / LSTM 层 0.2ms / 完整前向 1.2ms）——
+  瓶颈全在**模拟器 + BPTT 反向**，不是 LSTM 架构本身
+
+### 5. Triton 化结果
+- **sim.step triton 化**（triton_step_full）：MPS 上可用；N=2048 时 step 30.7→23.4ms
+  （-24%），N=1024 反而 +17%（小 batch launch 开销）→ 大 N 才有收益
+- **truncated BPTT**（`PPOConfig.bptt_window`，标准 LSTM-RL 做法）：反向窗口
+  128→4，update 29.3→20.4s（-30%）。CPU 冒烟数值正确，不影响前向采样
+
+### 6. 结论
+- MacBook 上 LSTM 完整训练 ~2.8-4.4k sps，**受 MPS 显存限制 N 只能 ~1024-1536**
+  （BPTT 激活 18GB 上限），是 910B（19.9k@N=4096）的 1/5
+- Triton 化 step + truncated BPTT 合计 +57%，验证了 LSTM 路径可优化的三个方向：
+  ① 模拟器 triton 化（大 N 生效）② BPTT 截断（反向降 30%+）③ 更大 N（launch 摊薄）
+- **架构取舍**：LSTM 慢的本质是"时序无法 flat + 局部观测逐角色 gather"，
+  与硬件无关（MacBook/910B 都成立）。但代码完整可用，truncated BPTT 已进
+  PPOConfig，后续想保 LSTM 可继续调 window/架构。
