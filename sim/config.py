@@ -118,9 +118,13 @@ class SimConfig:
     fuse: int = 30          # 放泡后多少 tick 爆炸（30 tick @10Hz = 3 秒，原版手感）
     blast: int = 2          # 十字射线长度（不含中心格）。blast=3 时 AI 铺地雷过猛、
                             # 自伤/对轰频繁；改回 2 让走位与进攻更平衡
-    max_bombs: int = 4      # 单角色同时在场泡泡数。4 颗：放泡空间更足，
-                            # 保持满场 = 每 0.75 秒一颗
-    max_chain: int = 8      # 连锁爆炸最多迭代几轮
+    max_bombs: int = 10     # 单角色同时在场泡泡数（4 → 10：放炮上限放宽，布局/封锁空间更大）
+    max_chain: int = 16     # 连锁爆炸最多迭代几轮。8 → 16（漏爆修复）：13×13 地图
+                            # 一行最长 13 颗泡（blast=1 首尾相接）需要 12 轮连锁，
+                            # 旧值 8 让 9+ 颗长链尾部漏爆（danger 预警覆盖但实际
+                            # 没引爆）。early_exit（resolve/danger 均早退）保证
+                            # 多出的轮在连锁结束即停，不损失性能；CUDA graph
+                            # 固定轮模式才按满 16 轮算。
 
     step_penalty: float = 0.001
     wall_density: float = 0.0   # 0 = 纯空场；>0 时按固定图案摆柱子（永久墙）
@@ -153,11 +157,16 @@ class SimConfig:
                                       # 用 recycle_crate_prob，不依赖这个全局值 ——
                                       # 掉多少层补多少箱、踩了必还原，总量守恒可核算
                                       # （用户定：受伤爆出来随机生成的才是 100%）。
-    brick_reward: float = 0.15        # 踩箱奖励：**踩到即给**，与中奖概率无关
+    brick_reward: float = 0.15        # 踩箱奖励：踩到即给（人类一局踩 ~11 箱。历史：
+                                      # 0.15 过强达 1.4x hit 被学成刷分 → 0.05 太低
+                                      # 不吃箱 → 0.10 仍不够(corridor 吃箱不明显) →
+                                      # 2026-08-11 用户定回调 0.15，且配合 explore 退火
+                                      # 放慢(k=0.6)，有效吃箱信号比 3B 版(α≈0.03)恢复
+                                      # 近 10 倍；open 关刷分由 open 关设计防住）
     growth_bombs_start: int = 2
     growth_blast_start: int = 2
     growth_speed_start: float = 1.0   # corridor/ring 初始速度倍率（对打/启动器可调）
-    growth_bombs_max: int = 7
+    growth_bombs_max: int = 10        # corridor/ring 泡数成长上限（7 → 10：与 max_bombs 对齐）
     growth_blast_max: int = 7
     growth_speed_max: float = 2.1     # 速度上限倍率：base 3.0 × 2.1 = 6.3 格/秒（0.63 格/tick）
     growth_speed_step: float = 0.15   # 每次成功 +0.15 → 更快到上限，速度感知更明显
@@ -274,14 +283,16 @@ class SimConfig:
     # 近身满值 +0.01/次（1 格外 ≈ +0.0075），一局至多几十次累计 <0.3。
     # 都远小于命中 1.2 与终局 8，是塑形信号不是主回报 —— 主回报仍是
     # "炸到/赢了"。
-    place_cover_reward: float = 0.01  # 放泡覆盖到敌人：每人 +0.01（一次性；0.02→0.01：
-                                      # 放炮即时甜头减半，放得更挑剔，不无脑满预算丢）
-    place_chain_reward: float = 0.15  # 放泡连锁到已有泡：每泡 +0.15 × 时间因子
+    place_cover_reward: float = 0.05  # 放泡覆盖到敌人：每人 +0.05（稀疏 0.9% 触发，
+                                      # 旧 0.01 只有 0.02x hit 被淹没；加大到进攻核心信号）
+    place_chain_reward: float = 0.20  # 放泡连锁到已有泡：每泡 +0.20 × 时间因子
+                                      # （半稀疏 6.1%，旧 0.15 ≈ 0.8x hit → 加大到 ~1x）
     chain_time_factor: float = 0.15   # 时间因子 (0,1]：连老泡≈1.0、连新泡≈0.15
-    place_dist_reward: float = 0.01   # 近身定位（十字辐射外）：满值 +0.01/次
+    place_dist_reward: float = 0.0    # 近身定位（删除：人类录像 0.0% 触发，死信号）
     place_dist_radius: float = 4.0    # 近身门槛：炮距敌人 < 此值（格）才给分
     place_dist_cooldown: int = 15     # 近身冷却：放炮前 ≥15 tick 没放炮才给分
-    chain_blast_bonus: float = 0.08   # 爆炸时刻：被连锁提前点燃的泡每颗 +0.08（给点火源）
+    chain_blast_bonus: float = 0.0    # 爆炸时刻连锁兑现（删除：人类录像 0.0% 触发，
+                                      # 跨 owner 连锁+点火人类从不主动做，死信号）
 
     # --- 自杀重罚（防"放泡后站自己泡上炸死"） ---
     # 死亡 tick 自己名下有在场泡（own_live_snap 死前快照）→ 额外负奖励。
@@ -299,7 +310,8 @@ class SimConfig:
     # 逼出"不掉血打伤害"的干净压制。量级：单 tick 一击 ~0.05，5 连击 ~0.25，
     # 10 连击 ~0.5 —— 是塑形不是主回报（命中 1.2 / 终局 8 才是）。默认 0 关，
     # 训练侧 --combo-reward 显式开启。
-    combo_reward: float = 0.0         # 每级连击给的分（0 = 关；建议 0.05）
+    combo_reward: float = 0.10        # 每级连击给的分（稀疏 0.3%，旧 0.05 死信号 → 加大；
+                                      # 注：与 dealt 相关 r=0.78 有冗余，可后续评估）
     combo_gap_factor: float = 0.9     # 间隔因子：间隔每 +1 tick 分 ×0.9
                                       # （连击密 → 分高；间隔 20 tick → ×0.12）
 
@@ -312,7 +324,7 @@ class SimConfig:
     # 刷接近分而不是布局击杀。降到 0.02 后接近分 ≈ +1.2/局，纯塑形不压主回报。
     # **贴脸门控 approach_gate**：接近后距离仍 < 此值才给分 —— 隔半场空跑白跑
     # 不给（治无脑冲），贴脸纠缠（放泡能形成威胁）才值钱。
-    approach_reward: float = 0.02     # 每接近 1 格给的分（0.1→0.02：防刷分）
+    approach_reward: float = 0.0      # 每接近 1 格给的分（重头训删除：0 = 关）
     approach_dist: float = 5.0        # 距离 < 此值才算"接敌区"，接近才给分
     approach_gate: float = 3.0        # 接近后距离仍 < 此值才给（贴脸门控）
     # --- 主动追击奖励（治"追不上逃跑的对手"，与 approach 互补） ---
@@ -339,16 +351,17 @@ class SimConfig:
     max_hp: int = 5
 
     # --- 超时结局 ---
-    # True = 超时全员存活 → **平局 0 分**（去掉"血多者胜"）：治"领先龟缩到超时"
-    # 的 reward hacking（旧版超时领先 1 血拿 1.6，诱导龟缩）。死亡终局判定不变。
-    # False = 旧行为（超时血多者胜）。**默认 False**（对打/测试行为不变，
-    # 精确 reward 断言测试不破坏）；训练侧 --timeout-draw 显式开启。
-    timeout_draw: bool = False
+    # **退火语义（重头训，默认 True）**：一开始超时"谁活着血更多谁赢"（血多者胜
+    # 有奖励），随训练击杀能力上来，超时不再有正回报（引导"真击杀而不是拖到
+    # 超时拿血差"）。实现：超时终局给分 × `self._explore_coef`（与放炮塑形同一
+    # 退火系数，击杀率上来 α→0 → 超时奖励归零）。死亡终局（有人死）**不受退火**
+    # 影响 —— 击杀永远有回报。False = 旧行为超时血多者胜不退火。
+    timeout_draw: bool = True
 
     # --- 奖励结构：微观小分（每 step 塑形）+ 宏观胜负（终局一次性）---
     # 分数分两个层面，互不混用：
     #   **微观**（每 step 的 +-）：掉血/打中 ±hit_reward、放泡覆盖/连锁
-    #     place_cover/chain_reward、吃箱 brick_reward、危险区站桩罚、久不放炮罚、
+    #     place_cover/chain_reward、吃箱 brick_reward、危险区站桩罚、
     #     步罚。这些只进 rollout buffer 做策略梯度（"局内学习"），局终就丢弃，
     #     **不累计进 ELO**。
     #   **宏观**（终局一次性 ±win_bonus，平局 0）：局终胜负折算成一条
@@ -359,38 +372,35 @@ class SimConfig:
     #     place_cover_reward / place_chain_reward / place_dist_reward
     #     （即时信号，见上方注释）。
     #   **收集**：踩宝箱 +brick_reward（与概率解耦，密集正向）。
-    #   **生存**：掉 1 血 -hit_reward；危险区每 tick -danger_penalty×danger值；
-    #     久不放泡（有预算仍被动）每 tick -passivity_penalty。
+    #   **生存**：掉 1 血 -hit_reward；危险区每 tick -danger_penalty×danger值。
     #   **效率**：每 tick -step_penalty（防磨洋工）。
-    #   **终局**（win_hp_scaled=True）：终局一次性分 = win_bonus/max_hp ×
-    #     剩余血量差（自己剩余血 − 对手平均剩余血），平局 0。**按剩余血量给分**，
-    #     反 reward-hacking：旧版离散 ±win_bonus 只看"谁活着"，领先 1 血时 AI
-    #     会练出"拿血量换命"的打法（自己残血把对手击杀照样 +8，等于把领先优势
-    #     报销成无差别胜利，而不是用高超技巧赢）。新版残血险胜只拿
-    #     win_bonus×1/max_hp，比满血击杀低一个量级 → 引导"少掉血、干净击杀"，
-    #     也顺带削弱"领先就龟缩到超时"（超时领先 1 血只有 1.6 分）。
+    #   **终局**（固定值，重头训）：**对手 hp=0（击杀）** 才给 win_bonus 固定值
+    #     （±win_bonus，不看血量差距）。超时全员存活按"血多者胜"给分 × 退火
+    #     （击杀能力上来 → α→0 → 超时奖励归零，只留真击杀的固定回报）。
+    #     固定值理由：按血量比例的"残血险胜 ≈1.6"引导太弱（用户实测），
+    #     且"领先龟缩到超时"在退火归零后无利可图。
     #     必须 > 其他因子总和，否则 AI 停在"捡箱子/龟缩"的局部最优。
-    # 量级校验：一局 1800 tick 步罚 −1.8；危险罚/被动罚量级 ~−0.0x/tick；
+    # 量级校验：一局 1800 tick 步罚 −1.8；危险罚量级 ~−0.0x/tick；
     # 打满 5 血击杀 = 5×hit_reward=6；win_bonus=8 高于任何"被动磨一局"的累积，
     # 让"进攻赢"始终优于"活着耗完"。
     #   掉 1 血 -hit_reward / 造成 1 伤害 +hit_reward（1v1 里对方掉血 = 我的泡干的）
     #   站在**危险区**（被在场泡泡爆炸范围覆盖的格）：每 tick
     #     -danger_penalty × danger值 —— danger值 = 1-(fuse-1)/FUSE，越接近爆炸越疼
-    #   久不放炮罚：**有泡泡预算**（还能放）但连续 passivity_ticks tick 没放 → 每 tick
-    #     -passivity_penalty；放满（所有炮都在场）不扣 —— 只有"消极摆烂"被罚，
-    #     "积极进攻"不被冤枉
     #   终局：见 win_bonus / win_hp_scaled（判血逻辑见 torch_sim.step）
-    hit_reward: float = 1.2
-    win_bonus: float = 8.0       # 终局"干净击杀"满分：满血差击杀拿满，残血击杀按比例少拿
-    win_hp_scaled: bool = True   # True = 终局奖励按**剩余血量比例**给（见上方注释，
-                                 # 反"拿血换命"的 reward-hacking）；
-                                 # False = 旧离散 ±win_bonus（只看胜负不看血量）
-    danger_penalty: float = 0.05   # 0.02 → 0.05：危险区站桩要更疼（实测 AI 敢沿雷线走）；
-                                   # 乘 _explore_coef 随探索退火衰减 → 后期归零（重头训方案）
+    hit_reward: float = 1.5       # 掉 1 血 -1.5 / 造成 1 伤害 +1.5（稀疏主信号 0.5~1.6%
+                                  # 触发；旧 1.2 略弱，加大 25% —— 命中是唯一"打中"回报）
+    win_bonus: float = 10.0       # 终局固定值：对手 hp=0（击杀）才给 ±win_bonus（稀疏，
+                                  # 每局 1 次；旧 8 → 加大到 10，> 所有塑形总和防龟缩）
+    win_hp_scaled: bool = False  # 重头训：False = 击杀给固定 ±win_bonus（用户定：对手 hp=0
+                                 # 才是奖励，固定值）；超时血多者胜 × 退火。旧 True =
+                                 # 按剩余血量比例给（可回退对比）
+    danger_penalty: float = 0.015   # 危险区站桩（**稠密**：人类 65% 时间站危险区，旧 0.05
+                                    # 达 2.5x hit 过强 → 降到 0.015 ≈ 0.75x hit；
+                                    # 乘 _explore_coef 随探索退火衰减）
     passivity_ticks: int = 20      # 2 秒没放泡开始算被动（60→20：旧值 6 秒太松，
                                    # 约束不住"满预算一股脑全丢"；收紧后"没在放炮"
                                    # 有成本 → 学选择性放炮/留炮节奏）
-    passivity_penalty: float = 0.04   # 0.02→0.04：被动罚加倍，留炮的代价更明显
+    passivity_penalty: float = 0.0    # 久不放炮罚（重头训删除：0 = 关）
 
     # --- 观测存储 ---
     obs_extra_enabled: bool = True

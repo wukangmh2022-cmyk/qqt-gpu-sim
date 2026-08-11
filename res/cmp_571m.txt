@@ -1,0 +1,50 @@
+===== ckpt/course_bc_571m.pt ckpt/course_bc_317m.pt =====
+[ckpt/course_bc_571m.pt] arch=mlp obs=(14, 13, 13)
+[ckpt/course_bc_317m.pt] arch=mlp obs=(14, 13, 13)
+地图 corridor50% · 超时=平局(击杀口径) · 每侧 256 局
+  A在P0: A胜 73.4% / 平 1.6% / A败 25.0%  (132s)
+  B@P0: A胜 71.4844% / 平 2.3% / A败 26.1719%  (112s)
+
+===== ckpt/course_bc_571m.pt ckpt/course_501m.pt =====
+[ckpt/course_bc_571m.pt] arch=mlp obs=(14, 13, 13)
+[ckpt/course_501m.pt] arch=mlp obs=(14, 13, 13)
+地图 corridor50% · 超时=平局(击杀口径) · 每侧 256 局
+  A在P0: A胜 31.2% / 平 5.5% / A败 63.3%  (114s)
+  B@P0: A胜 32.8125% / 平 4.3% / A败 62.8906%  (110s)
+
+===== ckpt/course_bc_571m.pt ckpt/course_597m.pt =====
+[ckpt/course_bc_571m.pt] arch=mlp obs=(14, 13, 13)
+[ckpt/course_597m.pt] arch=mlp obs=(14, 13, 13)
+地图 corridor50% · 超时=平局(击杀口径) · 每侧 256 局
+  A在P0: A胜 16.0% / 平 9.0% / A败 75.0%  (118s)
+  B@P0: A胜 12.8906% / 平 6.2% / A败 80.8594%  (125s)
+
+===== ckpt/course_bc_571m.pt ckpt/duel_course_453M.pt =====
+[ckpt/course_bc_571m.pt] arch=mlp obs=(14, 13, 13)
+[ckpt/duel_course_453M.pt] arch=mlp obs=(14, 13, 13)
+地图 corridor50% · 超时=平局(击杀口径) · 每侧 256 局
+  A在P0: A胜 47.7% / 平 4.7% / A败 47.7%  (133s)
+  B@P0: A胜 47.6562% / 平 3.5% / A败 48.8281%  (141s)
+
+===== ckpt/course_bc_571m.pt ckpt/duel_cnn.pt =====
+[ckpt/course_bc_571m.pt] arch=mlp obs=(14, 13, 13)
+[ckpt/duel_cnn.pt] arch=cnn obs=(14, 13, 13)
+地图 corridor50% · 超时=平局(击杀口径) · 每侧 256 局
+  A在P0: A胜 38.7% / 平 10.9% / A败 50.4%  (169s)
+  B@P0: A胜 41.7969% / 平 9.0% / A败 49.2188%  (173s)
+
+===== ckpt/course_bc_571m.pt ckpt/duel_rw8.pt =====
+[ckpt/course_bc_571m.pt] arch=mlp obs=(14, 13, 13)
+[ckpt/duel_rw8.pt] arch=mlp obs=(14, 13, 13)
+地图 corridor50% · 超时=平局(击杀口径) · 每侧 256 局
+  A在P0: A胜 60.5% / 平 4.3% / A败 35.2%  (136s)
+  B@P0: A胜 62.5000% / 平 4.7% / A败 32.8125%  (119s)
+
+===== ckpt/course_bc_571m.pt ckpt/duel_5x2.pt =====
+[ckpt/course_bc_571m.pt] arch=mlp obs=(14, 13, 13)
+[ckpt/duel_5x2.pt] arch=mlp obs=(14, 13, 13)
+地图 corridor50% · 超时=平局(击杀口径) · 每侧 256 局
+  A在P0: A胜 59.4% / 平 17.2% / A败 23.4%  (117s)
+  B@P0: A胜 69.9219% / 平 15.6% / A败 14.4531%  (116s)
+
+ALL_DONE

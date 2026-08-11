@@ -282,17 +282,194 @@ def test_astar_fallback_when_no_path():
         "兜底 move 必须合法"
 
 
+def test_astar_escapes_when_opponent_trapped():
+    """对手被泡阵封住（逃生方向 V_opp=inf）时仍能逃生，不站停。
+
+    回归（真 bug）：esc 打分旧版 = Vsafe×100 + Vopp —— 对手被泡封住时
+    V_opp 只在封锁区内有限，逃生方向的 Vopp=inf 把 esc 打成全 inf →
+    argmin 走 fallback → 站火海等爆（实测 400tick 冻结 272 次）。
+    修复：逃生打分只按 Vsafe（安全距离），不掺 Vopp。
+    """
+    cfg = SimConfig(height=9, width=9, n_players=2, max_steps=40)
+    sim = BatchedSim(cfg, 32, seed=14)
+    bot = make_bot(sim, "astar", mode=False)
+    b_idx = torch.arange(32)
+    # bot(pid=1) 在 (3,3)，脚下 fuse=1 泡马上爆；出路 = 下方 (4,3) 空
+    sim.pos[:, 1, 0] = 3.5
+    sim.pos[:, 1, 1] = 3.5
+    sim.pos[:, 0, 0] = 0.5
+    sim.pos[:, 0, 1] = 0.5
+    sim.fuse[b_idx, 3, 3] = 1
+    sim.owner[b_idx, 3, 3] = 1
+    # 对手(pid=0) 在 (3,7)，被自己的泡阵封死 → V_opp 在逃生方向全 inf
+    sim.pos[:, 0, 0] = 3.5
+    sim.pos[:, 0, 1] = 7.5
+    for r, c in ((2, 7), (4, 7), (3, 6), (3, 8)):
+        sim.fuse[b_idx, r, c] = 30
+        sim.owner[b_idx, r, c] = 0
+    obs = sim.observe()
+    mm, bm = sim.legal_mask()
+    a = bot.act(obs, mm[:, 1], bm[:, 1], 1)
+    assert bool((a[:, 0] != MOVE_IDLE).any()), \
+        "对手被封、脚下快爆：必须逃生不站停（esc 不应被 Vopp=inf 污染）"
+    # 逃出的那步应显著降低脚下 danger
+    from sim.blast import danger_map
+    dng = danger_map(sim.fuse, sim.wall, cfg.blast, cfg.fuse)
+    r1 = sim.pos[:, 1, 0].floor().long().clamp(0, cfg.height - 1)
+    c1 = sim.pos[:, 1, 1].floor().long().clamp(0, cfg.width - 1)
+    d0 = dng.flatten(1).gather(1, (r1 * cfg.width + c1).unsqueeze(1)).squeeze(1)
+    sim.step(_full_actions(sim, a), auto_reset=False)
+    sim.fuse -= 1
+    dng2 = danger_map(sim.fuse.clamp(min=0), sim.wall, cfg.blast, cfg.fuse)
+    r2 = sim.pos[:, 1, 0].floor().long().clamp(0, cfg.height - 1)
+    c2 = sim.pos[:, 1, 1].floor().long().clamp(0, cfg.width - 1)
+    d1 = dng2.flatten(1).gather(1, (r2 * cfg.width + c2).unsqueeze(1)).squeeze(1)
+    assert bool((d1 < d0).sum() >= 0.6 * d0.numel()), \
+        f"逃生应显著降低脚下 danger：{d0.mean():.2f} → {d1.mean():.2f}"
+
+
+def test_astar_fallback_prefers_move_over_idle():
+    """打分全 inf 兜底时，优先选**非停**方向（有方向能降/持平危险就走）。
+
+    回归：旧版兜底 = 最小 danger 合法格，原地停（IDLE）常是"最小危险" →
+    站火海等爆。修复：先看四个方向（非停），有合法就走；全方向更危险才停。
+    """
+    cfg = SimConfig(height=9, width=9, n_players=2, max_steps=40)
+    sim = BatchedSim(cfg, 32, seed=15)
+    bot = make_bot(sim, "astar", mode=False)
+    b_idx = torch.arange(32)
+    # bot 在 (4,4)，上/下/左三面 fuse=1 泡（马上爆，blast 覆盖到 (4,4)），
+    # 右面 (4,5)(4,6) 完全空 → 危险 0（唯一逃生方向）
+    sim.pos[:, 1, 0] = 4.5
+    sim.pos[:, 1, 1] = 4.5
+    sim.pos[:, 0, 0] = 0.5
+    sim.pos[:, 0, 1] = 0.5
+    for r, c in ((3, 4), (5, 4), (4, 3)):
+        sim.fuse[b_idx, r, c] = 1
+        sim.owner[b_idx, r, c] = 1
+    obs = sim.observe()
+    mm, bm = sim.legal_mask()
+    a = bot.act(obs, mm[:, 1], bm[:, 1], 1)
+    # 右面 (4,5) 是唯一非停安全出口 → 应向右（动作 3），不站停
+    assert bool((a[:, 0] == 3).all()), \
+        f"三面快爆、右面空：应向右逃而非停，实际动作分布 {a[:, 0].unique().tolist()}"
+
+
+def test_astar_flee_drops_hindrance_bombs():
+    """flee 模式：对手贴脸（十字射程内）且自己安全时撒雷阻追兵，不放进攻泡浪费。
+
+    升级行为：旧版 flee 完全不放泡 → 逃跑无阻挠，容易被追上。新版保留
+    "身后撒雷"（aligned/near 即可，不需要 chain），但安全门槛保证不自杀。
+    """
+    cfg = SimConfig(height=11, width=11, n_players=2, max_steps=30)
+    sim = BatchedSim(cfg, 16, seed=16)
+    bot = make_bot(sim, "astar", mode=True)
+    # 手动钉死 flee 模式（1）+ 不倒计时
+    sim._bmode = torch.ones(16, dtype=torch.long, device=sim.device)
+    sim._btimer = torch.full((16,), 9999, dtype=torch.long, device=sim.device)
+    # bot(pid=1) 在 (5,5)，对手同行 (5,7) 在 blast 内 → 撒雷
+    sim.pos[:, 1, 0] = 5.5
+    sim.pos[:, 1, 1] = 5.5
+    sim.pos[:, 0, 0] = 5.5
+    sim.pos[:, 0, 1] = 7.5
+    obs = sim.observe()
+    mm, bm = sim.legal_mask()
+    a = bot.act(obs, mm[:, 1], bm[:, 1], 1)
+    assert bool((a[:, 1] == 1).all()), "flee 贴脸应撒雷阻追兵"
+    # 对手远离（超出射程）→ 不撒雷
+    sim.pos[:, 0, 1] = 1.5
+    obs = sim.observe()
+    mm, bm = sim.legal_mask()
+    a2 = bot.act(obs, mm[:, 1], bm[:, 1], 1)
+    assert bool((a2[:, 1] == 0).all()), "flee 对手远不应浪费放炮"
+    # flee 移动应远离对手（选 vs 对手最远的方向）
+    r_me = sim.pos[:, 1, 0].floor().long()
+    c_me = sim.pos[:, 1, 1].floor().long()
+    r_opp = sim.pos[:, 0, 0].floor().long()
+    c_opp = sim.pos[:, 0, 1].floor().long()
+    dist_before = (r_me - r_opp).abs() + (c_me - c_opp).abs()
+    sim.step(_full_actions(sim, a2), auto_reset=False)
+    r_me2 = sim.pos[:, 1, 0].floor().long()
+    c_me2 = sim.pos[:, 1, 1].floor().long()
+    dist_after = (r_me2 - r_opp).abs() + (c_me2 - c_opp).abs()
+    assert bool((dist_after >= dist_before).sum() >= 0.5 * 16), \
+        "flee 应远离对手（曼哈顿不降）"
+
+
+def test_astar_never_idles_in_danger():
+    """脚下危险（马上爆）时 astar **绝不选停**（停 = 留在必受伤格）。
+
+    回归（深层 bug，3 seed 各 400tick 实测）：危险中停的 Vsafe 常最小（已在
+    安全格附近），旧版 esc=Vsafe×100 主导 → 停方向分数最小 → 连续 24 tick
+    站火海（脚下危险 0.49→0.59 不逃）。修复点 4：use_esc（危险）时把停方向
+    esc 打成 inf 禁停，argmin 必选非停方向；真被围死时 fallback 兜底允许停。
+    断言：任何"脚下危险≥0.35 且存在更安全非停方向"的 tick，动作必非停。
+    """
+    cfg = SimConfig(height=9, width=9, n_players=2, max_steps=40)
+    sim = BatchedSim(cfg, 32, seed=15)
+    bot = make_bot(sim, "astar", mode=False)
+    b_idx = torch.arange(32)
+    # bot(pid=1) 在 (4,4)，上/下/左三面 fuse=1 泡，右面空（唯一出口）
+    sim.pos[:, 1, 0] = 4.5
+    sim.pos[:, 1, 1] = 4.5
+    sim.pos[:, 0, 0] = 0.5
+    sim.pos[:, 0, 1] = 0.5
+    for r, c in ((3, 4), (5, 4), (4, 3)):
+        sim.fuse[b_idx, r, c] = 1
+        sim.owner[b_idx, r, c] = 1
+    obs = sim.observe()
+    mm, bm = sim.legal_mask()
+    a = bot.act(obs, mm[:, 1], bm[:, 1], 1)
+    # 三面快爆、右面空 → 停方向禁停 → 必须向右（动作 3）
+    assert bool((a[:, 0] == 3).all()), \
+        f"脚下危险、右面安全：必须向右逃，实际动作分布 {a[:, 0].unique().tolist()}"
+    # 随机压力测试：多 seed 多局，危险中绝不停
+    for seed in (20, 21, 22):
+        cfg2 = SimConfig(height=11, width=11, n_players=2, max_steps=60)
+        sim2 = BatchedSim(cfg2, 16, seed=seed)
+        bot2 = make_bot(sim2, "astar", mode=False)
+        opp = make_bot(sim2, "greedy")
+        mm2, bm2 = sim2.legal_mask()
+        viol = 0
+        for _ in range(60):
+            obs2 = sim2.observe()
+            mm2, bm2 = sim2.legal_mask()
+            a2 = bot2.act(obs2, mm2[:, 1], bm2[:, 1], 1)
+            dng2 = obs2[:, 5].float()
+            r2 = sim2.pos[:, 1, 0].floor().long().clamp(0, 10)
+            c2 = sim2.pos[:, 1, 1].floor().long().clamp(0, 10)
+            foot2 = dng2.flatten(1).gather(1, (r2 * 11 + c2).unsqueeze(1)).squeeze(1)
+            dr2 = torch.stack([r2 - 1, r2 + 1, r2, r2, r2], dim=1).clamp(0, 10)
+            dc2 = torch.stack([c2, c2, c2 - 1, c2 + 1, c2], dim=1).clamp(0, 10)
+            cand2 = dng2.flatten(1).gather(1, (dr2 * 11 + dc2).flatten(1)).view(16, 5)
+            for e in range(16):
+                if bool(foot2[e] >= 0.35) and bool(sim2.alive[e, 1]) \
+                        and int(a2[e, 0]) == 4:
+                    other = torch.where(torch.arange(5) < 4, cand2[e],
+                                        torch.full_like(cand2[e], 9.0))
+                    other = torch.where(mm2[e, 1], other, torch.full_like(other, 9.0))
+                    if float(other.min()) < float(cand2[e, 4]) - 0.1:
+                        viol += 1
+            a_opp = opp.act(sim2.observe(), mm2[:, 0], bm2[:, 0], 0)
+            sim2.step(torch.stack([a2, a_opp], dim=1), auto_reset=True)
+        assert viol == 0, f"seed={seed}: 危险中有更安全方向却停 {viol} 次"
+
+
 def test_astar_random_mode_switches():
     """astar 的随机接近/远离模式：_bmode 存在、可切换（课程多样性）。
 
     随机倒计时（60~240 tick）受全局 RNG 序列影响，连跑可能不切换 ——
     测试手动把 _btimer 压到 0，强制下 tick 切换，确定性验证模式逻辑。
+    注意：_mode_ticker 每 16 tick 才查一次 timer（降频省 GPU→CPU 同步），
+    30 tick 内只查 1-2 次、new[0] 随机 0/1 → 50% 概率 seen 只有 {0}（flaky）。
+    循环拉长到 200 tick（16 倍 tick 触发 12 次）+ 固定 seed，非 flaky。
     """
+    torch.manual_seed(0)
     cfg = SimConfig(height=9, width=9, n_players=2, max_steps=60)
     sim = BatchedSim(cfg, 16, seed=13)
     bot = make_bot(sim, "astar")          # mode=True：挂随机模式
     seen = set()
-    for _ in range(30):
+    for _ in range(200):
         sim._btimer = torch.ones(16, dtype=torch.long, device=sim.device)
         obs = sim.observe()
         mm, bm = sim.legal_mask()
@@ -306,6 +483,91 @@ def test_astar_random_mode_switches():
     assert 0 in seen and 1 in seen, f"随机模式应切换 aggressive/flee，实际 {seen}"
     # 固定模式（mode=False）不挂 mode_fn
     assert make_bot(sim, "astar", mode=False).mode_fn is None
+
+
+def test_hunter_eats_crates_when_underequipped():
+    """hunter 吃道具层：成长属性 ≥2 项不满 70% 且场上有宝箱 → 高优先级寻路吃箱。
+
+    优先级：逃生 > 吃箱 > 逼近（吃箱只在脚下安全、逼近无路时生效前）。
+    corridor 特别受益：成长全靠踩箱，属性低时先补属性再打。
+    """
+    cfg = SimConfig(height=13, width=13, blast=3, max_bombs=10, fuse=60,
+                    map_mode="corridor", speed=3.0, tick_hz=10)
+    sim = BatchedSim(cfg, 1, seed=0)
+    sim.wall.zero_()
+    sim.brick.zero_()
+    sim.fuse.zero_()
+    sim.owner.fill_(-1)
+    hunter = make_bot(sim, "hunter")
+    mm, bm = sim.legal_mask()
+
+    def setup(bombs, blast_, speed, crate_at, pos=(6.5, 4.5)):
+        sim.pos[0, 0] = torch.tensor(pos)
+        sim.pos[0, 1] = torch.tensor([6.5, 10.5])     # 对手在右
+        sim.bombs_cap[0, 0] = bombs
+        sim.blast_cap[0, 0] = blast_
+        sim.spd_g[0, 0] = speed
+        sim.crate.zero_()
+        if crate_at:
+            sim.crate[0, crate_at[0], crate_at[1]] = True
+
+    # 3 项都 <70%（3/10, 2/7, 1/2.1）+ 箱在左上方 → 应朝箱（上/左），不冲对手（右）
+    setup(3, 2, 1.0, (4, 4))
+    obs = sim.observe()
+    mm, bm = sim.legal_mask()
+    a = hunter.act(obs, mm[:, 0], bm[:, 0], 0)
+    assert int(a[0, 0]) in (0, 2), \
+        f"属性低+有箱应朝箱（上/左），实际 {['上','下','左','右','停'][int(a[0,0])]}"
+    # 满属性 + 箱 → 逼近对手（右）
+    setup(10, 7, 2.1, (4, 4))
+    obs = sim.observe()
+    mm, bm = sim.legal_mask()
+    a = hunter.act(obs, mm[:, 0], bm[:, 0], 0)
+    assert int(a[0, 0]) == 3, "满属性不应吃箱，应逼近对手"
+    # 低属性 + 无箱 → 逼近
+    setup(3, 2, 1.0, None)
+    obs = sim.observe()
+    mm, bm = sim.legal_mask()
+    a = hunter.act(obs, mm[:, 0], bm[:, 0], 0)
+    assert int(a[0, 0]) == 3, "无箱时低属性也应逼近（没有可吃的东西）"
+    # corridor 真图（保留 brick）：低属性 + 空旷区箱 → 朝箱
+    sim2 = BatchedSim(SimConfig(height=13, width=13, blast=3, max_bombs=10,
+                                fuse=60, map_mode="corridor", speed=3.0,
+                                tick_hz=10), 1, seed=1)
+    hunter2 = make_bot(sim2, "hunter")
+    sim2.bombs_cap[0, 0] = 3
+    sim2.blast_cap[0, 0] = 2
+    sim2.spd_g[0, 0] = 1.0
+    sim2.crate.zero_()
+    sim2.crate[0, 8, 6] = True
+    sim2.pos[0, 0] = torch.tensor([8.5, 5.5])
+    sim2.pos[0, 1] = torch.tensor([8.5, 9.5])
+    mm2, bm2 = sim2.legal_mask()
+    a2 = hunter2.act(sim2.observe(), mm2[:, 0], bm2[:, 0], 0)
+    assert int(a2[0, 0]) == 3, "corridor 真图低属性应朝右吃箱"
+
+
+def test_hunter_eat_branch_large_batch_no_crash():
+    """防回归（2026-08-10 训练崩溃）：hunter 吃箱子层的禁停判定在 **大 batch**
+    下不崩。原代码 `eat_no_idle (N,) < eat[:, 4:5] (N,1)` 广播成 (N,N) →
+    expand_as(eat) 报 expanded 5632≠5；n=1 时广播恰好合法（1 可扩展）所以
+    小 batch 测试漏网，训练 5632 env 才炸。用 n≥64 强制触发原 bug 路径。
+    """
+    cfg = SimConfig(height=13, width=13, blast=3, max_bombs=10, fuse=60,
+                    map_mode="corridor", speed=3.0, tick_hz=10)
+    sim = BatchedSim(cfg, 64, seed=0)
+    hunter = make_bot(sim, "hunter")
+    # 全部 env 低属性 + 有箱 → 全走 eat 分支（禁停判定必须跑）
+    sim.bombs_cap[:] = 3
+    sim.blast_cap[:] = 2
+    sim.spd_g[:] = 1.0
+    sim.crate.zero_()
+    sim.crate[:, 4, 4] = True
+    obs = sim.observe()
+    mm, bm = sim.legal_mask()
+    a = hunter.act(obs, mm[:, 0], bm[:, 0], 0)     # 不应崩
+    assert a.shape == (64, 2)
+    assert torch.isfinite(a.float()).all()
 
 
 def test_runner_dispatches_bot_opponent():

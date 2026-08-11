@@ -21,6 +21,15 @@ from .blast import danger_map, rays, resolve_explosions
 from .config import DIRS, SimConfig
 from .mapgen import make_bricks, make_ring_bricks, make_ring_walls, make_walls
 from .move import center_cell, move_players
+
+# triton 手写融合 kernel（DCU 100k 目标）：move_players 90× 加速，逐位一致。
+# 无 triton 的环境（本地 MPS/CPU 测试）自动 fallback 到 torch 版 —— 行为不变。
+try:
+    from scripts.triton_kernels import move_players_triton as _move_triton
+    _HAS_TRITON = True
+except ImportError:                      # 本地无 triton / scripts 不在路径
+    _move_triton = None
+    _HAS_TRITON = False
 from .obs import encode_obs, legal_mask
 
 
@@ -61,6 +70,17 @@ class BatchedSim:
         self.invuln = torch.zeros((n, p), dtype=torch.long, device=d)
         # 炸弹雨模式开关（每局独立掷，见 reset_）：True = 本局是炸弹雨关
         self._hazard = torch.zeros((n,), dtype=torch.bool, device=d)
+        # 危险图缓存：step 里为 danger 惩罚算过一次，observe 组装观测时若状态
+        # 没变直接复用（同一 fuse 状态算两遍 danger_map 是 profile 热点，
+        # 训练端每 tick 也是 step→observe 同序，DCU 一起受益）。
+        # 签名用张量 _version（in-place 修改计数）：fuse 每 tick 递减/爆炸清场、
+        # brick 爆炸摧毁、bomb_blast 吃成长道具都会变 → 自动失效重算。
+        self._dng_cache: torch.Tensor | None = None
+        self._dng_sig: tuple | None = None
+        # CUDA graph 捕获模式：True 时 resolve/danger 强制固定轮（graph 回放
+        # 要求固定 kernel 序列，早退的 host break 会把轮数钉死在捕获值）。
+        # 普通训练（collect）不用 graph → 保持 False，连锁/危险图全设备早退。
+        self._graph_mode = False
         # open 关标记（混合地图）：True = 本局是纯空场 open 关（时间成长 + 掉血惩罚
         # 只对 open 关生效；corridor/ring 走踩箱成长，不受影响）
         self._is_open = torch.zeros((n,), dtype=torch.bool, device=d)
@@ -70,6 +90,10 @@ class BatchedSim:
         # （recycle_crate_prob=1.0，不掷全局爆率）—— 掉多少层补多少箱、
         # 踩了必还原，总量守恒可核算（用户定：受伤爆出来的才是 100%）。
         self._recycle_crate = torch.zeros((n, h, w), dtype=torch.bool, device=d)
+        # 掉血回收待处理（延迟 flush，2026-08-10）：step 内只累积（零同步），
+        # collect 末尾/调用方 flush_recycle() 统一回收 —— 每 tick 的 2 次
+        # bool(lost.sum()>0) 同步会打断 GPU 流水线（富泡实测 ~236ms/tick）。
+        self._pending_lost = torch.zeros((n, p), dtype=torch.long, device=d)
         # combo 连击状态（combo_reward>0 时用）：不掉血连续造成伤害 = 连击，
         # 连击数越高分越多、间隔越短分越多；掉血（被打）打断连击。
         self._combo = torch.zeros((n, p), dtype=torch.long, device=d)
@@ -302,6 +326,7 @@ class BatchedSim:
 
         self.crate[idx] = False
         self._recycle_crate[idx] = False          # 回收标记随局清（防跨局残留）
+        self._pending_lost[idx] = 0               # 掉血回收待处理随局清
         self._combo[idx] = 0                      # 连击随局清零
         self._last_hit[idx] = -10**9
         # 开局**中心十字宝箱**（open 关开局属性池）：横竖各 2 排 ≈46 格、
@@ -494,6 +519,24 @@ class BatchedSim:
             # 标记回收箱：踩到必升（recycle_crate_prob=1.0，不掷全局爆率）
             self._recycle_crate[e, pick // cfg.width, pick % cfg.width] = True
 
+    def flush_recycle(self) -> None:
+        """掉血回收统一结算（延迟 flush，配合 _pending_lost 累积）。
+
+        在 collect 的 tick 末尾调用（tally 的 bool(done.any()) 同步之后、GPU
+        队列已空）：这里的 bool(lost.sum()>0) 同步只等空队列，几乎免费。
+        每 tick 在 step 里同步回收则打断 GPU 流水线（富泡 ~236ms/tick）。
+        """
+        cfg = self.cfg
+        tot = self._pending_lost
+        if not bool(tot.sum() > 0):               # 掉血才回收（低频）
+            return
+        for pl in range(cfg.n_players):
+            lost_p = tot[:, pl]
+            if bool(lost_p.sum() > 0):
+                hidx = lost_p.nonzero(as_tuple=True)[0]
+                self._scatter_recycle(hidx, lost_p[hidx])
+        tot.zero_()
+
     def _ring_spawns(self) -> torch.Tensor:
         """环岛关出生点：场地**四角**（山体在中间，玩家围着它绕圈）。"""
         return torch.tensor(
@@ -502,11 +545,23 @@ class BatchedSim:
     # ---------------- 对外接口 ----------------
 
     def observe(self) -> torch.Tensor:
+        dng = None
+        if self._dng_cache is not None and self._dng_sig == self._dng_signature():
+            dng = self._dng_cache          # step 刚算过、状态没变 → 复用
         return encode_obs(
             self.cfg, self.wall, self.fuse, self.owner, self.pos, self.alive,
             self.t, self.brick, self.bomb_blast,
             crate=self.crate, invuln=self.invuln, bombs_p=self.bombs_cap,
+            danger_precomputed=dng,
+            early_exit=not self._graph_mode,
         )
+
+    def _dng_signature(self):
+        """danger_map 输入的状态签名（fuse/brick/bomb_blast 的 in-place 版本号）。
+        wall 战斗中不变（reset 会连带 fuse 清零 → fuse 版本必变，天然失效）。"""
+        return (self.fuse._version,
+                self.brick._version,
+                self.bomb_blast._version)
 
     def legal_mask(self) -> tuple[torch.Tensor, torch.Tensor]:
         """返回 (move_mask (N,P,5), bomb_mask (N,P,2))。"""
@@ -532,6 +587,9 @@ class BatchedSim:
         self._reward_buf, self._done_buf, self._winner_buf = \
             reward_buf, done_buf, winner_buf
         self._actions = actions
+        # graph 捕获段内 resolve/danger 必须固定轮（回放要求固定 kernel 序列，
+        # 早退的 host break 会把轮数钉死在捕获值）→ 临时切到固定轮模式。
+        self._graph_mode = True
         # 随机源 buffer：capture 外填新值，capture 内只读（HIP stream-capture 不允许
         # 设备 RNG）。每玩家开箱 1 个 + 属性 1 个 = n×(2P+1) 够用。
         self._rand_buf = torch.empty(
@@ -647,7 +705,6 @@ class BatchedSim:
         p = cfg.n_players                       # chase 块用（fleeing 张量）
         alive0 = self.alive.clone()
         hp_before = self.hp.clone()
-        pos_before = self.pos.clone()       # 接近奖励：本 tick 移动前的位置
         move, bomb = actions[..., 0], actions[..., 1]
         d = self.pos.device
         # 成长能力（corridor）：每个玩家独立随机成长状态（bombs_cap/blast_cap/spd_g）；
@@ -666,7 +723,14 @@ class BatchedSim:
         # corridor 满成长 blast=7 时 rays 每 tick 196 kernel，放泡只占 ~10% tick，
         # 其余 90% 白跑会让训练/评估显著变慢；且 _place_predict_reward 内部已对
         # 无奖励参数 early return）。CUDA graph 安全：无设备 RNG。
-        if bool(placed.any()):
+        if self._graph_mode or bool(placed.any()):
+            # graph 模式：placed.any() 是 host 分支，capture 时会被**冻结**
+            # （捕获时无放泡 → 回放永不跑 place_predict → 放泡奖励丢失）。
+            # **必须 _graph_mode 在 or 左侧**：True 短路 → 不 eval
+            # bool(placed.any())（capture 内 host 同步非法，HIP
+            # hipErrorStreamCaptureUnsupported，2026-08-10 实测）。
+            # 无条件跑（无放泡时 place_predict 返回全 0，结果一致，代价是
+            # graph 内多 ~196 kernel 空转 —— replay 无 launch 开销可接受）。
             place_bonus = self._place_predict_reward(placed, alive0)
         else:
             place_bonus = torch.zeros(n, cfg.n_players, device=d)
@@ -678,12 +742,21 @@ class BatchedSim:
         sm = spd_p
         if getattr(self, "speed_mult", None) is not None:
             sm = sm * self.speed_mult        # (n,p) × (1,p)：玩家侧倍率（对打用）
-        self.pos.copy_(move_players(cfg, self.pos, move, alive0, blocked, sm))
+        if _HAS_TRITON:
+            # triton 融合 kernel（逐位一致 + 90×）：launch 从 ~40 kernel → 1。
+            self.pos.copy_(_move_triton(cfg, self.pos, move, alive0, blocked, sm))
+        else:
+            self.pos.copy_(move_players(cfg, self.pos, move, alive0, blocked, sm))
         # 4. 爆炸与连锁：每颗泡用自己存的威力；brick 挡火但被覆盖即摧毁。
         #    **宝箱模式**：炸掉的砖变宝箱（crate），谁走到谁开 —— 不需要归属图。
+        # graph 模式（_graph_mode）：early_exit 关（固定轮）+ blast 档位静态
+        # 上限（rays 的 max() 是 capture 内非法的 host 同步；空档 pad 被
+        # graph 的固定序列吸收，无 launch 开销）。
         covered, triggered = resolve_explosions(
             self.fuse, self.owner, self.wall, self._blast_map(),
             cfg.max_chain, self.brick,
+            early_exit=not self._graph_mode,
+            blast_max_hint=cfg.growth_blast_max if self._graph_mode else None,
         )
         # 爆炸时刻的连锁兑现（chain_blast_bonus）：被**连锁提前点燃**的泡每颗
         # 给**点火源**（引信自然走完的那颗泡的主人）+0.08，奖励"先放 → 别处续
@@ -766,101 +839,40 @@ class BatchedSim:
         # 通行格回收**（corridor/ring crate_prob<1 需踩中才升回；open=1.0 必升）
         # —— **每扣 1 层回收 1 箱**，属性总量守恒：炸人 = 抢属性资源，躲泡少掉血
         # = 保属性 + 不让对方捡走，逼真格斗。
-        if cfg.hit_attr_penalty > 0:
-            for pl in range(cfg.n_players):
-                # 全模式生效：不再限定 _is_open（corridor/ring 掉血同样扣属性）。
-                # _map_kind/_lo_* 已由 reset_ 按地图分支填好各自 clamp 起点。
-                hit_pl = (dmg[:, pl] > 0) & alive0[:, pl]
-                if not bool(hit_pl.any()):
-                    continue
-                hidx = hit_pl.nonzero(as_tuple=True)[0]
-                pen = cfg.hit_attr_penalty
-                nb = torch.clamp(self.bombs_cap[hidx, pl] - pen,
-                                 min=self._lo_bombs[hidx, pl])
-                nz = torch.clamp(self.blast_cap[hidx, pl] - pen,
-                                 min=self._lo_blast[hidx, pl])
-                ns = torch.max(
-                    self.spd_g[hidx, pl] - pen * cfg.growth_speed_step,
-                    self._lo_spd[hidx, pl])
-                # 实际被扣的层数（clamp 到模式起点：起点以下无层可扣）。
-                # 每 env 在起点时扣 0 → 不掉层也不生箱（严格守恒，不凭空增池）。
-                lost = ((self.bombs_cap[hidx, pl] - nb)
-                        + (self.blast_cap[hidx, pl] - nz)
-                        + torch.round((self.spd_g[hidx, pl] - ns)
+        # 2026-08-10 曾全量化（graph 兼容）后又回滚：掉血低频，nonzero 很少跑，
+        # 收益有限且引入"defer 回收"行为差异；CUDA graph 线实测不划算（固定轮
+        # 空转 kernel 代价 > launch 收益），保留原版最简单。
+        if cfg.hit_attr_penalty > 0 and not self._graph_mode:
+            # **全量化（2026-08-10）**：原版 for pl 里每玩家一次 bool(hit_pl.any())
+            # 同步（DCU 上 GPU→CPU 同步每 tick 是 collect 大头，2 次同步贡献
+            # ~200ms/tick 富泡）。改成整张 (n,p) 掩码一次算：where 只对掉血者
+            # 生效（in-place 保持引用），掉血者之外的 clamp 差被 lost_eff 掩掉。
+            # 回收（低频）保留 1 次 bool 早退。结果与 nonzero 版逐位一致
+            # （verify_place_batch 同批验证：maxdiff 0）。
+            hit_any = (dmg > 0) & alive0              # (n,p) 无同步
+            pen = cfg.hit_attr_penalty
+            nb = torch.clamp(self.bombs_cap - pen, min=self._lo_bombs)
+            nz = torch.clamp(self.blast_cap - pen, min=self._lo_blast)
+            ns = torch.max(self.spd_g - pen * cfg.growth_speed_step,
+                           self._lo_spd)
+            # 实际被扣的层数（clamp 到模式起点：起点以下无层可扣）。
+            # 每 env 在起点时扣 0 → 不掉层也不生箱（严格守恒，不凭空增池）。
+            lost_all = ((self.bombs_cap - nb) + (self.blast_cap - nz)
+                        + torch.round((self.spd_g - ns)
                                       / cfg.growth_speed_step)).long()
-                self.bombs_cap[hidx, pl] = nb
-                self.blast_cap[hidx, pl] = nz
-                self.spd_g[hidx, pl] = ns
-                if bool(lost.sum() > 0):
-                    self._scatter_recycle(hidx, lost)
+            torch.where(hit_any, nb, self.bombs_cap, out=self.bombs_cap)
+            torch.where(hit_any, nz, self.blast_cap, out=self.blast_cap)
+            torch.where(hit_any, ns, self.spd_g, out=self.spd_g)
+            lost_eff = lost_all * hit_any.long()      # 非掉血者恒 0
+            # 回收延迟（零同步）：掉血的层数累积进 _pending_lost，由调用方在
+            # collect 的 tick 末尾（tally 同步之后、GPU 队列已空）flush_recycle()
+            # 统一回收 —— 每 tick 的 bool(lost.sum()>0) 同步会打断 GPU 流水线
+            # （富泡实测 ~236ms/tick，禁用回收 bool 后 288→48ms）。
+            self._pending_lost.add_(lost_eff)
         # 爆炸时刻连锁兑现（探索塑形，乘退火系数）：被连锁提前点燃的泡每颗
         reward = reward + self._explore_coef * chain_bonus_p * alive0.float()
-        # 接近奖励（approach）：朝最近对手移动（距离在 approach_dist 内且**正在
-        # 缩短**）→ +approach_reward × 缩短量。只有"正在接近"才得分：原地贴脸/
-        # 兜圈子不刷分。治"隔着半场对射不逼近"。向量化、零 host 同步。
-        # 接近奖励（approach）：**两个互补项，专治"隔着半场对射不逼近"和
-        # "追不上逃跑的对手"**：
-        #   a) **接近**（对手不动/靠近你时）：朝对手移动、距离在缩短 → 每缩短
-        #      1 格 +approach_reward。只有"正在接近"才得分（原地贴脸/兜圈不刷）。
-        #   b) **主动追击**（对手逃跑时）：距离不变/拉大也要有收益 —— 按
-        #      方向余弦：位移向量朝"对手方向"的分量 ≥0 → 每朝对手推进 1 格给
-        #      chase_reward（即使距离没缩短，因为对手也在跑）。**只在对手逃跑时
-        #      给**（对手位移朝"离开我"方向）：flee 的 astar 跑到哪追到哪
-        #      （治"击杀不了躲避形态"）；对手不逃不给（approach 管近距接近，
-        #      不会无脑冲）。chase_adj 是追击的"距离阻力"：对手越远，每格推进
-        #      分越打折（1/(1+d×chase_adj)）—— 就近追杀最赚，跨场追也有正分。
-        if cfg.approach_reward > 0 or cfg.chase_reward > 0:
-            d_before = torch.cdist(pos_before, pos_before)   # (n,p,p) 欧氏
-            d_after = torch.cdist(self.pos, self.pos)
-            close = d_before < cfg.approach_dist             # (n,p,p) 接敌区
-            shrink = (d_before - d_after).clamp(min=0)       # 接近量 ≥0
-            # 排除自己（对角 0）与死亡玩家；每玩家对"最近有效对手"取最大缩短
-            mask = close & alive0.unsqueeze(1) & alive0.unsqueeze(2)
-            gain = (shrink * mask.float()).amax(dim=2)       # (n,p) 每玩家最大接近
-            # 贴脸门控：接近后距离仍 < approach_gate 才给（治"隔半场空跑刷接近分"）
-            near_gate = (d_after < cfg.approach_gate) & alive0.unsqueeze(1) \
-                & alive0.unsqueeze(2)
-            gate_ok = near_gate.any(dim=2)                   # (n,p) 有对手在贴脸距离内
-            reward = reward + (cfg.approach_reward * gain * gate_ok.float()
-                               * alive0.float())
-            # 追击项（chase_reward>0）：**只在对手逃跑时给**（fleeing）。
-            # 之前用"贴脸门控（距离<3格）"→ 躲避形态 astar（flee 持续远离）一跑出
-            # 3 格外追击就零收益 → 模型放弃追杀 → 磨平（用户实测"击杀不了躲避
-            # 形态的 astar"）。换成**对手逃跑判定**：对手位移朝"离开我"方向
-            # （fleeing=True）→ 追击分**不限距离**照给（距离阻力 w 保留，远追分
-            # 少但为正）—— flee 的 astar 跑到哪追到哪；对手原地/靠近
-            # （fleeing=False）→ 追击分 0（approach 管近距离接近，不追不逃的
-            # 对手 = 不会无脑冲刷分）。
-            if cfg.chase_reward > 0:
-                alive_opp = alive0.unsqueeze(1) & alive0.unsqueeze(2)  # (n,p,p)
-                # 排除自己（对角）与死亡；每玩家取最近存活对手的距离
-                d_cur = d_after.clone()
-                d_cur = torch.where(alive_opp, d_cur, torch.full_like(d_cur, 1e9))
-                nearb = d_cur.argmin(dim=2)                  # (n,p) 最近对手下标
-                opp_idx = nearb.unsqueeze(2).expand(-1, -1, 2)
-                opp_pos = torch.gather(self.pos, 1, opp_idx)   # (n,p,2)
-                disp = self.pos - pos_before                  # (n,p,2) 本 tick 位移
-                to_opp = opp_pos - pos_before                 # (n,p,2) 指向对手
-                n_to = to_opp.norm(dim=2).clamp(min=1e-6)
-                cos = (disp * to_opp).sum(dim=2) / (n_to * (disp.norm(dim=2).clamp(min=1e-6)))
-                cos = cos.clamp(min=0.0)                       # 只有朝对手方向才算
-                dist_f = d_after.gather(1, nearb.unsqueeze(2)).squeeze(2)  # (n,p)
-                w = 1.0 / (1.0 + cfg.chase_adj * dist_f)       # 距离阻力
-                chase_gain = (disp.norm(dim=2) * cos * w)      # 有效追击位移（格）
-                # 对手逃跑判定：对手位移朝"离开我"方向（fleeing=True）。
-                # 用"从我指向对手"的方向点积对手位移 —— 对手在远离我即逃跑。
-                fleeing = torch.zeros(n, p, dtype=torch.bool, device=d)
-                for me in range(p):
-                    for opp in range(p):
-                        if opp == me:
-                            continue
-                        opp_disp = self.pos[:, opp] - pos_before[:, opp]
-                        to_opp_cur = self.pos[:, opp] - self.pos[:, me]
-                        fleeing[:, me] |= \
-                            ((opp_disp * to_opp_cur).sum(dim=-1) > 0) \
-                            & alive0[:, opp]
-                reward = reward + (cfg.chase_reward * chase_gain
-                                   * fleeing.float() * alive0.float())
+        # 接近/追击奖励已按用户要求移除（approach_reward=0 / chase_reward=0）：
+        # 原代码见 git 历史。真击杀死活由 hit/终局信号管，移动节奏交给策略自由学。
         # 宝箱拾取（corridor）：角色移动后站在宝箱格上 → 掷 growth_crate_prob 开箱。
         # **奖励与概率解耦**：踩到宝箱**必得** brick_reward（收集是密集正向信号）；
         # 成长（属性升级）仍由 hits 决定（stood & rb<prob）。未命中宝箱也消失。
@@ -911,20 +923,18 @@ class BatchedSim:
         # **乘 _explore_coef（探索退火）**：前期防自杀引导（站自己泡旁要疼），
         # 后期归零 —— 和放炮塑形一起退掉，只靠真实胜负信号（hit/suicide/win）。
         danger = danger_map(self.fuse, self.wall, self._blast_map(), cfg.fuse,
-                            self.brick)
+                            self.brick, cfg.max_chain,
+                            early_exit=not self._graph_mode,
+                            blast_max_hint=cfg.growth_blast_max
+                            if self._graph_mode else None)
+        self._dng_cache = danger                 # 缓存给本 tick 的 observe 复用
+        self._dng_sig = self._dng_signature()
         cell = center_cell(self.pos)
         flat = cell[..., 0] * cfg.width + cell[..., 1]
         standing = danger.view(n, -1).gather(1, flat)
         reward = reward - self._explore_coef * cfg.danger_penalty * standing \
             * alive0.float()
-        # 久不放炮罚：**有泡泡预算（还能放）**但连续 passivity_ticks tick 没放才扣；
-        # 放满了（在场泡数达到当前档位上限）不扣 —— 只有消极摆烂被罚。
-        has_budget = torch.zeros((n, cfg.n_players), dtype=torch.bool, device=d)
-        for me in range(cfg.n_players):
-            live = ((self.owner == me) & (self.fuse > 0)).flatten(1).sum(dim=1)
-            has_budget[:, me] = live < bombs_p[:, me]
-        passive = (self.since_bomb >= cfg.passivity_ticks) & alive0 & has_budget
-        reward = reward - cfg.passivity_penalty * passive.float()
+        # 久不放炮罚（passivity）已按用户要求移除（passivity_penalty=0）。
         # combo 连击奖励（combo_reward>0）：**不掉血**连续造成伤害 = 连击。
         #   连击数越高分越多（combo × combo_reward × 间隔因子），间隔越短分越多
         #   （factor = combo_gap_factor^(间隔 tick)，连击越密分越高）；
@@ -951,54 +961,51 @@ class BatchedSim:
                     hit_this[:, me], torch.zeros_like(c), self._combo[:, me])
         # 终局胜负：
         #   死亡终局（n_alive==1）→ 唯一存活着胜 / 死者输；
-        #   超时全员存活（n_alive==P）→ **血多者胜**，血平局 = 平局 0；
+        #   超时全员存活（n_alive==P）→ 血多者胜（血平 = 平局 0）；
         #   同时死光（n_alive==0）→ 平局 0。
-        # **超时全员存活（timeout_draw=True）→ 平局 0 分**：去掉"血多者胜"，
-        # 让"领先龟缩到超时"没有任何回报（旧版 1.6 分是龟缩的诱惑）。
-        # 死亡终局（n_alive==1）的 winner/loser 判定不变；info 与 PPO._tally /
-        # ELO 判据同步：超时不再计入胜/负，只计平局。
+        # **终局击杀固定值（win_hp_scaled=False，重头训默认）**：对手 hp=0
+        # （死亡终局）才给 ±win_bonus **固定值**，不看血量差 —— 残血险胜和满血
+        # 击杀同分（用户定：击杀就是击杀，固定回报；旧按血量比例引导太弱）。
+        # **超时退火（timeout_draw=True，重头训默认）**：开局超时"谁活着血更多"
+        # 有奖励（+win_bonus/max_hp × 血量差 × α），随训练击杀能力上来 α→0 →
+        # 超时奖励归零，只剩真击杀的固定回报。退火只作用于 reward；info/ELO
+        # 口径不变（超时仍计平局，PPO._tally 只看死亡终局记胜负）。
+        # timeout_draw=False = 旧行为（超时血多者胜，进 winner/loser 计胜负，不退火）。
         death_done = done & (n_alive == 1)
         winner = death_done.unsqueeze(1) & self.alive & (n_alive == 1).unsqueeze(1)
         loser = death_done.unsqueeze(1) & ~self.alive & (n_alive == 1).unsqueeze(1)
         hp = self.hp.float()                       # (N, P)
         all_alive = done & (n_alive == cfg.n_players)
-        # 终局给分掩码：死亡终局必给；超时全员存活仅在 timeout_draw=False
-        # （血多者胜模式）给分，timeout_draw=True（平局模式）→ 0 分。
-        terminal_scaled = death_done | (all_alive & ~cfg.timeout_draw)
-        if not cfg.timeout_draw:
-            # 旧行为（timeout_draw=False）：超时血多者胜
+        if cfg.timeout_draw:
+            timeout_scale = self._explore_coef      # 超时奖励 × 退火（默认开）
+        else:
+            # 旧行为：超时血多者胜进 winner/loser（计胜负），奖励不退火
             for me in range(cfg.n_players):
                 others = [o for o in range(cfg.n_players) if o != me]
                 wins = all_alive & (hp[:, me].unsqueeze(1) > hp[:, others]).all(dim=1)
                 loses = all_alive & (hp[:, me].unsqueeze(1) < hp[:, others]).any(dim=1)
                 winner[:, me] |= wins
                 loser[:, me] |= loses
-        # **终局 reward 按剩余血量比例**给（win_hp_scaled=True，默认）：
-        #   +win_bonus/max_hp × (自己剩余血 − 对手平均剩余血)，仅终局 tick
-        #   （死亡终局，或 timeout_draw=False 的超时）。
-        # 反 reward-hacking：旧版离散 ±win_bonus 只看"谁活着"，领先 1 血时
-        # AI 会练出"残血跟对手换命照样 +8"（把领先优势报销成无差别胜利）。
-        # 新版干净击杀拿满、残血险胜按比例少拿（满血差击杀 8.0，残血 1 血险胜
-        # 1.6），引导"少掉血、干净击杀"。
+            timeout_scale = 1.0
         if cfg.win_hp_scaled:
+            # 旧按血量比例（win_hp_scaled=True 可回退对比）：死亡 + 超时都按血量差，
+            # 超时乘退火。对手均值用 (总和-自己)/(p-1) —— **不能用 hp[:, others]
+            # 的 Python list 索引**（HIP stream capture 内非法，2026-08-10 实测）。
             for me in range(cfg.n_players):
-                others = [o for o in range(cfg.n_players) if o != me]
-                opp_hp = hp[:, others].mean(dim=1)
+                opp_hp = (hp.sum(dim=1) - hp[:, me]) / (p - 1)
                 diff = hp[:, me] - opp_hp
-                reward[:, me] += (cfg.win_bonus / cfg.max_hp) * diff \
-                    * terminal_scaled.float()
+                base = (cfg.win_bonus / cfg.max_hp) * diff
+                reward[:, me] += base * death_done.float() \
+                    + base * all_alive.float() * timeout_scale
         else:
-            # 旧行为（win_hp_scaled=False 可回退对比）：离散 ±win_bonus 只看胜负
+            # 重头训默认：击杀固定 ±win_bonus；超时按血量差 × 退火
             reward = reward + cfg.win_bonus * (winner.float() - loser.float())
-        # **自杀重罚**（suicide_penalty>0）：死亡 tick 自己名下有在场泡 → 额外
-        # 负奖励。实测 course8 打贴身快攻对手 98% 死因是自爆 —— 泡是几 tick 前
-        # 放的，终局 -8 的 credit 归因太弱，模型把"激进放炮"和"几秒后的死"脱钩。
-        # 死亡时刻 + 自爆判定（own_live_snap 死前快照）即时重罚，让"站自己泡上"
-        # 本身变贵。
-        if cfg.suicide_penalty > 0:
-            for me in range(cfg.n_players):
-                sui = died[:, me] & (own_live_snap[:, me] > 0)
-                reward[:, me] -= cfg.suicide_penalty * sui.float()
+            if cfg.timeout_draw:
+                for me in range(cfg.n_players):
+                    opp_hp = (hp.sum(dim=1) - hp[:, me]) / (p - 1)
+                    diff = hp[:, me] - opp_hp
+                    reward[:, me] += (cfg.win_bonus / cfg.max_hp) * diff \
+                        * all_alive.float() * timeout_scale
 
         info = {"n_alive": n_alive, "blast": covered, "trig": triggered,
                 "died": died, "winner": winner.clone()}
@@ -1057,16 +1064,25 @@ class BatchedSim:
         #  开局 since_bomb=0，第一泡不给近身分，之后的给 —— 天然限频）。
         cooldown_ok = self.since_bomb >= cfg.place_dist_cooldown
         cell_f = cell.float()                          # (n,p,2) 格心坐标
+        # **批量 rays（2026-08-10 优化）**：原版 for me 里每个玩家单独一次 rays
+        # （富泡 tick 2 次全图传播，DCU 上 launch 是大头）。改成 (p,n,h,w) 一次
+        # batch rays —— 省一半传播 kernel，结果逐位一致（batch 维独立传播）。
+        wall_b = self.wall[None].expand(p, -1, -1, -1).contiguous()
+        live_b = live[None].expand(p, -1, -1, -1).contiguous()
+        bm_b = blast_map[None].expand(p, -1, -1, -1).contiguous()
+        brk_b = self.brick[None].expand(p, -1, -1, -1).contiguous()
+        # 爆源 seed = 只在自己脚下那一个格（且真的放了泡）。之前用
+        # placed[:, me].view(n,1,1) 会把"放没放"广播到全图 → rays 从每个
+        # 格都发火 → 覆盖≈全图，cover/chain/dist 全部失去几何意义。
+        seeds = torch.stack([
+            torch.nn.functional.one_hot(flat_cell[:, me], w * self.cfg.height).bool().view(n, self.cfg.height, w)
+            & placed[:, me].view(n, 1, 1)
+            for me in range(p)], dim=0)                        # (p,n,h,w)
+        cov_all = rays(seeds, wall_b, live_b, bm_b, brk_b,
+                       blast_max_hint=self.cfg.growth_blast_max
+                       if self._graph_mode else None)         # (p,n,h,w)
         for me in range(p):
-            # 爆源 seed = 只在自己脚下那一个格（且真的放了泡）。之前用
-            # placed[:, me].view(n,1,1) 会把"放没放"广播到全图 → rays 从每个
-            # 格都发火 → 覆盖≈全图，cover/chain/dist 全部失去几何意义。
-            seed = torch.zeros(n, self.cfg.height * w, dtype=torch.bool,
-                               device=self.pos.device)
-            seed.scatter_(1, flat_cell[:, me].unsqueeze(1), placed[:, me].view(n, 1))
-            seed = seed.view(n, self.cfg.height, w)
-            cov = rays(seed, self.wall, live, blast_map, self.brick)   # (n,h,w)
-            cov_flat = cov.view(n, -1)
+            cov_flat = cov_all[me].view(n, -1)
             # 1) 覆盖敌人：取每个敌人的中心格是否着火（死者不计）
             for o in range(p):
                 if o == me:
@@ -1084,7 +1100,7 @@ class BatchedSim:
                     gain = 1.0 - (d / cfg.place_dist_radius)
                     dist_pts[:, me] += (ok * gain.clamp(min=0.0)).float()
             # 2) 连锁：覆盖到现有泡（排除自己刚放的），× 剩余引信因子
-            chained = cov & live & (self.owner >= 0) & ~placed_map
+            chained = cov_all[me] & live & (self.owner >= 0) & ~placed_map
             chain_pts[:, me] = (weight * chained.float()).flatten(1).sum(dim=1)
         bonus = (cfg.place_cover_reward * cover_pts
                  + cfg.place_dist_reward * dist_pts

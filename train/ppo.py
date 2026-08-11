@@ -23,6 +23,8 @@ from dataclasses import dataclass
 
 import torch
 
+from sim.move import center_cell  # noqa: E402
+
 from sim.config import N_BOMB, N_MOVES
 
 from .model import ActorCritic
@@ -37,8 +39,8 @@ class PPOConfig:
     gae_lambda: float = 0.95
     clip_eps: float = 0.2
     value_coef: float = 0.5
-    entropy_coef: float = 0.01
-    entropy_final: float = 0.002
+    entropy_coef: float = 0.05
+    entropy_final: float = 0.03
     max_grad_norm: float = 0.5
     lr: float = 3e-4
     oversample_dying: int = 3   # 濒死/死亡帧过采样倍率（1 = 关闭）
@@ -106,8 +108,13 @@ class SelfPlayRunner:
             obs_dtype=torch.float16 if sim.cfg.obs_fp16 else torch.float32)
         # 统计量：胜/平/负计数和平均局长，用于课程晋级与日志。
         # kills = 敌方死亡数（我方赢的终局数），探索退火的 x 数据源（见 _tally）。
+        # 健康度统计（collect 内累积，指导是否停下找问题）：
+        #   suicide      自爆次数（死亡 tick 自己名下有在场泡）—— 98% 自爆老大难
+        #   bombs        放炮次数
+        #   danger_ticks 站危险区 tick 数 / danger_sum 危险值累计 → 站危占比
         self.ep_stats = {"win": 0, "draw": 0, "loss": 0, "len_sum": 0, "count": 0,
-                         "kills": 0}
+                         "kills": 0, "suicide": 0, "bombs": 0,
+                         "danger_ticks": 0, "danger_sum": 0.0}
         self._ep_len = torch.zeros((sim.num_envs,), dtype=torch.long, device=self.device)
 
     @torch.no_grad()
@@ -132,24 +139,58 @@ class SelfPlayRunner:
     def collect(self) -> tuple[RolloutBuffer, torch.Tensor]:
         sim, cfg = self.sim, self.cfg
         self.buf.reset()
-        for _ in range(cfg.rollout_steps):
+        n = sim.num_envs
+        dev = self.device
+        n_players = sim.cfg.n_players              # sim 的 SimConfig（cfg 是 PPOConfig）
+        # 健康度统计缓冲（每 tick 向量累积，无 host 同步；collect 末尾一次性 sum）
+        dng_ch = 2 * n_players + 1                 # 危险通道下标（与 obs 布局一致）
+        st_sui = torch.zeros(n, dtype=torch.long, device=dev)
+        st_bmb = torch.zeros(n, dtype=torch.long, device=dev)
+        st_dt = torch.zeros(n, dtype=torch.long, device=dev)
+        st_dv = torch.zeros(n, dtype=torch.float32, device=dev)
+        for i in range(cfg.rollout_steps):
             obs = sim.observe()                      # (N, C, H, W) 共享
             mmask, bmask = sim.legal_mask()
-            actions = torch.zeros((sim.num_envs, sim.cfg.n_players, 2),
+            actions = torch.zeros((n, sim.cfg.n_players, 2),
                                   dtype=torch.long, device=obs.device)
             with torch.no_grad():
                 a0, logp, value = self.learner.act(obs, mmask[:, 0], bmask[:, 0], 0)
             actions[:, 0] = a0
             self._opponent_actions(obs, mmask, bmask, actions)
 
+            owner_snap = sim.owner.clone()           # 自杀判定：死前自己名下泡数
+            fuse_snap = sim.fuse.clone()             # fuse 清场前快照（死后 owner 已置 -1）
             hp0 = sim.hp[:, 0].clone()               # 濒死/死亡帧过采样要用的掉血标志
             reward, done, info = sim.step(actions)
             dmg = (hp0 - sim.hp[:, 0]).clamp(min=0) > 0
             self._ep_len += 1
             self._tally(info, done)
+            # 掉血回收（延迟 flush，2026-08-10）：step 内只累积（零同步），
+            # 这里降频 flush —— 每 4 tick 一次 + collect 末尾补一次。回收箱
+            # 延迟 ≤4 tick 出（掉血补偿资源，拾取时机影响可忽略）；省 3/4 的
+            # bool(lost.sum()>0) 同步（每 tick flush 在 collect 里 ~70ms/tick）。
+            if i % 4 == 3:
+                sim.flush_recycle()
             self.buf.add(obs, mmask[:, 0], bmask[:, 0], a0, logp, value,
                          reward[:, 0], done.float(), dmg)
+            # ---- 健康度统计（向量累积，零 host 同步）----
+            died0 = info["died"][:, 0]
+            own_live = ((owner_snap == 0) & (fuse_snap > 0)).flatten(1).sum(dim=1)
+            st_sui += (died0 & (own_live > 0)).long()
+            st_bmb += (a0[:, 1] == 1).long()
+            # 危险站桩：用**模型决策时**的 obs 危险通道 + 脚下位置（step 前）
+            cell = center_cell(sim.pos)
+            flat = (cell[:, 0, 0].long() * sim.cfg.width
+                    + cell[:, 0, 1].long())
+            foot = obs[:, dng_ch].float().flatten(1).gather(1, flat.unsqueeze(1)).squeeze(1)
+            st_dt += (foot > 0.04).long()
+            st_dv += foot
 
+        self.ep_stats["suicide"] += int(st_sui.sum())
+        self.ep_stats["bombs"] += int(st_bmb.sum())
+        self.ep_stats["danger_ticks"] += int(st_dt.sum())
+        self.ep_stats["danger_sum"] += float(st_dv.sum())
+        sim.flush_recycle()    # 末尾补一次：清掉最后 ≤4 tick 累积的回收
         with torch.no_grad():
             *_, last_val = self.learner(sim.observe(), 0)
         return self.buf, last_val
@@ -194,7 +235,8 @@ class SelfPlayRunner:
 
     def clear_stats(self) -> None:
         self.ep_stats = {"win": 0, "draw": 0, "loss": 0, "len_sum": 0, "count": 0,
-                         "kills": 0}
+                         "kills": 0, "suicide": 0, "bombs": 0,
+                         "danger_ticks": 0, "danger_sum": 0.0}
 
 
 def ppo_update(learner: ActorCritic, opt: torch.optim.Optimizer, buf: RolloutBuffer,

@@ -22,6 +22,14 @@ import torch
 
 from .config import DIRS, MOVE_IDLE, N_MOVES, SimConfig
 
+# torch.compile 时排除 move_players：其 gather 索引（_resolve_axis_batch 的
+# blocked_flat gather + scatter）在 HIP triton 融合下语义出错（2026-08-10 实测
+# 0.045 格位置分叉）。graph break 让它在 compile step 里保持 eager 执行。
+try:
+    from torch.compiler import disable as _dynamo_disable
+except ImportError:  # torch < 2.7
+    from torch._dynamo import disable as _dynamo_disable
+
 _EPS = 1e-4
 
 # 方向动作 → (dy, dx) 位移表缓存（key=(device,dtype,step)；step 由 cfg 固定）
@@ -143,6 +151,87 @@ def _resolve_axis(
     return torch.where(has, stop_pos, coord)
 
 
+def _impassable_pair_batch(
+    r0: torch.Tensor, c0: torch.Tensor,
+    r1: torch.Tensor, c1: torch.Tensor,
+    yb: torch.Tensor, xb: torch.Tensor,
+    blocked_flat: torch.Tensor, rad: float, h: int, w: int,
+) -> torch.Tensor:
+    """(N,K) 批量版 _impassable_pair：两格任一不可通行（一次 gather 两格）。
+
+    与 _impassable_pair 逐位一致，但输入是 (N,K) 批量（r0/c0/r1/c1 是每探针
+    的两格坐标，yb/xb 是 (N,K) **每探针自己的当前坐标**）。DCU 上小 kernel
+    launch 是大头，legal_mask 的 10 次独立 _resolve_axis 合并成 2 次批量调用
+    → kernel 数 ÷5。
+    """
+    n, k = r0.shape
+    oob = ((r0 < 0) | (r0 >= h) | (c0 < 0) | (c0 >= w)
+           | (r1 < 0) | (r1 >= h) | (c1 < 0) | (c1 >= w))            # (N,K)
+    idx = torch.stack([
+        r0.clamp(0, h - 1) * w + c0.clamp(0, w - 1),
+        r1.clamp(0, h - 1) * w + c1.clamp(0, w - 1),
+    ], dim=-1)                                                      # (N,K,2)
+    solid = blocked_flat.gather(1, idx.reshape(n, -1)).reshape(n, k, 2)
+    r0c = (yb - rad).floor().long()
+    r1c = (yb + rad).floor().long()
+    c0c = (xb - rad).floor().long()
+    c1c = (xb + rad).floor().long()
+    in0 = (r0 >= r0c) & (r0 <= r1c) & (c0 >= c0c) & (c0 <= c1c)
+    in1 = (r1 >= r0c) & (r1 <= r1c) & (c1 >= c0c) & (c1 <= c1c)
+    return oob | (solid[..., 0] & ~in0) | (solid[..., 1] & ~in1)
+
+
+def _resolve_axis_batch(
+    coord: torch.Tensor,      # (N,K) 移动轴上的新坐标（未消解）
+    delta: torch.Tensor,      # (N,K) 该轴位移，符号决定前进方向
+    other: torch.Tensor,      # (N,K) 另一轴坐标（本 tick 不变）
+    y: torch.Tensor,          # (N,1) 当前 y（判"脚下放行"）
+    x: torch.Tensor,          # (N,1) 当前 x
+    blocked_flat: torch.Tensor,
+    rad: float,
+    h: int,
+    w: int,
+    vertical: bool,
+) -> torch.Tensor:
+    """(N,K) 批量版 _resolve_axis —— 与单点版逐位一致，kernel 数 ÷K。
+
+    用于 legal_mask 的 5 方向探针（K=2P 垂直 + 2P 水平）和 move_players 的
+    2P 次消解。内部数学与 _resolve_axis 完全相同，只是把 (N,) 变成 (N,K)，
+    gather 批量化成一次 (N,K*2)。y/x 传 (N,K)（**每探针自己的当前坐标**，
+    不能广播——不同玩家的坐标不同）。
+    """
+    sgn = torch.sign(delta)
+    old_lead = (coord - delta + sgn * rad).floor().long()
+    new_lead = (coord + sgn * rad).floor().long()
+    lo = torch.minimum(old_lead, new_lead)
+    hi = torch.maximum(old_lead, new_lead)
+    span0 = (other - rad).floor().long()
+    span1 = (other + rad).floor().long()
+    if vertical:
+        hit_lo = _impassable_pair_batch(lo, span0, lo, span1, y, x,
+                                        blocked_flat, rad, h, w)
+        hit_hi = _impassable_pair_batch(hi, span0, hi, span1, y, x,
+                                        blocked_flat, rad, h, w)
+    else:
+        hit_lo = _impassable_pair_batch(span0, lo, span1, lo, y, x,
+                                        blocked_flat, rad, h, w)
+        hit_hi = _impassable_pair_batch(span0, hi, span1, hi, y, x,
+                                        blocked_flat, rad, h, w)
+    first_lead = torch.where(sgn > 0, hi, lo)
+    second_lead = torch.where(sgn > 0, lo, hi)
+    first_hit = torch.where(sgn > 0, hit_hi, hit_lo)
+    second_hit = torch.where(sgn > 0, hit_lo, hit_hi)
+    has = first_hit | second_hit
+    first = torch.where(first_hit, first_lead,
+                        torch.where(second_hit, second_lead,
+                                    torch.zeros_like(lo)))
+    stop_pos = torch.where(sgn > 0,
+                           first.to(coord.dtype) - rad - _EPS,
+                           first.to(coord.dtype) + 1.0 + rad + _EPS)
+    return torch.where(has, stop_pos, coord)
+
+
+@_dynamo_disable
 def move_players(
     cfg: SimConfig,
     pos: torch.Tensor,        # (N, P, 2) float，格坐标（角色中心）
@@ -165,22 +254,21 @@ def move_players(
     out = pos.clone()
     tbl = _step_table(device=pos.device, dtype=pos.dtype, step=step)
 
-    for me in range(p):
-        act = move[:, me]
-        y, x = pos[:, me, 0], pos[:, me, 1]
-        sm = speed_mult[:, me]                 # (N,)，保持 dy/dx 一维
-        # 方向→位移查表（一次 gather），替代 4 次 eq/full_like/where 循环
-        # （每 tick 少 ~9 个 kernel —— DCU 上小 kernel launch 是大头）。
-        delta = tbl[act.clamp(0, N_MOVES - 1)]      # (N,2) float
-        delta = delta * sm.unsqueeze(-1)
-        moving = alive[:, me] & (act != MOVE_IDLE)
-        delta = torch.where(moving.unsqueeze(-1), delta, torch.zeros_like(delta))
-        dy, dx = delta[..., 0], delta[..., 1]
-
-        ny = _resolve_axis(y + dy, dy, x, y, x, blocked_flat, rad, h, w, True)
-        nx = _resolve_axis(x + dx, dx, y, y, x, blocked_flat, rad, h, w, False)
-        out[:, me, 0] = torch.where(dy != 0, ny, y)
-        out[:, me, 1] = torch.where(dx != 0, nx, x)
+    # 批量消解：2P 次 _resolve_axis（每玩家 y/x 各一）→ 垂直/水平各一次 (N,P)
+    # 批量调用（_resolve_axis_batch，数学逐位一致）—— DCU 小 kernel launch
+    # 是大头，kernel 数 ÷P。
+    delta = tbl[move.clamp(0, N_MOVES - 1)]                 # (N,P,2)
+    delta = delta * speed_mult.unsqueeze(-1)
+    moving = alive & (move != MOVE_IDLE)
+    delta = torch.where(moving.unsqueeze(-1), delta, torch.zeros_like(delta))
+    dy, dx = delta[..., 0], delta[..., 1]
+    y, x = pos[..., 0], pos[..., 1]                          # (N,P)
+    ny = _resolve_axis_batch(y + dy, dy, x, y, x,
+                             blocked_flat, rad, h, w, True)
+    nx = _resolve_axis_batch(x + dx, dx, y, y, x,
+                             blocked_flat, rad, h, w, False)
+    out[..., 0] = torch.where(dy != 0, ny, y)
+    out[..., 1] = torch.where(dx != 0, nx, x)
     # 防御性边界夹紧：坐标保持在 [rad, h-rad]×[rad, w-rad] —— 碰撞盒最贴边
     # 但不出界。不能用格中心 [0.5, h-0.5]：贴边站 0.3 是合法姿势（碰撞盒
     # [0.0, 0.6]），钳到 0.5 会让掩码说"能动"、实际却动不了。

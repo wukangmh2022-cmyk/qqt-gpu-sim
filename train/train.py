@@ -357,7 +357,7 @@ def main() -> None:
                          "minibatches 是峰值内存的主项，内存紧张就调大它")
     ap.add_argument("--max-mem-frac", type=float, default=0.55,
                     help="预估峰值内存占可用内存的比例上限，超了直接拒绝启动")
-    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--gae-lambda", type=float, default=PPOConfig.gae_lambda,
                     help="GAE λ（默认 0.95）。A/B 实验可用 0.88–0.9：更偏「即时回报」、"
                          "偏差更小但方差更大 —— 在稠密塑形奖励（danger/approach/"
@@ -412,24 +412,14 @@ def main() -> None:
     ap.add_argument("--log-csv", default="ckpt/train_log.csv")
     ap.add_argument("--time-budget", type=float, default=11.0 * 3600,
                     help="秒；到点自动存盘退出，留出 Kaggle 12h 的余量")
-    ap.add_argument("--chase-reward", type=float, default=0.0,
-                    help="主动追击奖励（每朝对手推进 1 格）：治『追不上逃跑的对手』——"
-                         "approach 只在距离缩短时给分，对手逃跑时追击零收益，模型学到"
-                         "敌人躲远就不追（实测 astar flee 躲顶部磨平）。追击项按方向"
-                         "余弦给分，距离不缩短也给（对手也在跑），默认 0 关闭")
-    ap.add_argument("--chase-adj", type=float, default=0.05,
-                    help="追击距离阻力系数 1/(1+d×adj)：就近追最赚、跨场追也有分")
-    ap.add_argument("--suicide-penalty", type=float, default=0.0,
-                    help="自杀重罚：死亡 tick 自己名下有在场泡 → 额外负奖励。"
-                         "治『放炮后站自己泡上炸死』（实测 1023M vs 597M 98% 死亡"
-                         "是自爆，终局 -8 归因太弱）。默认 0 关，建议 2.0")
     ap.add_argument("--timeout-draw", action="store_true",
-                    help="超时全员存活 → 平局 0 分（去掉血多者胜）：治『领先龟缩到"
-                         "超时』（旧版超时领先 1 血拿 1.6 诱导龟缩）。死亡终局判定不变")
-    ap.add_argument("--combo-reward", type=float, default=0.0,
+                    help="超时全员存活 → 血多者胜奖励 × 探索退火（击杀能力上来归零）："
+                         "开局超时领先有回报，后期只剩真击杀的固定回报。默认开启"
+                         "（SimConfig.timeout_draw=True）")
+    ap.add_argument("--combo-reward", type=float, default=0.10,
                     help="combo 连击奖励：不掉血连续造成伤害 = 连击，连击数越高分"
                          "越多、间隔越短分越多（combo_gap_factor^间隔）；掉血打断"
-                         "连击 → 逼『无伤压制』（像格斗连段）。默认 0 关，建议 0.05")
+                         "连击 → 逼『无伤压制』（像格斗连段）。默认 0.10，传 0 关闭")
     ap.add_argument("--combo-gap-factor", type=float, default=0.9,
                     help="combo 间隔因子：间隔每 +1 tick 分 × 此值（连击密分高）")
     ap.add_argument("--bc-data", default=None,
@@ -447,6 +437,11 @@ def main() -> None:
                          "塑形（放炮三件套/连锁/吃箱）乘 α，x=平均每局击杀 —— 前期"
                          "探索满格、后期击杀上来自动归零纯赢比赛。治'后期为刷分放炮'"
                          "卡局部最优。k=1.2 同论文（1v1 x∈[0,1]，曲线仍平滑）")
+    ap.add_argument("--explore-anneal-k", type=float, default=1.2,
+                    help="退火斜率 k（α=1-tanh(k·2·击杀率)）。默认 1.2 同论文；"
+                         "调小=退火更慢，危险惩罚/吃箱等塑形保持更久（2026-08-11 "
+                         "用户定：3B 版 α≈0.03 退过头，危险/吃箱信号被缩到 3%，"
+                         "corridor 躲炸弹差+吃箱弱同源 → 本阶段用 0.6 慢退火）")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -463,17 +458,11 @@ def main() -> None:
                          ring_fraction=args.ring_fraction,
                          hazard_fraction=args.hazard_fraction,
                          crate_speed_only=args.crate_speed_only,
-                         chase_reward=args.chase_reward,
-                         chase_adj=args.chase_adj,
-                         suicide_penalty=args.suicide_penalty,
                          timeout_draw=args.timeout_draw,
                          combo_reward=args.combo_reward,
                          combo_gap_factor=args.combo_gap_factor)
     else:
-        base = SimConfig(chase_reward=args.chase_reward,
-                         chase_adj=args.chase_adj,
-                         suicide_penalty=args.suicide_penalty,
-                         timeout_draw=args.timeout_draw,
+        base = SimConfig(timeout_draw=args.timeout_draw,
                          combo_reward=args.combo_reward,
                          combo_gap_factor=args.combo_gap_factor)
     stages = default_curriculum(base)
@@ -635,7 +624,9 @@ def main() -> None:
         writer = csv.writer(log_f)
         if log_f.tell() == 0:
             writer.writerow(["step", "stage", "elo", "win_rate", "ep_len",
-                             "pg", "vf", "ent", "kl", "clipfrac", "sps"])
+                             "pg", "vf", "ent", "kl", "clipfrac", "sps",
+                             "alpha", "suicide_rate", "bombs_per_ep",
+                             "danger_frac", "bc"])
 
     start = time.time()
     it = 0
@@ -646,7 +637,10 @@ def main() -> None:
             it += 1
             t0 = time.time()
             buf, last_val = runner.collect()
-            # 熵系数线性退火：前期广泛探索，后期收敛到确定性走法。
+            # 熵系数退火：前期充分探索，后期收敛到接近确定性但**保持随机性下限**
+            # （entropy_final=0.03 恒定正熵）。钟摆效应根因：旧版退火到 0.002
+            # （几乎确定性）→ 双方策略趋同 → 确定性对称均衡 → PPO 零梯度冻结，
+            # 表现为周期摆动 + 同步放炮。常量小熵让双方持续有随机性，破对称。
             # frac 用"本次运行内步数"local_step —— resume 时重新开熵，
             # 不然续训从低熵直接继续，探索回不来（老 bug）。
             anneal = args.ent_anneal_steps or args.total_steps
@@ -689,16 +683,29 @@ def main() -> None:
             # 我们 1v1 上限 1 → x_eff = 2×击杀率，满击杀时 α≈0.016（≈归零）。
             # 每迭代按本迭代击杀率更新（runner.ep_stats 已累计，win=敌死）。
             if args.explore_anneal:
-                kx = 1.2 * (2.0 * runner.kills_per_ep())
+                kx = args.explore_anneal_k * (2.0 * runner.kills_per_ep())
                 alpha = 1.0 - math.tanh(kx)
                 sim.set_explore_coef(alpha)
             else:
                 sim.set_explore_coef(1.0)
 
             if it % 10 == 0:
+                # 健康度指标（指导是否停下找问题）：
+                #   suicide_rate = 自爆死亡 / 死亡数（98% 自爆老大难）
+                #   bombs_per_ep / danger_frac = 放炮频率 / 站危险区占比（钟摆·磨平信号）
+                n_deaths = runner.ep_stats["kills"] + runner.ep_stats["suicide"]
+                sui_rate = (runner.ep_stats["suicide"] / max(1, n_deaths)
+                            if n_deaths else 0.0)
+                ep_cnt = max(1, runner.ep_stats["count"])
+                # 站危占比分母 = 本次 collect 总 env-tick（固定 num_envs×rollout_steps），
+                # 不是 len_sum（只累计已结束局，本段无终局时是 0 → 失真）
+                dang_frac = runner.ep_stats["danger_ticks"] / per_iter
+                bombs_ep = runner.ep_stats["bombs"] / ep_cnt
                 print(f"[{it:6d}] step={global_step/1e6:.2f}M stage={stage.name} "
                       f"wr={wr:.3f} elo={elo:.0f} len={runner.mean_ep_len():.0f} "
                       f"ent={stats['ent']:.3f} kl={stats['kl']:+.4f} "
+                      f"α={sim._explore_coef:.2f} 自杀={sui_rate:.0%} "
+                      f"放炮={bombs_ep:.0f}/局 站危={dang_frac:.0%} "
                       f"sps={sps/1e3:.0f}k")
                 if fixed_items:
                     # 独立小 sim 上对每个固定陪练跑 256 局 → 绝对胜率
@@ -708,11 +715,20 @@ def main() -> None:
                     print("    fixed: " + "  ".join(
                         f"{n}={v:.3f}" for n, v in fwr.items()))
             if log_f:
-                writer.writerow([global_step, stage.name, f"{elo:.1f}", f"{wr:.4f}",
-                                 f"{runner.mean_ep_len():.1f}"]
-                                + [f"{stats[k]:.5f}" for k in
-                                   ("pg", "vf", "ent", "kl", "clipfrac")]
-                                + [f"{sps:.0f}"])
+                n_deaths = runner.ep_stats["kills"] + runner.ep_stats["suicide"]
+                sui_rate = (runner.ep_stats["suicide"] / max(1, n_deaths)
+                            if n_deaths else 0.0)
+                ep_cnt = max(1, runner.ep_stats["count"])
+                writer.writerow(
+                    [global_step, stage.name, f"{elo:.1f}", f"{wr:.4f}",
+                     f"{runner.mean_ep_len():.1f}"]
+                    + [f"{stats[k]:.5f}" for k in
+                       ("pg", "vf", "ent", "kl", "clipfrac")]
+                    + [f"{sps:.0f}", f"{sim._explore_coef:.4f}",
+                       f"{sui_rate:.4f}",
+                       f"{runner.ep_stats['bombs']/ep_cnt:.2f}",
+                       f"{runner.ep_stats['danger_ticks']/per_iter:.4f}",
+                       f"{stats.get('bc', float('nan')):.5f}"])
                 log_f.flush()
 
             if it % args.snapshot_every == 0:

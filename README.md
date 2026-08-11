@@ -62,6 +62,43 @@
 - **ELO 绝对锚点**：固定陪练走 `fixed_elo` 字典（标准 ELO，k=16，持久化），"打赢 420M"直接体现在 ELO；每 10 iter 独立小 sim 报对 4 家胜率。
 - **熵退火按 local_step**（resume 时重新开熵，不跳变）；checkpoint 存全套（网络/Adam/池子/ELO/RNG），原子替换，`--time-budget` 到点自动存盘。
 
+### 3.5 奖励系统（因子正交性 + 数值，2026-08 人类录像校准）
+
+奖励分两层：**稠密塑形**（每 tick 引导，乘 `_explore_coef` 随击杀率退火）+ **稀疏主信号**（命中/终局）。用 71 局人类录像重放逐 tick 分解因子，验证了分布方差、正交性和数值合理性：
+
+| 因子 | 触发率 | 系数 | 单局典型贡献 | 判定 |
+|---|---|---|---|---|
+| danger 危险站桩 | 65%（人类大量时间在危险区） | 0.015 | 0.88 | 稠密，降后合理 |
+| chain 连锁 | 6.1% | 0.20 | 1.25 | 稠密偏强 |
+| brick 吃箱 | 3.8%（一局踩 11 箱） | 0.05 | 0.45 | 稠密，降后合理 |
+| step 步罚 | 100% | 0.001 | 0.26 | 恒在 |
+| **hit 命中/掉血** | 0.5-1.6% | **1.5** | **±7.5/3.0** | **核心主信号** |
+| cover 覆盖敌人 | 0.9% | 0.05 | 0.10 | 稀疏，加大 |
+| **win 击杀固定** | 每局≤1 次 | **10.0** | **±10** | **核心终局** |
+| combo 连击 | 0.3% | 0.10 | 0.10 | 稀疏 |
+| dist 近身定位 | **0.0%** | 0（删） | — | 死信号 |
+| chainblst 跨主连锁 | **0.0%** | 0（删） | — | 死信号 |
+
+- **正交性**：因子相关矩阵基本干净（两两 \|r\|<0.25），唯一冗余 `dealt × combo r=+0.78`（combo 输入就是 dealt>0，同一信号）——combo 保留但知道它近似给伤害二次加分。
+- **稠密 vs 核心**：稠密合计 2.79 < 核心正 3.42（0.82x）——塑形不压主信号（修复前 danger=0.05 时稠密达 10x 核心，已降）。掉血 -7.5 是主要"别死"惩罚，击杀 +10 是主要"赢"信号。
+- **danger 时间形状（U 形，非指数）**：站桩率 ≤0.5s=0.0091 / 0.5-1s=0.0078（全档最低，人类临爆才躲）/ 2.5-3s=0.0312（最高，自己刚放的炮还没撤）。当前图 `exp=2` 偏平，若续训观察到"不够躲"可调 exp→3。
+
+### 3.6 钟摆效应（根因 + 修复）
+
+**现象**：后期无道具地图上双方策略趋同，钟摆式周期移动 + 同步放炮。
+
+**根因（代码确认）**：熵退火到 `entropy_final=0.002`（几乎确定性）→ 采样≈argmax → 双方策略趋同 → **确定性对称均衡** → 任一偏离即劣势 → PPO 零梯度冻结 → 周期轨迹。
+
+**修复**（`train/ppo.py` + `train/train.py`）：
+
+| 参数 | 旧 → 新 | 作用 |
+|---|---|---|
+| `entropy_coef` | 0.01 → **0.05** | 前期充分探索 |
+| `entropy_final` | 0.002 → **0.03** | **恒定正熵下限**，破对称均衡 |
+| `lr` | 3e-4 → **1e-4** | 后期小步，防大幅摆动 |
+
+修复后采样保持 ~3% 随机性，双方无法锁定对方动作，镜像均衡被打破，PPO 持续有梯度。**验证指标**：`hourly_eval.py` 的 `ent` 应稳定在 0.03 附近而非塌到 0。
+
 ### 4. 仿真敌人（`sim/bots.py`）——全张量化的规则课程老师
 
 不需要寻路 = 不需要逐环境循环：全部策略用危险图 + 距离场打分，5632 env 一个 for 都没有。接口对齐网络 `.act(obs, mmask, bmask, pid)`。
@@ -112,13 +149,27 @@ DCU 注意事项：每个 ssh 会话要 `source /opt/dtk-26.04/env.sh` + 设 `OP
 uv venv --python 3.12 && uv pip install -r requirements.txt
 pytest tests -q                                    # 113 个测试（106 pass + 7 skip）
 
-# 训练（12h 课程主线，DCU 上跑）：
+# 训练（12h 课程主线，DCU 上跑；奖励数值/熵修复已在 SimConfig 与 ppo.py 默认值，
+# 直接跑即生效；--lr 已默认 1e-4）：
 python -m train.train --backend torch --device cuda --arch mlp --single-stage \
   --map-mode corridor --open-fraction 0.3 --total-steps 1_600_000_000 \
   --warmup-steps 150_000_000 --fixed-opp-prob 0.4 --bot-opponents astar,greedy \
   --fixed-ckpt rw8=private_data/duel_rw8.pt --fixed-ckpt 5x2=... \
   --fixed-ckpt 5x3=... --fixed-ckpt cnn=... --time-budget 43200 \
+  --explore-anneal --bc-data recordings/ --bc-coef 0.3 --combo-reward 0.10 \
   --ckpt private_data/duel_course.pt --log-csv private_data/train_course.csv
+
+# 1000M 续训（resume 即用新奖励；锚点在 ckpt/，不在 private_data/）：
+#   --lr 1e-4 --lr-final 1e-4：resume 时 opt.load_state_dict 会用 ckpt 里的
+#   3e-4 覆盖 --lr，必须靠 --lr-final 机制每迭代强制写回 1e-4（已实测生效）。
+python -m train.train --resume ckpt/course_1023m.pt --backend torch --device cuda \
+  --arch mlp --single-stage --map-mode corridor --open-fraction 0.5 \
+  --explore-anneal --bc-data recordings/ --bc-coef 0.3 --time-budget 43200 \
+  --lr 1e-4 --lr-final 1e-4 \
+  --fixed-ckpt rw8=ckpt/duel_rw8.pt --fixed-ckpt 5x2=ckpt/duel_5x2.pt \
+  --fixed-ckpt 5x3=ckpt/duel_5x3.pt --fixed-ckpt cnn=ckpt/duel_cnn.pt \
+  --fixed-opp-prob 0.4 --bot-opponents greedy,astar --fixed-bots astar \
+  --combo-reward 0.10
 
 # 试玩（图形启动器，AI 下拉最上面可选规则 bot / 模型）：
 python -m play.launcher            # 人机对打 / AI vs AI 观战

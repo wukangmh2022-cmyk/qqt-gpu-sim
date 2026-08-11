@@ -1,0 +1,11 @@
+[eval] ckpt/course_bc_571m.pt step=562298880M elo=1442 — 6 对手
+
+  vs 500m    : win 32.3% / draw 2.1% / loss 65.6%   自爆 108/5 (68s)
+  vs 600m    : win 17.7% / draw 1.0% / loss 81.2%   自爆 136/11 (65s)
+  vs cnn     : win 45.8% / draw 1.0% / loss 53.1%   自爆 60/6 (94s)
+  vs rw8     : win 65.6% / draw 2.1% / loss 32.3%   自爆 45/11 (66s)
+  vs astar   : win 82.3% / draw 2.1% / loss 15.6%   自爆 18/0 (95s)
+  vs hunter  : win 68.8% / draw 13.5% / loss 17.7%   自爆 11/0 (128s)
+
+[tren] res/eval_571m.csv
+HOURLY_DONE

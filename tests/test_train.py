@@ -75,6 +75,55 @@ def test_ppo_iteration_runs_and_updates():
     assert 0.0 <= runner.win_rate() <= 1.0
 
 
+def test_runner_health_stats_collected():
+    """collect 的进度/健康度统计（bombs/danger）必须可累积且非负。
+
+    新增的自杀/放炮/危险站桩统计是训练日志判断"是否停下找问题"的依据，
+    统计错（如用错 cfg、索引越界）会导致日志失真 —— 这里验证基本完整性。
+    """
+    cfg = SimConfig(height=7, width=7, n_players=2, max_steps=40)
+    sim = BatchedSim(cfg, 8, seed=1)
+    learner = ActorCritic(cfg.obs_shape)
+    opp = clone_frozen(learner)
+    pcfg = PPOConfig(rollout_steps=16)
+    runner = SelfPlayRunner(sim, learner, [opp], pcfg)
+    runner.collect()
+    assert "suicide" in runner.ep_stats
+    assert "bombs" in runner.ep_stats
+    assert "danger_ticks" in runner.ep_stats
+    for k in ("suicide", "bombs", "danger_ticks", "kills", "count"):
+        assert runner.ep_stats[k] >= 0, f"{k} 应为非负，实际 {runner.ep_stats[k]}"
+    # danger_ticks 统计所有 collect 的 tick（含未结束局）→ 上限 = rollout_steps×envs
+    assert 0 <= runner.ep_stats["danger_ticks"] <= pcfg.rollout_steps * 8, \
+        f"danger_ticks 不应超过总 collect tick"
+    # collect 两次应累积（不重置），clear_stats 后归零
+    runner.collect()
+    assert runner.ep_stats["bombs"] > 0 or runner.ep_stats["count"] > 0, \
+        "两次 collect 应累计健康度"
+    runner.clear_stats()
+    assert runner.ep_stats["suicide"] == 0 and runner.ep_stats["bombs"] == 0
+
+
+def test_reward_coefficients_match_config_snapshot():
+    """奖励系数快照：防止优化/重构时数值漂移（训练依赖这些默认值）。
+
+    2026-08 人类录像校准后的新值：稀疏主信号加大、稠密塑形压低、
+    死信号（dist/chainblst）归零、终局固定击杀 + 超时退火。
+    """
+    cfg = SimConfig()
+    assert cfg.hit_reward == 1.5
+    assert cfg.win_bonus == 10.0
+    assert cfg.danger_penalty == 0.015
+    assert cfg.brick_reward == 0.15  # 0.15→0.05→0.10→2026-08-11 回调 0.15(配合退火放慢)
+    assert cfg.place_cover_reward == 0.05
+    assert cfg.place_chain_reward == 0.20
+    assert cfg.place_dist_reward == 0.0, "近身定位是死信号，应归零"
+    assert cfg.chain_blast_bonus == 0.0, "跨主连锁是死信号，应归零"
+    assert cfg.combo_reward == 0.10
+    assert cfg.timeout_draw is True, "超时血差×退火（默认开）"
+    assert cfg.win_hp_scaled is False, "终局击杀固定值（不看血量差）"
+
+
 def test_opponent_handicap_reduces_bomb_rate():
     """削弱对手应该显著减少对手的放泡次数（否则 handicap 是个空实现）。"""
     cfg = SimConfig(height=9, width=9, n_players=2, max_steps=60)

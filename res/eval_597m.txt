@@ -1,0 +1,11 @@
+[eval] ckpt/course_597m.pt step=591134720M elo=2088 — 6 对手
+
+  vs 500m    : win 64.6% / draw 9.4% / loss 26.0%   自爆 18/0 (88s)
+  vs 600m    : win 43.0% / draw 15.6% / loss 41.4%   自爆 34/0 (92s)
+  vs cnn     : win 54.2% / draw 6.2% / loss 39.6%   自爆 39/0 (106s)
+  vs rw8     : win 93.8% / draw 0.0% / loss 6.2%   自爆 11/1 (63s)
+  vs astar   : win 84.4% / draw 5.2% / loss 10.4%   自爆 12/0 (110s)
+  vs hunter  : win 60.9% / draw 25.0% / loss 14.1%   自爆 8/0 (112s)
+
+[tren] res/eval_597m.csv
+HOURLY_597M_DONE

@@ -183,8 +183,10 @@ def test_hazard_bomb_hurts_players():
     r, _, _ = sim.step(a, auto_reset=False)
     assert int(sim.hp[0, 0]) == 2, "玩家 0 被环境炸弹打掉 1 血"
     assert int(sim.hp[0, 1]) == 3
-    assert abs(float(r[0, 0]) - (-1.2 - 0.001)) < 1e-4, "挨炸 -1.2 + 步罚"
-    assert abs(float(r[0, 1]) - (+1.2 - 0.001)) < 1e-4, "对手 +1.2（我的命更久）"
+    assert abs(float(r[0, 0]) - (-cfg.hit_reward - cfg.step_penalty)) < 1e-4, \
+        f"挨炸 -hit_reward + 步罚"
+    assert abs(float(r[0, 1]) - (cfg.hit_reward - cfg.step_penalty)) < 1e-4, \
+        "对手 +hit_reward（我的命更久）"
 
 
 def test_hazard_fraction_mixed_rolls():

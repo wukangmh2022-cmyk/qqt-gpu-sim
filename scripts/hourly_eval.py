@@ -16,9 +16,12 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import sys
 import time
 
 import torch
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sim.bots import make_bot
 from sim.config import SimConfig
@@ -60,6 +63,12 @@ def duel(sim, pol0, pol1, episodes: int, p1_is_net: bool = False) -> dict:
     done = torch.zeros(n, dtype=torch.bool, device=dev)
     suicide = torch.zeros(n, dtype=torch.long, device=dev)
     killed = torch.zeros(n, dtype=torch.long, device=dev)
+    ticks = torch.zeros(n, dtype=torch.long, device=dev)      # 局均 tick
+    dmg_taken = torch.zeros(n, dtype=torch.long, device=dev)  # 掉血累计
+    dmg_dealt = torch.zeros(n, dtype=torch.long, device=dev)  # 造成伤害累计
+    bomb_n = torch.zeros(n, dtype=torch.long, device=dev)     # 放炮次数
+    danger_ticks = torch.zeros(n, dtype=torch.long, device=dev)  # 站危险区 tick
+    danger_sum = torch.zeros(n, dtype=torch.float64, device=dev) # 危险值累计
     while rounds < episodes:
         obs = sim.observe()
         mm, bm = sim.legal_mask()
@@ -67,11 +76,27 @@ def duel(sim, pol0, pol1, episodes: int, p1_is_net: bool = False) -> dict:
         a1 = pol1(obs, mm[:, 1], bm[:, 1])
         owner_snap = sim.owner.clone()
         fuse_snap = sim.fuse.clone()
+        hp0 = sim.hp.clone()
         _, d, info = sim.step(torch.stack([a0, a1], dim=1))
         died0 = info["died"][:, 0]
         own_cnt = ((owner_snap == 0) & (fuse_snap > 0)).flatten(1).sum(dim=1)
         suicide += (died0 & (own_cnt > 0)).long()
         killed += (died0 & (own_cnt == 0)).long()
+        # 伤害：step 前后 hp 差
+        dmg = (hp0.to(torch.int32) - sim.hp.to(torch.int32)).clamp(min=0)
+        dmg_taken += dmg[:, 0]
+        dmg_dealt += dmg[:, 1]
+        # 放炮（bomb 位=1 且活着）
+        bomb_n += (a0[:, 1] == 1).long()
+        # 危险站桩：模型脚下危险通道值（obs 通道 2P+1，与训练同源）
+        dng_ch = obs[:, 2 * sim.cfg.n_players + 1].float()
+        from sim.move import center_cell
+        cell = center_cell(sim.pos)
+        flat = cell[:, 0, 0] * sim.cfg.width + cell[:, 0, 1]
+        foot = dng_ch.flatten(1).gather(1, flat.unsqueeze(1)).squeeze(1)
+        danger_ticks += (foot > 0.04).long()
+        danger_sum += foot.double()
+        ticks += 1
         just = d & ~done
         win0 = just & info["winner"][:, 0]
         win1 = just & info["winner"][:, 1]
@@ -83,10 +108,23 @@ def duel(sim, pol0, pol1, episodes: int, p1_is_net: bool = False) -> dict:
         if bool(done.all()):
             sim.reset_all()
             done.zero_()
+            # 终局 tick 的 danger/伤害仍累计在死局上，reset 不影响累计
     tot = max(1, rounds)
+    n_alive_env = max(1, n)
     return {"win": w0 / tot, "draw": dr / tot, "loss": w1 / tot,
             "suicide": int(suicide.sum()), "killed": int(killed.sum()),
-            "rounds": rounds}
+            "rounds": rounds,
+            "kill_rate": w0 / tot,                     # 击杀率（我方赢=对手死）
+            "suicide_rate": int(suicide.sum()) / tot,  # 自爆/局
+            "killed_rate": int(killed.sum()) / tot,    # 被击杀/局
+            "ep_len": float(ticks.sum()) / max(1, rounds),  # 局均 tick
+            "dmg_taken": float(dmg_taken.sum()) / tot,      # 掉血/局
+            "dmg_dealt": float(dmg_dealt.sum()) / tot,      # 伤害/局
+            "bombs_per_ep": float(bomb_n.sum()) / tot,      # 放炮/局
+            "danger_frac": float(danger_ticks.sum()) / max(1, int(ticks.sum())),  # 站危险区占比
+            "danger_avg": float(danger_sum.sum()) / max(1, int(ticks.sum())),    # 平均危险值
+            "danger_ticks_per_ep": float(danger_ticks.sum()) / tot,
+            "total_ticks": int(ticks.sum())}
 
 
 def parse_opps(spec: str) -> list[tuple[str, object]]:
@@ -142,10 +180,19 @@ def main() -> None:
         t0 = time.time()
         r = duel(sim, pol0, pol1, args.episodes)
         row[name] = round(r["win"], 3)
-        row[name + "_su"] = round(r["suicide"] / max(1, r["rounds"]), 3)
+        row[name + "_su"] = round(r["suicide_rate"], 3)
+        row[name + "_kill"] = round(r["kill_rate"], 3)
+        row[name + "_dmg_taken"] = round(r["dmg_taken"], 2)
+        row[name + "_dmg_dealt"] = round(r["dmg_dealt"], 2)
+        row[name + "_bombs"] = round(r["bombs_per_ep"], 1)
+        row[name + "_danger"] = round(r["danger_frac"], 3)
+        row[name + "_len"] = round(r["ep_len"], 0)
         print(f"  vs {name:<8}: win {r['win']:.1%} / draw {r['draw']:.1%} "
               f"/ loss {r['loss']:.1%}   自爆 {r['suicide']}/{r['killed']} "
-              f"({time.time()-t0:.0f}s)")
+              f"({time.time()-t0:.0f}s)\n"
+              f"     击杀 {r['kill_rate']:.1%}/局 掉血 {r['dmg_taken']:.1f} "
+              f"伤害 {r['dmg_dealt']:.1f} 放炮 {r['bombs_per_ep']:.0f}/局 "
+              f"站危 {r['danger_frac']:.0%} 局均 {r['ep_len']:.0f}tick")
 
     # 追加趋势 csv
     new = not os.path.exists(args.trend)

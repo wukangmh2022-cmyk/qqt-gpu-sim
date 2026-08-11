@@ -874,6 +874,29 @@ def run_game(*, ckpt: str = "ckpt/duel_rw_ckpt.pt", ckpt_b: str | None = None,
     last_boom = 0.0
     last_place = 0.0
 
+    # 音效"以人类玩家为监听者"：所有事件只对人类播、位置相对人类做左右声道
+    # pan + 距离音量；纯 AI 的行为（双方都非人类）完全静音。
+    human_pids = [p for p, h in ((0, human0), (1, human1)) if h]
+
+    def _play_at(snd, br: float, bc: float) -> None:
+        """在网格坐标 (br, bc) 发声：相对最近人类玩家 pan（左右声道）+ 音量。"""
+        if snd is None or not human_pids:
+            return
+        pid = human_pids[0]                     # 监听者 = 第一个人类玩家
+        hx = float(sim.pos[0, pid, 1]) * CELL + CELL / 2
+        hy = float(sim.pos[0, pid, 0]) * CELL + CELL / 2
+        x = bc * CELL + CELL / 2
+        y = br * CELL + CELL / 2
+        dx, dy = x - hx, y - hy
+        dist = math.hypot(dx, dy)
+        maxd = math.hypot(GRID * CELL, GRID * CELL)
+        vol = max(0.08, 1.0 - 0.9 * min(1.0, dist / maxd))   # 越近越响
+        pan = max(-1.0, min(1.0, dx / (GRID * CELL / 2)))    # -1 偏左 / +1 偏右
+        ch = snd.play()
+        if ch is not None:
+            ch.set_volume(vol * (1.0 - 0.8 * max(0.0, pan)),
+                          vol * (1.0 - 0.8 * max(0.0, -pan)))
+
     while True:
         dt_s = (pygame.time.get_ticks() - prev_ms) / 1000.0
         prev_ms = pygame.time.get_ticks()
@@ -987,8 +1010,9 @@ def run_game(*, ckpt: str = "ckpt/duel_rw_ckpt.pt", ckpt_b: str | None = None,
             if human0:
                 a0 = torch.tensor([[MOVE_IDLE, 1 if pending_bomb else 0]],
                                   dtype=torch.long)
-                if pending_bomb and res.snd_place:
-                    res.snd_place.play()
+                if pending_bomb:
+                    _play_at(res.snd_place,
+                             float(sim.pos[0, 0, 0]), float(sim.pos[0, 0, 1]))
                 pending_bomb = False
             elif net is not None or bot0 is not None:
                 a0 = _ai(0, net, bot0)
@@ -998,8 +1022,9 @@ def run_game(*, ckpt: str = "ckpt/duel_rw_ckpt.pt", ckpt_b: str | None = None,
             if human1:
                 a1 = torch.tensor([[MOVE_IDLE, 1 if pending_bomb1 else 0]],
                                   dtype=torch.long)
-                if pending_bomb1 and res.snd_place:
-                    res.snd_place.play()
+                if pending_bomb1:
+                    _play_at(res.snd_place,
+                             float(sim.pos[0, 1, 0]), float(sim.pos[0, 1, 1]))
                 pending_bomb1 = False
             else:
                 a1 = _ai(1, net_b if net_b is not None else net, bot1)
@@ -1049,30 +1074,48 @@ def run_game(*, ckpt: str = "ckpt/duel_rw_ckpt.pt", ckpt_b: str | None = None,
             # 静态层重建：墙/砖只在爆炸后变化，10Hz 重渲一次足够（60fps 渲染
             # 直接 blit 缓存 —— 之前每渲染帧跑 169 格循环是后期掉帧主源）
             static = build_static(res, sim)
-            # 音效（按本 tick 事件触发）：
-            #   爆炸 → snd_boom（0.35s 限频）；吃到宝箱（crate 消失且原地有踩）→ snd_pickup
-            #   掉血（hp 下降）→ snd_hurt；死亡（本 tick died）→ snd_die
+            # 音效（按本 tick 事件触发，全部以人类玩家为监听者）：
+            #   爆炸 → 事件中心取本 tick 火焰覆盖的质心，相对人类 pan+音量；
+            #   放泡/吃道具/掉血/死亡 → 只发生在人类玩家身上才播（AI 的
+            #   行为不出声），位置即人类所在格。
             if info["blast"].any():
                 explosion = (info["blast"][0].bool(), info["trig"][0].bool())
                 explosion_t = pygame.time.get_ticks() / 1000.0
-                if pygame.time.get_ticks() / 1000.0 - last_boom > 0.35 and res.snd_boom:
-                    res.snd_boom.play()
+                if pygame.time.get_ticks() / 1000.0 - last_boom > 0.35:
+                    bmask = info["blast"][0].bool()
+                    ys, xs = bmask.nonzero(as_tuple=True)
+                    br = float(ys.float().mean().item()) if ys.numel() else 0.0
+                    bc = float(xs.float().mean().item()) if xs.numel() else 0.0
+                    _play_at(res.snd_boom, br, bc)
                     last_boom = pygame.time.get_ticks() / 1000.0
-            # 吃道具音效：**只有玩家（player 0）吃到**才播（AI 吃的不播）。
-            # 判定 = 玩家 0 移动后的中心格：step 前是宝箱、step 后不是。
+            # 吃道具音效：**只有人类玩家吃到**才播（AI 吃的不播）。
+            # 判定 = 人类移动后的中心格：step 前是宝箱、step 后不是。
             # （不能用 crate0[0] —— 那是宝箱图第 0 行，不是"玩家 0 的宝箱"。）
-            if res.snd_pickup and not bot_mode:
-                p0_cell = (int(sim.pos[0, 0, 0]), int(sim.pos[0, 0, 1]))
-                if bool(crate0[p0_cell]) and not bool(sim.crate[0, p0_cell[0], p0_cell[1]]):
-                    res.snd_pickup.play()
-            # 掉血音效：**双方**掉血都播（玩家 0 或 AI 血量下降）
-            if res.snd_hurt and (
-                    int(hp0[0]) > int(sim.hp[0, 0])          # 玩家 0 掉血
-                    or int(hp0[1]) > int(sim.hp[0, 1])):     # AI 掉血
-                res.snd_hurt.play()
-            # 死亡：info["died"] 本 tick 有人血归 0 消失
-            if res.snd_die and bool(info["died"][0].any()):
-                res.snd_die.play()
+            if res.snd_pickup:
+                for pid in human_pids:
+                    p_cell = (int(sim.pos[0, pid, 0]), int(sim.pos[0, pid, 1]))
+                    if bool(crate0[p_cell]) and not bool(
+                            sim.crate[0, p_cell[0], p_cell[1]]):
+                        _play_at(res.snd_pickup,
+                                 float(sim.pos[0, pid, 0]),
+                                 float(sim.pos[0, pid, 1]))
+                        break
+            # 掉血音效：**只有人类玩家**掉血才播，位置 = 该人类所在格
+            if res.snd_hurt:
+                for pid in human_pids:
+                    if int(hp0[pid]) > int(sim.hp[0, pid]):
+                        _play_at(res.snd_hurt,
+                                 float(sim.pos[0, pid, 0]),
+                                 float(sim.pos[0, pid, 1]))
+                        break
+            # 死亡：**只有人类玩家**死亡才播，位置 = 该人类所在格
+            if res.snd_die:
+                for pid in human_pids:
+                    if bool(info["died"][0, pid]):
+                        _play_at(res.snd_die,
+                                 float(sim.pos[0, pid, 0]),
+                                 float(sim.pos[0, pid, 1]))
+                        break
             # 行走动画帧移到 60Hz 渲染段（不跟 tick），这里记录双方实际移动方向
             # （观战模式玩家 0 也走 AI —— 之前 a0 不更新，玩家 0 永远是"一张
             # 图平移"、朝向也不转）。

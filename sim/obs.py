@@ -19,7 +19,7 @@ import torch
 
 from .blast import danger_map
 from .config import DIRS, N_BOMB, N_MOVES, SimConfig
-from .move import _EPS, _resolve_axis, center_cell
+from .move import _EPS, _resolve_axis_batch, center_cell
 
 
 def _splat(pos_me: torch.Tensor, gate: torch.Tensor, h: int, w: int) -> torch.Tensor:
@@ -58,6 +58,8 @@ def encode_obs(
     crate: torch.Tensor | None = None,
     invuln: torch.Tensor | None = None,
     bombs_p: torch.Tensor | None = None,
+    danger_precomputed: torch.Tensor | None = None,
+    early_exit: bool | None = None,
 ) -> torch.Tensor:
     """返回 (N, 2P+3+obs_extra(P), H, W)：**整个 env 一份**的共享观测。
 
@@ -89,7 +91,13 @@ def encode_obs(
         blast_map = torch.where(bomb_blast > 0, bomb_blast.long(), cfg.blast)
     else:
         blast_map = cfg.blast
-    obs[:, 2 * p + 1] = danger_map(fuse, wall, blast_map, cfg.fuse, brick)
+    if danger_precomputed is not None:
+        # step 的 danger 惩罚刚算过同状态危险图 → 直接复用（profile 热点：
+        # 同状态每 tick 算两遍 danger_map）
+        obs[:, 2 * p + 1] = danger_precomputed
+    else:
+        obs[:, 2 * p + 1] = danger_map(fuse, wall, blast_map, cfg.fuse, brick,
+                                       cfg.max_chain, early_exit=early_exit)
     obs[:, 2 * p + 2] = (t.float() / float(cfg.max_steps)).view(n, 1, 1)
 
     # ---------------- 扩展通道（世界信息，尾部原样保留） ----------------
@@ -183,20 +191,35 @@ def legal_mask(
                     | (brick if brick is not None
                        else torch.zeros_like(wall))).view(n, -1)
 
+    # 4 方向探针批量化（IDLE 恒合法）：垂直（上/下）+ 水平（左/右）各一次
+    # (N, 2P) 批量 _resolve_axis_batch，替代 10 次独立 _resolve_axis ——
+    # 数学逐位一致（_resolve_axis_batch 是单点版的 (N,K) 重排），DCU 小
+    # kernel launch 是大头，kernel 数 ÷5。
+    step = cfg.step_len
+    y, x = pos[..., 0], pos[..., 1]                          # (N,P)
+    # 垂直探针：每玩家 2 个（上 dy=-step / 下 dy=+step），索引 me*2+{0,1}
+    yv = y.unsqueeze(-1).expand(n, p, 2).reshape(n, -1)      # (N, 2P)
+    xv = x.unsqueeze(-1).expand(n, p, 2).reshape(n, -1)
+    dyv = torch.full_like(yv, step)
+    dyv[:, 0::2] = -step
+    nyv = _resolve_axis_batch(yv + dyv, dyv, xv, yv, xv,
+                              blocked_flat, rad, h, w, True)
+    moved_v = (nyv - yv).abs() > _EPS * 2                    # (N, 2P)
+    # 水平探针：每玩家 2 个（左 dx=-step / 右 dx=+step）
+    xh = x.unsqueeze(-1).expand(n, p, 2).reshape(n, -1)      # (N, 2P)
+    yh = y.unsqueeze(-1).expand(n, p, 2).reshape(n, -1)
+    dxh = torch.full_like(xh, step)
+    dxh[:, 0::2] = -step
+    nxh = _resolve_axis_batch(xh + dxh, dxh, yh, yh, xh,
+                              blocked_flat, rad, h, w, False)
+    moved_h = (nxh - xh).abs() > _EPS * 2                    # (N, 2P)
+    # 组装 (N,P,4)：上=moved_v[::2], 下=moved_v[1::2], 左=moved_h[::2], 右=moved_h[1::2]
     move_mask = torch.ones((n, p, N_MOVES), dtype=torch.bool, device=pos.device)
-    for me in range(p):
-        y, x = pos[:, me, 0], pos[:, me, 1]
-        for k, (ky, kx) in enumerate(DIRS):
-            dy = torch.full_like(y, ky * cfg.step_len)
-            dx = torch.full_like(x, kx * cfg.step_len)
-            if ky:
-                ny = _resolve_axis(y + dy, dy, x, y, x, blocked_flat, rad, h, w, True)
-                moved = (ny - y).abs() > _EPS * 2
-            else:
-                nx = _resolve_axis(x + dx, dx, y, y, x, blocked_flat, rad, h, w, False)
-                moved = (nx - x).abs() > _EPS * 2
-            move_mask[:, me, k] = moved
-        # 死亡角色的动作不会被执行，整行放开，省掉调用方的特殊分支
+    move_mask[..., 0] = moved_v[:, 0::2]                     # 上
+    move_mask[..., 1] = moved_v[:, 1::2]                     # 下
+    move_mask[..., 2] = moved_h[:, 0::2]                     # 左
+    move_mask[..., 3] = moved_h[:, 1::2]                     # 右
+    # 死亡角色的动作不会被执行，整行放开，省掉调用方的特殊分支
     move_mask = (move_mask & alive.unsqueeze(-1)) | (~alive).unsqueeze(-1)
 
     place = can_place(cfg, fuse, owner, pos, brick, bombs_p) & alive

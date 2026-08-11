@@ -17,12 +17,20 @@ bmask, pid) -> (N, 2)`，SelfPlayRunner 里和网络对手无缝互换（靠
 
 from __future__ import annotations
 
+from functools import partial
+
 import torch
 
 from sim.config import MOVE_IDLE, N_BOMB, N_MOVES, SimConfig
 
 # (dy, dx)，与 config.DIRS 对齐：0上 1下 2左 3右
 _D = ((-1, 0), (1, 0), (0, -1), (0, 1))
+
+# Dijkstra 收敛判定频率（模块级，便于 DCU 调优）：每 CHECK_EVERY 趟才查一次
+# `torch.equal`（GPU→CPU 同步点）。实测 corridor 收敛 8-16 趟 → 4 粒度在
+# DCU 最优（29.9 vs 8 的 33.3 ms/tick，sync 比 MPS 贵；169 不查最差——
+# 空转 kernel 代价 > sync，见 prof_dijkstra_check）。
+CHECK_EVERY = 4
 
 
 def _sample_legal(mask: torch.Tensor) -> torch.Tensor:
@@ -168,52 +176,66 @@ def greedy_attack(sim, obs, mmask, bmask, pid: int):
     return torch.stack([move, place], dim=-1)
 
 
-def _dijkstra_field(sim, sources, danger, lam: float = 2.0,
-                    max_passes: int | None = None,
-                    blocked: torch.Tensor | None = None) -> torch.Tensor:
-    """多源 Dijkstra 价值场（Bellman-Ford 全张量化，无逐环境循环）。
+def _dijkstra_fields(sim, sources, danger, lam: float = 2.0,
+                     max_passes: int | None = None,
+                     blocked: torch.Tensor | None = None) -> torch.Tensor:
+    """S 场并行的多源 Dijkstra 价值场（Bellman-Ford 全张量化）。
 
-    V(c) = 从 `sources` 走到格 c 的**最短代价**，进入格 c 的代价 =
-    1 + lam×danger[c] —— 危险度直接融进路径代价，绕开危险区是"省代价"
-    的自然结果（A* 在网格上 ≡ Dijkstra，Bellman-Ford 是它的向量化写法）。
+    sources (N, S, H, W) bool → 返回 (N, S, H*W)。每场独立传播，与
+    `_dijkstra_field` 逐位一致（同一数学，只是 batch 维从 (N,V) 变 (N,S,V)）。
 
-    13×13=169 格 → 至多 V-1 趟收敛即精确；每趟 = 4 个邻居 gather+min。
-    5632 env 就是 (5632,169) 的批运算，一个 for 循环都没有。
-    `blocked`：不可通行掩码 (N,H,W) bool；None = wall|brick。调用方要传
-    **含在场泡泡**的掩码（逃生/逼近都不该规划穿泡的路径 —— 泡在 legal_mask
-    里挡移动，规划穿泡 = 走出永远走不通的路线）。返回 (N, H*W)。
+    **2026-08-10 优化：4 方向邻居 gather 合并** —— 每趟从 4 次独立
+    (gather+where+minimum) 合成 1 次批量 gather (N,S,4V) + 一次 min，kernel
+    数 ÷2.4（DCU launch-bound 的直接收益）。合并前每趟 12 kernel，合并后 ~5。
     """
-    n, h, w = danger.shape
+    n, s, h, w = sources.shape
     v = h * w
     dev = sim.device
     rc = torch.arange(v, device=dev)
     rr = rc // w
     cc = rc % w
-    neigh = []
+    # 4 方向邻居索引 + 越界掩码一次构建（(4, V)）
+    neigh_idx = []
+    neigh_oob = []
     for dr, dc in _D:
         nr = rr + dr
         nc = cc + dc
         oob = (nr < 0) | (nr >= h) | (nc < 0) | (nc >= w)
         flat = (nr.clamp(0, h - 1) * w + nc.clamp(0, w - 1))
-        neigh.append((flat, oob))
+        neigh_idx.append(flat)
+        neigh_oob.append(oob)
+    idx_all = torch.stack(neigh_idx, dim=0)          # (4, V)
+    oob_all = torch.stack(neigh_oob, dim=0)          # (4, V)
     if blocked is None:
         blocked = sim.wall | sim.brick
     b = blocked.reshape(n, v).float()
     cost = 1.0 + lam * danger.reshape(n, v)
     cost = torch.where(b > 0, torch.full_like(cost, float("inf")), cost)
-    dist = torch.full((n, v), float("inf"), device=dev)
-    dist = torch.where(sources.reshape(n, v), torch.zeros_like(dist), dist)
+    dist = torch.full((n, s, v), float("inf"), device=dev)
+    dist = torch.where(sources.reshape(n, s, v), torch.zeros_like(dist), dist)
     passes = max_passes or v
+    # 邻居索引展开 (1,1,4V) / 越界 (1,1,4,V)，expand 后循环内零重构
+    idx_flat = idx_all.reshape(1, 1, -1).expand(n, s, -1)
+    oob_3d = oob_all.reshape(1, 1, 4, v).expand(n, s, 4, v)
     for i in range(passes):
         old = dist
-        for flat, oob in neigh:
-            nd = dist.gather(1, flat.view(1, -1).expand(n, -1))
-            nd = torch.where(oob.view(1, -1).expand(n, -1),
-                             torch.full_like(nd, float("inf")), nd)
-            dist = torch.minimum(dist, nd + cost)
-        if i % 8 == 7 and bool(torch.equal(dist, old)):
-            break                             # 收敛提前停（每 8 趟查一次，省 sync）
+        nd = dist.gather(2, idx_flat)                # (N,S,4V)
+        nd = nd.reshape(n, s, 4, v)
+        nd = torch.where(oob_3d,
+                         torch.full_like(nd, float("inf")), nd)
+        nd = nd.min(dim=2).values                    # (N,S,V) 4 方向最小
+        dist = torch.minimum(dist, nd + cost.unsqueeze(1))
+        if i % CHECK_EVERY == CHECK_EVERY - 1 and bool(torch.equal(dist, old)):
+            break
     return dist
+
+
+def _dijkstra_field(sim, sources, danger, lam: float = 2.0,
+                    max_passes: int | None = None,
+                    blocked: torch.Tensor | None = None) -> torch.Tensor:
+    """单场多源 Dijkstra（兼容入口，包装 _dijkstra_fields 取第 0 场）。"""
+    return _dijkstra_fields(sim, sources.unsqueeze(1), danger, lam,
+                            max_passes, blocked)[:, 0]
 
 
 def _mode_ticker(sim):
@@ -228,9 +250,13 @@ def _mode_ticker(sim):
     if not hasattr(sim, "_bmode"):
         sim._bmode = torch.randint(0, 2, (n,), device=dev)
         sim._btimer = torch.randint(60, 240, (n,), device=dev)
+    # 计数用 getattr（老对象/新 sim 可能没有）。**只在 16 倍 tick 才查**
+    # bool(any())（GPU→CPU 同步点）—— 注意不能写成 `%16==0 or bool(...)`，
+    # Python 短路会让右侧在非 16 倍 tick 也被求值（每 tick 同步，v1 的 bug）。
+    sim._bmode_tick = getattr(sim, "_bmode_tick", 0) + 1
     sim._btimer -= 1
-    switch = sim._btimer <= 0
-    if bool(switch.any()):
+    if sim._bmode_tick % 16 == 0 and bool((sim._btimer <= 0).any()):
+        switch = sim._btimer <= 0
         new = torch.randint(0, 2, (n,), device=dev)
         sim._bmode = torch.where(switch, new, sim._bmode)
         sim._btimer = torch.where(
@@ -238,7 +264,8 @@ def _mode_ticker(sim):
     return sim._bmode
 
 
-def astar_attack(sim, obs, mmask, bmask, pid: int):
+def astar_attack(sim, obs, mmask, bmask, pid: int,
+                 eat_crates: bool = False):
     """危险度融合的寻路 bot（A*/Dijkstra 价值函数版）——课程强基准。
 
     价值函数 = 多源 Dijkstra 最短代价场（见 _dijkstra_field）：
@@ -277,7 +304,9 @@ def astar_attack(sim, obs, mmask, bmask, pid: int):
     # 自己的泡引信确定 → 它的 blast 是必爆区，作为 +2 的绕行惩罚叠加进
     # 逼近/逃生打分：放完泡会绕开自己的炮火，追对手也不钻进去。
     threat = (sim.owner == pid) & (sim.fuse > 0)       # (N,H,W) bool
-    for _ in range(int(sim.blast_cap[:, pid].max().item())):
+    # 膨胀轮数用静态上限（blast_cap ≤ growth_blast_max，每 tick 读
+    # `max().item()` 是 GPU→CPU 同步点，砍掉）；batch-max 本就统一膨胀。
+    for _ in range(int(cfg.growth_blast_max)):
         nb = threat.clone()
         nb[:, 1:, :] |= threat[:, :-1, :]
         nb[:, :-1, :] |= threat[:, 1:, :]
@@ -289,6 +318,9 @@ def astar_attack(sim, obs, mmask, bmask, pid: int):
     # 障碍 = 墙 | 砖 | 所有在场泡泡 —— 与 legal_mask 的 blocked 一致：
     # 规划穿泡 = 走出永远走不通的路线（旧版不挡泡，泡阵困住自己时 V_safe
     # 算出"穿泡逃生"，esc 打分里 IDLE 反而最小 → 站火海不动，修复点 1）。
+    # **单场 ×2（勿用 _dijkstra_fields 合并）**：批量 (N,2,V) 的 3D gather
+    # 在 MPS 上比两次 2D gather 慢 2 倍（实测 34→71ms）；DCU 上 launch-bound
+    # 可能相反，若在 DCU 验证更快可切回（_dijkstra_fields 已保留）。
     block_all = sim.wall | sim.brick | (sim.fuse > 0)
     V_safe = _dijkstra_field(sim, danger < 0.35, danger, blocked=block_all)
     opp_src = torch.zeros(n, h, w, dtype=torch.bool, device=dev)
@@ -326,28 +358,107 @@ def astar_attack(sim, obs, mmask, bmask, pid: int):
     app = Vopp_c + 2.0 * dng_c + 2.0 * thr_c + noise
     app = torch.where(dng_c >= 0.5, torch.full_like(app, float("inf")), app)
     app = torch.where(legal, app, torch.full_like(app, float("inf")))
-    esc = Vsafe_c * 100.0 + Vopp_c + 2.0 * thr_c + noise     # 逃生命安全优先，顺带逼近
+    app_ok = app.min(dim=1).values.isfinite()
+    use_esc = (own_dng >= 0.35) | ~app_ok      # 脚下危险 或 逼近无路 → 转逃生
+    # 逃生打分**只用 Vsafe**（安全距离），**不加 Vopp**：对手被泡阵/墙封住时
+    # V_opp 只在封锁区内有限，逃生方向的 Vopp=inf 会把 esc 打成全 inf →
+    # argmin 走到 fallback → 站火海不动（真 bug：有出路却停原地）。
+    # 逃生本质 = "尽快到安全区"，与对手位置无关。
+    esc = Vsafe_c * 100.0 + 2.0 * thr_c + noise     # 逃生命安全优先，顺带绕开威胁
+    # **停方向逃生禁止（修复点 4）**：自己脚下危险（马上爆）时，停 = 留在
+    # 必受伤的格，永远不是逃生选项。旧版（含 +1.0 惩罚）不够：esc=Vsafe×100
+    # 尺度下停的 Vsafe 常最小（已在安全格附近），+1.0 压不住 Vsafe 微差 →
+    # 危险 0.49 涨到 0.59 连续站死。直接把停方向 esc 打成 inf（禁停），argmin
+    # 必选非停方向；真被围死（非停全 inf）时 fallback 兜底允许停。
+    esc = torch.where(use_esc.unsqueeze(1) & (torch.arange(5, device=dev) == 4),
+                      torch.full_like(esc, float("inf")), esc)
     esc = torch.where(legal, esc, torch.full_like(esc, float("inf")))
 
-    app_ok = app.min(dim=1).values.isfinite()
-    use_esc = (own_dng >= 0.35) | ~app_ok
-    score = torch.where(use_esc.unsqueeze(1), esc, app)
+    # --- 吃道具层（hunter 专属，高优先级）---
+    # 成长属性（泡数/威力/速度）中 **≥2 项低于上限的 70%** 且场上有宝箱 →
+    # 朝最近宝箱寻路（走路踩箱升级），优先级高于逼近、低于逃生（命要紧）。
+    # 特别适合 corridor：成长全靠踩箱，属性不满时先补属性再打，不无脑冲。
+    # **避险（不因吃箱变笨）**：吃箱路径对齐 app 的避险 —— 快爆泡（dng≥0.5）
+    # 禁行（Vcrate×100 不能压过危险），且四周有更优非停方向时禁停（防原地
+    # 发呆被炸）。危险接近时 use_esc 转逃生（已有，吃箱永不压过逃命）。
+    eat_on = torch.zeros(n, dtype=torch.bool, device=dev)
+    eat = None
+    # 不再用 bool(sim.crate.any()) 提前跳过（GPU→CPU 同步点）—— 向量化
+    # 处理：crate 全空时 has_crate 全 False → eat_on 全 False，行为不变，
+    # V_crate 空源 8 趟即收敛（同步频率反而更低）。
+    if eat_crates and hasattr(sim, "crate"):
+        # 各属性上限（corridor 用成长上限；open 无成长字段 → 回退基础值，
+        # 此时 fracs 恒 1.0 → hungry 恒 False，天然不触发）
+        b_max = float(getattr(cfg, "growth_bombs_max", cfg.max_bombs))
+        z_max = float(getattr(cfg, "growth_blast_max", cfg.blast))
+        s_max = float(getattr(cfg, "growth_speed_max", 1.0))
+        fracs = torch.stack([
+            sim.bombs_cap[:, pid].float() / b_max,
+            sim.blast_cap[:, pid].float() / z_max,
+            sim.spd_g[:, pid].float() / s_max,
+        ], dim=0)                                     # (3,n)
+        hungry = (fracs < 0.7).sum(dim=0) >= 2        # ≥2 项不满 70%
+        has_crate = sim.crate.any(dim=(1, 2))
+        eat_on = hungry & has_crate & sim.alive[:, pid]
+        # 朝最近宝箱的 Dijkstra 场（与 V_safe/V_opp 同款，泡挡路）
+        V_crate = _dijkstra_field(sim, sim.crate, danger, blocked=block_all)
+        Vcrate_c = V_crate.gather(1, cflat)           # (N,5)
+        eat = Vcrate_c * 100.0 + 2.0 * dng_c + noise  # 吃箱优先，避险
+        # 快爆泡禁行（对齐 app/flee）：不钻马上爆的格 —— 之前没有这层，
+        # Vcrate×100 压过危险 → 直奔箱子走进爆炸区被炸死（用户实测变笨）。
+        eat = torch.where(dng_c >= 0.5,
+                          torch.full_like(eat, float("inf")), eat)
+        eat = torch.where(legal, eat, torch.full_like(eat, float("inf")))
+        # 禁停（防发呆）：四周有**更优非停方向**（更近箱或更安全）就不许停，
+        # 停只在"停确实最优"（四周都更远更危险）时允许 —— 否则原地发呆被炸。
+        eat_no_idle = torch.where(torch.arange(5, device=dev) < 4,
+                                  eat, torch.full_like(eat, float("inf")))\
+            .min(dim=1).values
+        # 禁停判定：`eat_no_idle (N,) < eat[:, 4:5] (N,1)` 直接广播会变 (N,N)
+        # （一维 N 对齐 (N,1) 的最后一维 1）→ expand_as 崩（2026-08-10 实测，
+        # hunter 触发 eat 分支、n=5632 时报 expanded 5632≠5）。必须 unsqueeze
+        # 成 (N,1) 再比：每行"非停最优" vs "停"。arange(5)==4 的 (5,) 与
+        # (N,1) 广播 → (N,5)（5 对齐最后一维，即 IDLE 列），无需 expand_as。
+        idle_better = (torch.arange(5, device=dev) == 4) \
+            & (eat_no_idle.unsqueeze(1) < eat[:, 4:5])
+        eat = torch.where(idle_better,
+                          torch.full_like(eat, float("inf")), eat)
+        # 吃箱路径必须可达（V_crate 全 inf = 被泡/墙封住到不了箱）→ 回退逼近，
+        # 否则 eat_on 时 eat 全 inf → argmin 乱走（跟逃生 fallback 同理）。
+        eat_on = eat_on & eat.min(dim=1).values.isfinite()
+
+    score = torch.where(use_esc.unsqueeze(1), esc,
+                        torch.where(eat_on.unsqueeze(1),
+                                    eat if eat is not None else app, app))
     # 行为模式：flee（1）= 远离对手（-V_opp 最小化）+ 避险；aggressive（0）= 逼近。
     mode = getattr(sim, "_bmode", None)
     if mode is not None:
-        flee = -Vopp_c + 2.0 * dng_c + 2.0 * thr_c + noise     # 朝最远格 + 避险
+        # V_opp 被泡阵封住时是 inf → -inf 全等 → argmin 乱走；钳到 1e3 让
+        # "远离度"退化到只比危险/威胁（反正都远离不了被封的对手）。
+        vopp_f = Vopp_c.clamp(max=1e3)
+        flee = -vopp_f + 2.0 * dng_c + 2.0 * thr_c + noise     # 朝最远格 + 避险
         flee = torch.where(dng_c >= 0.5, torch.full_like(flee, float("inf")), flee)
         flee = torch.where(legal, flee, torch.full_like(flee, float("inf")))
         flee = torch.where(use_esc.unsqueeze(1), esc, flee)    # 危险时也先逃
         score = torch.where((mode == 1).unsqueeze(1), flee, score)
     move = score.argmin(dim=1).long()
-    # 终极兜底（修复点 2）：打分全 inf（被泡/火完全围死，V_safe 无路）时，
+    # 终极兜底（修复点 2 + 修复点 3）：打分全 inf（被泡/火完全围死，V_safe 无路）时，
     # 选**最小 danger 的合法格**（跟 greedy 的逃生兜底一致）—— 宁可走火也
     # 不原地等死。旧版 argmin 在全 inf 时返回 0 = 向上，被掩码屏蔽后等于
     # 站着不动 → "站火海不动"的另一个来源。
+    # **修复点 3（优先非停）**：全 inf 时从**非停**方向里选最小危险 —— 原地停
+    # 是"等死"，只要有方向能降低/持平危险就优先走（停只在所有方向都更危险
+    # 时才允许）。旧版"最小危险合法格"常选到停（原地危险恰好最低）→ 站火海。
     any_legal = legal.any(dim=1)
     no_path = ~score.isfinite().any(dim=1)
-    fallback = torch.where(legal, dng_c, torch.full_like(dng_c, float("inf"))).argmin(dim=1)
+    dng_legal = torch.where(legal, dng_c, torch.full_like(dng_c, float("inf")))
+    # 非停方向（idx 0-3）里最小危险；有 → 走它；没有 → 才允许停（idx 4）
+    dng_move = torch.where(torch.arange(5, device=dev) < 4,
+                           dng_legal, torch.full_like(dng_legal, float("inf")))
+    fallback_move = dng_move.argmin(dim=1)
+    fallback_idle = dng_legal.argmin(dim=1)          # 含停在全部候选兜底
+    has_move_opt = dng_move.min(dim=1).values.isfinite()
+    fallback = torch.where(has_move_opt, fallback_move, fallback_idle)
     move = torch.where(no_path & any_legal, fallback, move)
 
     # --- 放泡：十字内打得到对手 / 连锁老泡 / **近身压制**，且不自爆、能撤 ---
@@ -383,7 +494,13 @@ def astar_attack(sim, obs, mmask, bmask, pid: int):
     place = (can & (aligned_opp | near_opp | chain)
              & (own_dng < 0.2) & can_escape).long()
     if mode is not None:
-        place = torch.where((mode == 1), torch.zeros_like(place), place)  # flee 不放泡
+        # flee 模式：不放"进攻泡"（aligned/near/chain 都是进攻导向），但保留
+        # **撒雷阻追兵**—— 对手在十字射程内且自己脚下安全、放完能撤时丢一颗
+        # 身后雷（封追兵路线），这是逃避型敌人难追的关键（经典"逃跑撒雷"）。
+        # 安全门槛（own_dng<0.2 + can_escape）保证不是自杀式乱丢。
+        flee_place = (can & (aligned_opp | near_opp)
+                      & (own_dng < 0.2) & can_escape).long()
+        place = torch.where((mode == 1), flee_place, place)
 
     dead = ~sim.alive[:, pid]
     move = torch.where(dead, torch.full_like(move, MOVE_IDLE), move)
@@ -438,7 +555,8 @@ def make_bot(sim, kind: str, mode: bool = True) -> BotWrapper:
         return BotWrapper(sim, astar_attack, "astar",
                           mode_fn=_mode_ticker if mode else None)
     if kind == "hunter":
-        # 纯进攻：恒 aggressive（mode=None = 不切 flee；astar_attack 里
-        # mode is None 时用 aggressive 评分/放泡路径）
-        return BotWrapper(sim, astar_attack, "hunter")
+        # 纯进攻 + **吃道具层**：恒 aggressive（mode=None = 不切 flee），
+        # eat_crates=True → 成长属性 ≥2 项不满 70% 且有宝箱时，高优先级寻路
+        # 吃箱补属性（特别适合 corridor：成长全靠踩箱）。
+        return BotWrapper(sim, partial(astar_attack, eat_crates=True), "hunter")
     raise ValueError(f"未知 bot 类型: {kind}")

@@ -124,6 +124,97 @@ def test_max_chain_truncates():
     assert trig[0, 3, 1] and not trig[0, 3, 3]
 
 
+def test_long_chain_fully_detonates():
+    """长链（9+ 颗泡首尾相接）必须全部引爆，不能尾部漏爆。
+
+    回归（用户实测 bug）：max_chain=8 限制连锁轮数 → 13×13 一行最长 13 颗
+    泡需要 12 轮连锁，9+ 颗长链尾部漏爆（danger 预警预测覆盖但 resolve 实际
+    没引爆）。修复：max_chain 8→16（SimConfig 默认）。resolve_explosions 用
+    SimConfig 的 max_chain 直接验证整条链引爆。
+    """
+    from sim.config import SimConfig
+    from sim.torch_sim import BatchedSim
+
+    cfg = SimConfig(height=13, width=13, max_bombs=20)
+    sim = BatchedSim(cfg, 1, seed=0)
+    sim.wall.zero_()
+    sim.fuse.zero_()
+    sim.owner.fill_(-1)
+    # 一整行 13 颗泡（blast=1 首尾相接），最左 fuse=0 自然爆，其余满引信
+    for i in range(13):
+        sim.fuse[0, 6, 0 + i] = 0 if i == 0 else cfg.fuse
+        sim.owner[0, 6, 0 + i] = 0
+        sim.bomb_blast[0, 6, 0 + i] = 1
+    a = torch.tensor([[[4, 0], [4, 0]]], dtype=torch.long)
+    _, _, info = sim.step(a, auto_reset=False)
+    exploded = int((sim.owner[0] == -1).sum())      # 全被清场（引爆后 owner→-1）
+    assert exploded >= 13, f"13 颗长链应全引爆（清场），实际 {exploded}"
+
+
+def test_danger_and_resolve_agree_on_long_chain():
+    """danger_map 预警与 resolve_explosions 实际引爆轮数一致：长链不留尾巴。
+
+    回归：danger 阶段 A 用 max_chain 轮、resolve 用 max_chain-1 次连锁 ——
+    旧 max_chain=8 时 9+ 颗链 danger 预测覆盖但 resolve 截断漏爆。
+    修复后（max_chain=16）两者都应覆盖整条链，且 danger>0 的泡必被引爆。
+    """
+    from sim.blast import danger_map
+
+    fuse = torch.zeros((1, 7, 20), dtype=torch.int16)
+    owner = torch.full((1, 7, 20), -1, dtype=torch.int8)
+    blast = torch.zeros((1, 7, 20), dtype=torch.long)
+    wall = torch.zeros((1, 7, 20), dtype=torch.bool)
+    for i, f in enumerate((0,) + (10,) * (10 - 1)):     # 10 颗链
+        fuse[0, 3, 2 + i] = f
+        owner[0, 3, 2 + i] = 0
+        blast[0, 3, 2 + i] = 1
+    mc = 16
+    dng = danger_map(fuse, wall, blast, 10, max_chain=mc)
+    _, triggered = resolve_explosions(fuse, owner, wall, blast, mc)
+    bomb_cells = fuse > 0
+    assert int((bomb_cells & ~triggered).sum()) == 0, "长链必须全引爆"
+    assert int(((bomb_cells & (dng > 0.01)) & ~triggered).sum()) == 0, \
+        "danger 预测危险的泡必须实际引爆（两者轮数一致）"
+
+
+def test_danger_map_chain_group_uniform():
+    """连锁组危险度应与实际爆炸时刻一致：同一 tick 同爆的一组炮，危险度
+    统一为组内最危险（先放的深、后放的浅是 bug —— 显示/训练读到的都是
+    danger_map 同一份输出）。
+
+    10 颗横向连炮（blast=1 首尾相接），先放的引信更短（更接近爆炸），
+    后放的引信长。max_chain>1 时应收敛到同一危险值；孤立炮保持自身梯度。
+    """
+    from sim.blast import danger_map
+
+    h, w, fmax = 11, 11, 10
+    wall = torch.zeros((1, h, w), dtype=torch.bool)
+    fuse = torch.zeros((1, h, w), dtype=torch.int16)
+    blast_map = torch.zeros((1, h, w), dtype=torch.long)
+    for col in range(1, 11):
+        fuse[0, 5, col] = 11 - col              # 先放的引信短、后放的长
+        blast_map[0, 5, col] = 1
+
+    new = danger_map(fuse, wall, blast_map, fmax, max_chain=8)
+    vals = [float(new[0, 5, col]) for col in range(1, 11)]
+    assert max(vals) - min(vals) < 0.15, \
+        f"连锁组应同时爆、同色深：{vals}（组内极差 {max(vals)-min(vals):.3f}）"
+
+    old = danger_map(fuse, wall, blast_map, fmax, max_chain=1)
+    oldv = [float(old[0, 5, col]) for col in range(1, 11)]
+    assert max(oldv) - min(oldv) > 0.5, \
+        "回归参照：max_chain=1（无连锁修正）应保留先深后浅的旧渐变"
+
+    # 孤立炮（不相连）必须保持各自引信梯度（指数化后），不被"连锁修正"误伤
+    fuse2 = torch.zeros((1, h, w), dtype=torch.int16)
+    blast2 = torch.zeros((1, h, w), dtype=torch.long)
+    fuse2[0, 3, 3], blast2[0, 3, 3] = 8, 1
+    fuse2[0, 3, 8], blast2[0, 3, 8] = 2, 1
+    d2 = danger_map(fuse2, wall, blast2, fmax, max_chain=8)
+    assert abs(float(d2[0, 3, 3]) - (1 - (8 - 1) / fmax) ** 2) < 1e-3
+    assert abs(float(d2[0, 3, 8]) - (1 - (2 - 1) / fmax) ** 2) < 1e-3
+
+
 # ---------------- 连续移动 ----------------
 
 def test_speed_is_cells_per_second():
@@ -356,9 +447,14 @@ def test_timeout_higher_hp_wins():
                           torch.tensor(-scaled - cfg.step_penalty), atol=1e-5)
 
 
-def test_timeout_higher_hp_wins_discrete_fallback():
-    """win_hp_scaled=False（旧离散规则）：超时血多者胜 ±win_bonus 整值，不看血量。"""
-    cfg = C(height=7, width=7, max_steps=1, max_hp=5, win_hp_scaled=False)
+def test_timeout_higher_hp_annealed():
+    """超时全员存活（timeout_draw=True 默认）→ 血多者胜 × 退火 α。
+
+    新语义：超时血量差奖励 × _explore_coef（默认 1.0，无退火时满额）。
+    win_hp_scaled=False + 死亡终局才给固定 win_bonus —— 超时不是死亡，
+    给血量差比例分（8/5×血量差×α）。血量 3 vs 1 → +8×2/5×1.0 = +3.2。
+    """
+    cfg = C(height=7, width=7, max_steps=1, max_hp=5)
     sim = make(cfg)
     clear(sim)
     sim.pos[0, 0] = torch.tensor([1.5, 1.5])
@@ -366,21 +462,22 @@ def test_timeout_higher_hp_wins_discrete_fallback():
     sim.hp[0, 0] = 3
     sim.hp[0, 1] = 1
     reward, done, _ = sim.step(act((MOVE_IDLE, 0), (MOVE_IDLE, 0)), auto_reset=False)
-    assert torch.allclose(reward[0, 0], torch.tensor(cfg.win_bonus - cfg.step_penalty),
-                          atol=1e-5)
-    assert torch.allclose(reward[0, 1], torch.tensor(-cfg.win_bonus - cfg.step_penalty),
-                          atol=1e-5)
+    assert bool(done[0]) and int(sim.alive[0].sum()) == 2
+    hp_gap = 2.0
+    scaled = cfg.win_bonus * hp_gap / cfg.max_hp * 1.0     # ×α（explore_coef 默认 1.0）
+    assert torch.allclose(reward[0, 0],
+                          torch.tensor(scaled - cfg.step_penalty), atol=1e-5)
+    assert torch.allclose(reward[0, 1],
+                          torch.tensor(-scaled - cfg.step_penalty), atol=1e-5)
 
 
-def test_death_win_scaled_by_surviving_hp():
-    """死亡终局：终局分按幸存者血量给 —— 残血险胜少于满血击杀。
+def test_death_fixed_win_bonus():
+    """死亡终局（win_hp_scaled=False 默认）→ 击杀给**固定** ±win_bonus，不看血量差。
 
-    这是"按剩余血量加分"的核心：干净击杀（5 血）拿满 win_bonus，
-    残血险胜（1 血）只拿 win_bonus/max_hp —— 反"拿血换命"。
+    用户定：对手 hp=0（击杀）才是奖励，固定值 —— 残血险胜和满血击杀同分。
     """
     cfg = C(height=7, width=7, fuse=1, blast=1, max_hp=5)
-    for win_hp, expect in ((5, cfg.win_bonus), (1, cfg.win_bonus / 5),
-                           (3, cfg.win_bonus * 3 / 5)):
+    for win_hp in (5, 1, 3):
         sim = make(cfg)
         clear(sim)
         sim.pos[0, 0] = torch.tensor([6.5, 6.5])          # 幸存者：离远
@@ -393,10 +490,9 @@ def test_death_win_scaled_by_surviving_hp():
         assert bool(done[0]) and int(sim.alive[0, 0]) == 1, "玩家 0 应幸存"
         assert int(sim.alive[0, 1]) == 0, "玩家 1 应死"
         got = reward[0, 0]
-        assert torch.allclose(got,
-                              torch.tensor(expect + cfg.hit_reward - cfg.step_penalty),
-                              atol=1e-5), \
-            f"win_hp={win_hp}: 期望 {expect}+hit-step，实际 {got}"
+        expect = cfg.win_bonus + cfg.hit_reward - cfg.step_penalty
+        assert torch.allclose(got, torch.tensor(expect), atol=1e-5), \
+            f"win_hp={win_hp}: 击杀固定 {cfg.win_bonus}（应 {expect}），实际 {got}"
 
 
 def test_timeout_even_hp_is_draw():
@@ -415,7 +511,8 @@ def test_info_winner_death_and_timeout():
     """info['winner'] 与 PPO._tally 的判据一致：
 
     - 死亡终局（n_alive==1）→ 存活者 winner=True；
-    - 超时全员存活 → 血多者 True，血平全 False（平局）；
+    - 超时全员存活（timeout_draw=True 默认）→ 全 False（平局，reward 血差×退火
+      但 ELO/tally 不计胜负 —— 超时不算赢）；
     - 同时死光 → 全 False。
     """
     # (a) 死亡终局：0 号被邻格泡炸死，1 号存活
@@ -433,7 +530,7 @@ def test_info_winner_death_and_timeout():
     assert bool(done[0]) and bool(info["winner"][0, 1])
     assert not bool(info["winner"][0, 0])
 
-    # (b) 超时血多者胜
+    # (b) 超时全员存活（timeout_draw=True 默认）→ winner 全 False（平局口径）
     cfg = C(height=7, width=7, max_steps=1, max_hp=5)
     sim = make(cfg)
     clear(sim)
@@ -441,8 +538,9 @@ def test_info_winner_death_and_timeout():
     sim.pos[0, 1] = torch.tensor([5.5, 5.5])
     sim.hp[0, 0], sim.hp[0, 1] = 3, 1
     _, done, info = sim.step(act((MOVE_IDLE, 0), (MOVE_IDLE, 0)), auto_reset=False)
-    assert bool(done[0]) and bool(info["winner"][0, 0])
-    assert not bool(info["winner"][0, 1])
+    assert bool(done[0])
+    assert not bool(info["winner"].any()), \
+        "timeout_draw=True：超时不进 winner（ELO/tally 计平局），reward 才给血差×退火"
 
     # (c) 超时血平 → 平局
     sim = make(cfg)
@@ -473,12 +571,12 @@ def test_danger_zone_standing_penalty():
     sim = make(cfg)
     clear(sim)
     # 玩家站在 (3,4)，(3,3) 有一泡 fuse=3 → (3,4) 是危险区。
-    # 奖励段 fuse 已递减为 2：danger = 1 - (2-1)/FUSE
+    # 奖励段 fuse 已递减为 2：danger = (1 - (2-1)/FUSE)^exp（exp=2）
     sim.pos[0, 0] = torch.tensor([3.5, 4.5])
     sim.pos[0, 1] = torch.tensor([6.5, 6.5])
     sim.fuse[0, 3, 3], sim.owner[0, 3, 3] = 3, 1
     reward, _, _ = sim.step(act((MOVE_IDLE, 0), (MOVE_IDLE, 0)), auto_reset=False)
-    danger = 1.0 - 1.0 / cfg.fuse          # fuse 3→2 后：(fuse-1)/FUSE = 1/45
+    danger = (1.0 - 1.0 / cfg.fuse) ** 2     # fuse 3→2 后：(fuse-1)/FUSE = 1/45，再平方
     expected = -cfg.step_penalty - cfg.danger_penalty * danger
     assert torch.allclose(reward[0, 0], torch.tensor(expected), atol=1e-5), \
         f"应扣 danger 罚: {reward[0, 0].item():.4f} vs {expected:.4f}"
@@ -1253,29 +1351,22 @@ def test_corridor_max_growth_speed_no_tunnel():
         f"0.9 格/tick 高速撞 brick 应贴右壁停（x≈4.3）: x={x:.3f}"
 
 
-def test_approach_reward_on_closing():
-    """接近奖励：朝对手移动（距离 < approach_dist 且缩短）→ +approach_reward×缩短量。
+def test_approach_reward_removed():
+    """接近/追击奖励已按用户要求移除（approach_reward=0 默认，代码段删除）。
 
-    方向正确（朝对手）移动 2 tick 应拿到接近奖励；只横向/远离不拿。
-    排除其他奖励干扰（danger_penalty=0、不踩箱不放泡）。
+    朝对手移动不再产生接近分 —— 只有步罚。防止未来有人改回 approach_reward
+    而漏掉这里的行为回归。
     """
     cfg = SimConfig(height=13, width=13, n_players=2,
                     map_mode="corridor", corridor_width=5, top_wall_rows=4,
                     max_steps=1800, speed=3.0, open_fraction=0.0,
-                    approach_reward=0.1, approach_dist=5.0, danger_penalty=0.0)
+                    danger_penalty=0.0)
     sim = BatchedSim(cfg, 1, seed=0)
-    # 玩家 0 在 (6.5,3.5)，玩家 1 在 (6.5,9.5)，距离 6 > 5 → 不触发
     sim.pos[0, 0] = torch.tensor([6.5, 3.5])
-    sim.pos[0, 1] = torch.tensor([6.5, 9.5])
+    sim.pos[0, 1] = torch.tensor([6.5, 8.5])          # 距离 5，朝它走
     r1, _, _ = sim.step(act((MOVE_RIGHT, 0), (MOVE_IDLE, 0)), auto_reset=False)
-    # 距离 6→5.7，仍 >5 → 无接近奖励，只有步罚
-    assert abs(float(r1[0, 0]) - (-cfg.step_penalty)) < 1e-5
-    # 玩家 1 移到 (6.5,8.5)：距离 5 < 5 → 进入接敌区；玩家 0 继续朝它走 → 缩短 → 得分
-    sim.pos[0, 1] = torch.tensor([6.5, 8.5])
-    r2, _, _ = sim.step(act((MOVE_RIGHT, 0), (MOVE_IDLE, 0)), auto_reset=False)
-    gain = 0.3 * cfg.approach_reward      # 0.3 格/tick × 0.1
-    assert abs(float(r2[0, 0]) - (gain - cfg.step_penalty)) < 1e-5, \
-        f"朝对手接近应得 {gain:.3f}: {r2[0, 0].item()}"
+    assert abs(float(r1[0, 0]) - (-cfg.step_penalty)) < 1e-5, \
+        f"接近奖励已删除：朝对手移动应只有步罚，实际 {r1[0, 0].item()}"
 
 
 def test_ring_map_layout_and_crate_prob():

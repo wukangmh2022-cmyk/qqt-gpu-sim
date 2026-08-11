@@ -172,7 +172,12 @@ class ActorCritic(nn.Module):
         return (self.masked_dist(ml, move_mask), self.masked_dist(bl, bomb_mask), val)
 
     def act(self, obs, move_mask, bomb_mask, pid: int = 0):
-        """采样一步。返回 (actions (B,2), logp (B,), value (B,))。"""
+        """采样一步。返回 (actions (B,2), logp (B,), value (B,))。
+
+        保持 Categorical.sample —— 实测 Gumbel-max 替代在 HIP 上慢 3 倍
+        （log_softmax 处理 -inf + 更多 kernel），且 profiler 的 Memcpy DtoH
+        是测量开销（CUDA 事件读取）非真实同步（2026-08-10 对比后回滚）。
+        """
         dm, db, val = self.dists(obs, move_mask, bomb_mask, pid)
         am, ab = dm.sample(), db.sample()
         logp = dm.log_prob(am) + db.log_prob(ab)

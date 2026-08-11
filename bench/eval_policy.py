@@ -122,7 +122,8 @@ def run(sim, policy, max_ticks: int) -> dict:
         """角色中心格的 danger 值（与训练奖励同源）。"""
         from sim.blast import danger_map
         from sim.move import center_cell
-        dmap = danger_map(sim.fuse, sim.wall, cfg.blast, cfg.fuse)
+        dmap = danger_map(sim.fuse, sim.wall, cfg.blast, cfg.fuse,
+                          max_chain=cfg.max_chain)
         cell = center_cell(pos)
         flat = cell[..., 0] * cfg.width + cell[..., 1]
         return dmap.view(n, -1).gather(1, flat.unsqueeze(1)).squeeze(1)
