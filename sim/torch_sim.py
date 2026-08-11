@@ -152,10 +152,14 @@ class BatchedSim:
         - corridor 关：顶部永久墙 + 左右 brick + 宝箱成长，出生点贴脸。
         观测无地图类型标记，网络靠状态差异自然适配两类地图。
         """
-        count = int(mask.sum())
+        # 免同步：int(mask.sum()) 是 device→host 同步，且 reset_ 在 step 末尾被
+        # 调（同步会排空整条流水线，910B 上 ~7ms/tick 的大头）。nonzero 本来
+        # 就要算，count 顺带从 idx.numel()（元数据，零同步）拿。空 mask 的
+        # nonzero 是廉价空 kernel（~10µs），可接受。
+        idx = mask.nonzero(as_tuple=True)[0]
+        count = idx.numel()
         if count == 0:
             return
-        idx = mask.nonzero(as_tuple=True)[0]
         # open 标记本轮先清（防"上次是 open、这次是 corridor"的 env 残留），
         # open 分支下面再置 True —— 不能在末尾清，掉血惩罚整局要读它。
         self._is_open[idx] = False
@@ -720,6 +724,16 @@ class BatchedSim:
         # 2. 放泡（在移动前，落在这一 tick 的起始中心格：按下即落在脚下）。
         #    放泡那一刻按当前档位快照（bombs_p 上限、blast_p 威力存进 bomb_blast）。
         placed = self._place_bombs(bomb, alive0, bombs_p, blast_p)
+        # danger 档位上限提前取（**2026-08-11 同步下移**）：此刻 bomb_blast 含
+        # 所有在场泡（含本 tick 结算后会爆炸清场的）→ max ≥ 结算后的 danger max，
+        # 作为 blast_max_hint 传给 danger 恒安全（多出的空步结果逐位不变）。
+        # 在队列浅处同步（~30 ops ≈ 1-2ms），而不是 danger 内部（L938 处队列
+        # ~2000 ops ≈ 20ms）—— danger 由此完全零 host 同步。hazard 波次炸弹
+        # 的上限由 _hazard_wave() 返回值补充（cfg.hazard_fraction=0 时恒 0）。
+        if not self._graph_mode:
+            blast_hint = max(int(self.bomb_blast.max()), int(cfg.blast))
+        else:
+            blast_hint = cfg.growth_blast_max   # graph 捕获：静态固定档位
         # 放泡奖励（即时信号，一次性）：覆盖敌人 + 连锁快爆的泡（见 _place_predict_reward）。
         # **early return**：没有放泡成功的 tick 直接跳过（火焰预测整图传播很贵 ——
         # corridor 满成长 blast=7 时 rays 每 tick 196 kernel，放泡只占 ~10% tick，
@@ -738,7 +752,9 @@ class BatchedSim:
             place_bonus = torch.zeros(n, cfg.n_players, device=d)
         # 被动计时：没放泡的活人 +1 tick，放成功的清零（in-place）
         self.since_bomb.add_(1)
-        self.since_bomb[placed] = 0
+        # masked_fill_ 替代掩码索引赋值 `[placed]=0`：后者内部 aclnnNonzeroV2
+        # 会同步流（NPU graph 捕获段内非法，910B 实测 capture 失败）。
+        self.since_bomb.masked_fill_(placed, 0)
         # 3. 连续移动 + AABB 滑动碰撞。速度 = 基础速 × 玩家成长倍率 × 对打玩家倍率。
         blocked = self.wall | self.brick | (self.fuse > 0)
         sm = spd_p
@@ -753,12 +769,14 @@ class BatchedSim:
         #    **宝箱模式**：炸掉的砖变宝箱（crate），谁走到谁开 —— 不需要归属图。
         # graph 模式（_graph_mode）：early_exit 关（固定轮）+ blast 档位静态
         # 上限（rays 的 max() 是 capture 内非法的 host 同步；空档 pad 被
-        # graph 的固定序列吸收，无 launch 开销）。
+        # graph 的固定序列吸收，无 launch 开销）+ chain_cap 固定轮（cap=4，
+        # 910B 实测爆炸链深 max≤4 —— 比固定 max_chain=16 少 4 倍连锁 pad）。
         covered, triggered = resolve_explosions(
             self.fuse, self.owner, self.wall, self._blast_map(),
             cfg.max_chain, self.brick,
             early_exit=not self._graph_mode,
             blast_max_hint=cfg.growth_blast_max if self._graph_mode else None,
+            chain_cap=None if not self._graph_mode else 4,
         )
         # 爆炸时刻的连锁兑现（chain_blast_bonus）：被**连锁提前点燃**的泡每颗
         # 给**点火源**（引信自然走完的那颗泡的主人）+0.08，奖励"先放 → 别处续
@@ -812,7 +830,8 @@ class BatchedSim:
         # 无敌期：每 tick 递减（≥0）；实际掉血的人重新进入无敌期
         self.invuln.sub_(1)
         self.invuln.clamp_(min=0)
-        self.invuln[hit_eff] = cfg.invuln_ticks
+        # masked_fill_ 替代掩码索引赋值（同 since_bomb：NPU graph 捕获兼容）
+        self.invuln.masked_fill_(hit_eff, cfg.invuln_ticks)
         # 6. 清场，泡泡额度自然归还（owner 置 -1），威力同步清空（in-place）
         torch.where(triggered, torch.zeros_like(self.fuse), self.fuse, out=self.fuse)
         torch.where(triggered, torch.full_like(self.owner, -1), self.owner,
@@ -823,7 +842,11 @@ class BatchedSim:
         self.t.add_(1)
         # 炸弹雨波次（hazard 模式）：在 t 累计之后、终局判定之前 ——
         # 新落炸弹 fuse 满值，不参与本 tick 结算。
-        self._hazard_wave()
+        # 返回本 tick 落下的最大波次炸弹 blast（无波次 = 0）→ 并入 danger
+        # 的 blast_hint（hazard 炸弹 blast 可达 hazard_blast_max，放泡后取
+        # 的 bomb_blast.max() 覆盖不到它）。
+        hazard_extra = self._hazard_wave()
+        blast_hint = max(blast_hint, hazard_extra)
         n_alive = self.alive.sum(dim=1)
         done = (n_alive <= 1) | (self.t >= cfg.max_steps)
 
@@ -927,11 +950,17 @@ class BatchedSim:
         # danger_map 和观测危险通道同源（同一状态、同一函数）→ 网络有直接的监督。
         # **乘 _explore_coef（探索退火）**：前期防自杀引导（站自己泡旁要疼），
         # 后期归零 —— 和放炮塑形一起退掉，只靠真实胜负信号（hit/suicide/win）。
+        # **同步免除（chain_cap，2026-08-11）**：非 graph 模式传固定轮上限
+        # （默认 4，链长 ≤cap 结果与动态早退逐位一致，910B 训练分布实测链长
+        # max≤4）+ 上方提前取的 blast_hint（放泡后 max ≥ 结算后 max，恒安全）
+        # → danger 零 host 同步（原来 5 次：守卫/轮检查/档位 max）。graph
+        # 捕获段（_graph_mode）仍需静态固定轮 + 静态档位。
         danger = danger_map(self.fuse, self.wall, self._blast_map(), cfg.fuse,
                             self.brick, cfg.max_chain,
                             early_exit=not self._graph_mode,
-                            blast_max_hint=cfg.growth_blast_max
-                            if self._graph_mode else None)
+                            blast_max_hint=blast_hint,
+                            chain_cap=None if self._graph_mode
+                            else cfg.chain_cap_rounds)
         self._dng_cache = danger                 # 缓存给本 tick 的 observe 复用
         self._dng_sig = self._dng_signature()
         cell = center_cell(self.pos)
@@ -1159,7 +1188,7 @@ class BatchedSim:
             )
         return placed
 
-    def _hazard_wave(self) -> None:
+    def _hazard_wave(self) -> int:
         """炸弹雨波次（hazard 关专用，config 的 hazard_* 注释）。
 
         每 hazard_wave_ticks tick 一次（t>0，首波在 5 秒后）：每关掷
@@ -1171,16 +1200,22 @@ class BatchedSim:
         环境炸弹 owner = n_players（越界标记）→ 不进任何玩家的引信通道，
         只出现在危险图通道（网络正是靠它躲的）。训练热路径直接 step()
         用设备 RNG（CUDA graph 捕获路径不覆盖此模式）。
+
+        返回本 tick 落下的最大波次炸弹 blast（无波次 = 0）。用 wave_idx 的
+        numel（元数据，零同步）判波次，返回 cfg.hazard_blast_max 静态上限
+        —— 调用方把它并入 danger 的 blast_hint（放泡后取的 bomb_blast.max()
+        覆盖不到波次炸弹，不补会低估危险传播）。
         """
         cfg = self.cfg
         if cfg.hazard_fraction <= 0:
+            return 0
             return
         n, h, w, p = self.num_envs, cfg.height, cfg.width, cfg.n_players
         d = self.pos.device
         wave = self._hazard & (self.t > 0) & (self.t % cfg.hazard_wave_ticks == 0)
         wave_idx = wave.nonzero(as_tuple=True)[0]
         if wave_idx.numel() == 0:
-            return
+            return 0
         # 可通行格：无墙/砖、无在场泡；活人脚下排除（死者格不占位置）
         free = (~self.wall) & (~self.brick) & (self.fuse <= 0)      # (n,h,w)
         cell = center_cell(self.pos)
@@ -1215,3 +1250,4 @@ class BatchedSim:
             self.owner[e, y, x] = p
             self.bomb_blast[e, y, x] = blast[off:off + c]
             off += c
+        return cfg.hazard_blast_max

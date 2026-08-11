@@ -107,6 +107,7 @@ def resolve_explosions(
     brick: torch.Tensor | None = None,
     early_exit: bool | None = None,
     blast_max_hint: int | None = None,
+    chain_cap: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """返回 (火焰覆盖 mask, 本 tick 被引爆的泡泡 mask)。
 
@@ -120,24 +121,32 @@ def resolve_explosions(
     True 强制、False 强制关（CUDA graph 捕获段必须 False —— 回放要求
     固定 kernel 序列，早退的 host break 会把轮数钉死在捕获值）。连锁
     结束（newly 空）后多算的轮只产生空覆盖，早退结果与固定轮逐位一致。
+
+    `chain_cap`（同步免除）：非 None 时连锁固定跑 min(max_chain-1, chain_cap)
+    轮、无 newly 轮检查同步、并跳过无爆炸守卫 —— 结果对链长 ≤ cap 逐位一致。
+    910B 训练分布实测爆炸链深 max≤4（200 tick 抽样），cap=4 覆盖全部分布。
     """
     should_ee = True if early_exit is None else early_exit
+    sync_free = chain_cap is not None
     triggered = (fuse == 0) & (owner >= 0)
     live = fuse > 0
     # **无爆炸短路**：本 tick 没有引信走完的泡（大多数 tick 只是倒计时）时
     # 直接返回空覆盖 —— rays 无源也照跑 4×Σb 档 shift（blast 分散时最多
     # ~112 pad/调用），短路用 1 次 sync 换掉 70-80% tick 的整段 rays。
     # 爆炸 tick 占比 ~20-30%（放泡 30 tick 倒计时才爆），净赚。
-    if should_ee and not bool(triggered.any()):
+    if should_ee and not sync_free and not bool(triggered.any()):
         return torch.zeros_like(fuse, dtype=torch.bool), triggered
     covered = rays(triggered, wall, live, blast, brick,
                    blast_max_hint=blast_max_hint)
 
     # 早退检查每 CHECK_EVERY 轮才做一次（bool(any()) 是 GPU→CPU 同步点；
     # 连锁通常在头几轮就结束，多算 1 轮空轮对结果逐位无影响）。
-    for i in range(max_chain - 1):
+    # 同步免除模式（chain_cap≠None）：固定轮无检查（结果对链长 ≤cap 逐位一致）。
+    rounds = min(max_chain - 1, chain_cap) if sync_free else max_chain - 1
+    for i in range(rounds):
         newly = live & covered & ~triggered
-        if should_ee and i % CHECK_EVERY == 0 and not bool((newly).any()):
+        if should_ee and not sync_free and i % CHECK_EVERY == 0 \
+                and not bool((newly).any()):
             break
         covered = covered | rays(newly, wall, live, blast, brick,
                                  blast_max_hint=blast_max_hint)
@@ -156,6 +165,7 @@ def danger_map(
     exp: float = 2.0,
     early_exit: bool | None = None,
     blast_max_hint: int | None = None,
+    chain_cap: int | None = None,
 ) -> torch.Tensor:
     """在场所有泡泡的"时空影响范围"，越接近爆炸值越大，落在 (0, 1]。
 
@@ -192,10 +202,18 @@ def danger_map(
     `early_exit`：None = 自动（全设备早退，含 cuda 训练端）；True 强制；
     False 强制关（CUDA graph 捕获段必须 False，回放要求固定 kernel 序列）。
     早退只是纯省空轮，结果与固定轮逐位一致。
+
+    `chain_cap`（同步免除模式）：非 None 时阶段 A **固定跑 min(max_chain,
+    chain_cap) 轮、无 newly 轮检查同步**，并跳过空场守卫（bombed.any()）——
+    从默认的 5 次 host 同步降到 1 次（档位 max 一次）。链长 ≤ chain_cap 时
+    结果与动态早退**逐位一致**（多跑的空轮只产生零波前）；910B 训练分布
+    实测链长 max≤4（resolve 200 tick 抽样），默认 cap=4 有 2 倍裕量。
+    链长 > cap 的合成场景请保持 chain_cap=None（验证脚本用动态路径）。
     """
     should_ee = True if early_exit is None else early_exit
+    sync_free = chain_cap is not None
     bombed = fuse > 0
-    if should_ee and not bool(bombed.any()):
+    if should_ee and not sync_free and not bool(bombed.any()):
         return torch.zeros_like(fuse, dtype=torch.float32)   # 空场：无任何危险
     w_raw = 1.0 - (fuse.float() - 1.0) / float(fuse_max)
     weight = torch.where(fuse > 0, w_raw.clamp_min(0.0).pow(exp),
@@ -205,6 +223,22 @@ def danger_map(
     solid = bombed | brick_t
     not_solid = (~solid).float()          # 预计算：循环里只剩乘法（少一个 ~ kernel）
     passable = (~wall).float()
+    # **910B 修正（2026-08-11）**：torch_npu 上"张量±/×/÷ Python 标量"的 op
+    # 每次 dispatch 内部 item() 同步（成本 = 队列等待，step 里 ~0.26ms/次，
+    # 94/step 的 _local_scalar_dense 大头）。预分配全 1 张量作操作数（张量-张量
+    # op 零同步），fd1-1.0 变 fd1-one_buf —— 位级一致（逐元素同算术），省 ~50 次
+    # 同步。其他标量 op（>=0、where 0.0）实测不同步，保持标量。
+    one_buf = torch.ones_like(passable)
+    # 档位上限统一算一次（阶段 A/B 共用同一 blast_f —— 原来各算一次
+    # int(max()) 是 2 次 host 同步；合并后结果不变，省 1 次同步）。
+    blast_f = (torch.full_like(weight, float(blast)) if isinstance(blast, int)
+               else blast.float())
+    # 动态取实际档位（值域 ≤ growth_blast_max）：固定上限（hint）会让空档的
+    # pad 全跑（实测 max 固定 7 比动态 1-2 慢 3 倍，见 2026-08-10）；一次
+    # max() 同步比多算档位的 pad 空轮便宜。blast_max_hint 仅保留给确实已知
+    # 档位恒满的调用方（graph 捕获段）。
+    max_b = (blast_max_hint if blast_max_hint is not None
+             else (int(blast_f.max()) if blast_f.numel() else 0))
 
     # 阶段 A：炮格间的连锁危险传播（只在炮格累积，非炮格恒 0）。
     # **双缓冲传播（v2，2026-08-10）**：波前权重 fw + 剩余距离 fd 一起挪格，
@@ -216,11 +250,7 @@ def danger_map(
     #     会让阶段 B 从非炮格 seed 多扩散（v1 的 bug，已修）。
     if max_chain > 1:
         w = weight.clone()
-        blast_f = (torch.full_like(w, float(blast)) if isinstance(blast, int)
-                   else blast.float())
-        # 动态档位（同上 rays 注释）：固定上限的空档 pad 比一次 max() 同步贵
-        max_b = (blast_max_hint if blast_max_hint is not None
-                 else (int(blast_f.max()) if blast_f.numel() else 0))
+        # （blast_f / max_b 已在上方统一算好，阶段 A/B 共用 —— 省 1 次 max 同步）
         front = torch.where(bombed, w, torch.zeros_like(w))   # 波前权重
         fdist = torch.where(bombed, blast_f, torch.zeros_like(w))  # 剩余距离
         spread = torch.zeros_like(weight)
@@ -229,19 +259,25 @@ def danger_map(
         # **注意**：not_solid 必须在 maximum() **之后**乘（先记录后挡穿透），
         # 不能并进 shift 的 gate —— 否则 solid 格的记录值被提前清零，语义不同。
         # 逐位一致（F.pad 按通道独立、元素级乘法可结合），verify_danger_v2 对拍。
-        rounds = max_chain   # 比引擎多留 1 轮：危险度是预警，链尾也多标一格
+        # 同步免除模式（chain_cap≠None）：固定轮无 newly 检查（结果对链长
+        # ≤cap 逐位一致）；动态早退每 CHECK_EVERY 轮一次 bool(any()) 同步。
+        rounds = min(max_chain, chain_cap) if sync_free else max_chain
         for i in range(rounds):
             spread.zero_()
             for drow, dcol in _DIRS:
                 fw_p, fd_p = front, fdist
                 for _ in range(max_b):
-                    st = torch.stack([fw_p, fd_p])
-                    st = _shift(st, drow, dcol) * passable
-                    fw1, fd1 = st[0], st[1]
-                    fd1 = fd1 - 1.0
+                    # **910B 修正（2026-08-11）**：双 pad 连续张量（v1 结构）——
+                    # stack(2,n,h,w) 后 st[0]/st[1] 是**非连续视图**，标量 op
+                    # （fd1-1.0 等）在视图上每次触发 torch_npu 内部 item() 同步
+                    # （~0.26ms，_local_scalar_dense 大头）。连续张量不同步。
+                    # 2×(n,h,w) pad 数据量 ≈ stack+1×(2,n,h,w) pad，还免 item。
+                    fw1 = _shift(fw_p, drow, dcol) * passable
+                    fd1 = _shift(fd_p, drow, dcol) * passable
+                    fd1 = fd1 - one_buf          # 张量操作数免 item 同步
                     keep = fd1 >= 0          # 第 b 格（fd1=0）也记录；耗尽才停
-                    fw1 = torch.where(keep, fw1, torch.zeros_like(fw1))
-                    spread = torch.maximum(spread, fw1)   # 先记录（覆盖泡格）
+                    fw1 = torch.where(keep, fw1, 0.0)   # 标量 0：省 zeros_like 分配
+                    spread = torch.maximum(spread, fw1, out=spread)  # in-place 省分配
                     fw1 = fw1 * not_solid    # 再挡穿透：泡/brick 记录后不穿
                     fd1 = fd1 * not_solid
                     fw_p, fd_p = fw1, fd1
@@ -250,7 +286,7 @@ def danger_map(
             w = torch.maximum(w, spread)
             front = torch.where(newly, spread, torch.zeros_like(w))
             fdist = torch.where(newly, blast_f, torch.zeros_like(w))
-            if should_ee and i % DANGER_CHECK_EVERY == 0 \
+            if should_ee and not sync_free and i % DANGER_CHECK_EVERY == 0 \
                     and not bool((newly).any()):
                 break                      # 无新激活炮格：后续轮恒空转
         weight = w
@@ -263,26 +299,19 @@ def danger_map(
     # 逐炮朴素参考对比 PASS（verify_danger_v2）。
     seed = weight * passable
     danger = seed.clone()
-    blast_f = (torch.full_like(seed, float(blast)) if isinstance(blast, int)
-               else blast.float())
-    # 档位上限动态取实际 max（值域 ≤ growth_blast_max）：固定上限的空档
-    # pad 比一次 max() 同步贵（见 rays 注释），blast_max_hint 仅保留给
-    # 确实已知档位恒满的调用方。
-    max_b = (blast_max_hint if blast_max_hint is not None
-             else (int(blast_f.max()) if blast_f.numel() else 0))
+    # （blast_f / max_b 统一来自上方，阶段 B 不再重算）
     fw = seed.clone()
     fd = torch.where(bombed, blast_f, torch.zeros_like(seed))
     for drow, dcol in _DIRS:
-        fw_p, fd_p = fw, fd
-        for _ in range(max_b):
-            st = torch.stack([fw_p, fd_p])       # 同阶段 A：fw/fd 一次 shift（910B 融合）
-            st = _shift(st, drow, dcol) * passable
-            fw1, fd1 = st[0], st[1]
-            fd1 = fd1 - 1.0
-            keep = fd1 >= 0          # 第 b 格（fd1=0）也记录；耗尽才停
-            fw1 = torch.where(keep, fw1, torch.zeros_like(fw1))
-            danger = torch.maximum(danger, fw1)   # 先记录（覆盖泡格）
-            fw1 = fw1 * not_solid    # 再挡穿透：泡/brick 记录后不穿
-            fd1 = fd1 * not_solid
-            fw_p, fd_p = fw1, fd1
+            fw_p, fd_p = fw, fd
+            for _ in range(max_b):
+                fw1 = _shift(fw_p, drow, dcol) * passable   # 同阶段 A：连续张量免 item 同步
+                fd1 = _shift(fd_p, drow, dcol) * passable
+                fd1 = fd1 - one_buf          # 张量操作数免 item 同步
+                keep = fd1 >= 0          # 第 b 格（fd1=0）也记录；耗尽才停
+                fw1 = torch.where(keep, fw1, 0.0)   # 标量 0：省 zeros_like 分配
+                danger = torch.maximum(danger, fw1, out=danger)  # 先记录（覆盖泡格）
+                fw1 = fw1 * not_solid    # 再挡穿透：泡/brick 记录后不穿
+                fd1 = fd1 * not_solid
+                fw_p, fd_p = fw1, fd1
     return danger

@@ -23,7 +23,8 @@ else:
     dev = pick_device()
 N, H, W = 4096, 13, 13
 cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
-                open_fraction=0.5, timeout_draw=True, combo_reward=0.10)
+                open_fraction=0.5, timeout_draw=True, combo_reward=0.10,
+                chain_cap_rounds=None)  # 完整 danger 语义
 
 print(f"=== 1. 移动（AABB 滑动）===")
 pos = torch.rand(N, 2, 2, device=dev) * (H - 2) + 0.5

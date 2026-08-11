@@ -14,7 +14,8 @@ from sim.dev import pick_device
 dev = pick_device()
 N, H, W = 4096, 13, 13
 cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
-                open_fraction=0.5, timeout_draw=True, combo_reward=0.10)
+                open_fraction=0.5, timeout_draw=True, combo_reward=0.10,
+                chain_cap_rounds=None)  # 完整 danger 语义
 
 # ---- 富泡状态 ----
 sim = BatchedSim(cfg, N, device=dev, seed=0)

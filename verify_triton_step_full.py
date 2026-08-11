@@ -12,10 +12,13 @@ assert _HAS_TRITON
 
 dev = pick_device()
 N = 1024
+# chain_cap_rounds=None：本验证是**完整 danger 语义**压力测试（blast_cap=7 制造
+# 长链，triton danger 无 chain_cap 截断）。torch danger 需用动态早退路径对拍。
 cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
                 open_fraction=0.5, timeout_draw=True, combo_reward=0.10,
                 hit_attr_penalty=2, place_cover_reward=0.05,
-                place_chain_reward=0.20, chain_blast_bonus=0.08)
+                place_chain_reward=0.20, chain_blast_bonus=0.08,
+                chain_cap_rounds=None)
 torch.manual_seed(0)
 sim_t = BatchedSim(cfg, N, device=dev, seed=0)
 sim_k = BatchedSim(cfg, N, device=dev, seed=0)

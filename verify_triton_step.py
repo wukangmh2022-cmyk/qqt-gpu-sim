@@ -23,6 +23,7 @@ cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
                 hit_attr_penalty=0, place_cover_reward=0.0,
                 place_chain_reward=0.0, place_dist_reward=0.0,
                 chain_blast_bonus=0.0, growth_crate_prob=0.0,
+                chain_cap_rounds=None,  # 完整 danger 语义对拍（blast_cap=7 长链）
                 brick_reward=0.0, win_bonus=0.0,
                 recycle_crate_prob=0.0)   # 堵回收箱必升路径（Step 2 才做拾取）
 

@@ -22,7 +22,8 @@ N = 1024
 cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
                 open_fraction=0.5, timeout_draw=True, combo_reward=0.10,
                 hit_attr_penalty=2, place_cover_reward=0.05,
-                place_chain_reward=0.20, chain_blast_bonus=0.08)
+                place_chain_reward=0.20, chain_blast_bonus=0.08,
+                chain_cap_rounds=None)  # 完整 danger 语义（blast_cap=7 长链）
 H, W = cfg.height, cfg.width
 
 def sync():
