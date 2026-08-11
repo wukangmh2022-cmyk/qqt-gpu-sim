@@ -67,9 +67,9 @@ if _HAS_TRITON:
         idx1 = lo_y * W + span1
         oob = (lo_y < 0) | (lo_y >= H) | (span0 < 0) | (span0 >= W) \
             | (span1 < 0) | (span1 >= W)
-        b0 = tl.load(blocked_ptr + env * H * W + idx0,
+        b0 = tl.load(blocked_ptr + env * H * W + tl.minimum(tl.maximum(idx0, 0), H * W - 1),
                      mask=(idx0 >= 0) & (idx0 < H * W), other=0.0)
-        b1 = tl.load(blocked_ptr + env * H * W + idx1,
+        b1 = tl.load(blocked_ptr + env * H * W + tl.minimum(tl.maximum(idx1, 0), H * W - 1),
                      mask=(idx1 >= 0) & (idx1 < H * W), other=0.0)
         in_row = (lo_y >= r0c) & (lo_y <= r1c)
         in0 = in_row & (span0 >= c0c) & (span0 <= c1c)
@@ -81,9 +81,9 @@ if _HAS_TRITON:
         idx1 = hi_y * W + span1
         oob = (hi_y < 0) | (hi_y >= H) | (span0 < 0) | (span0 >= W) \
             | (span1 < 0) | (span1 >= W)
-        b0 = tl.load(blocked_ptr + env * H * W + idx0,
+        b0 = tl.load(blocked_ptr + env * H * W + tl.minimum(tl.maximum(idx0, 0), H * W - 1),
                      mask=(idx0 >= 0) & (idx0 < H * W), other=0.0)
-        b1 = tl.load(blocked_ptr + env * H * W + idx1,
+        b1 = tl.load(blocked_ptr + env * H * W + tl.minimum(tl.maximum(idx1, 0), H * W - 1),
                      mask=(idx1 >= 0) & (idx1 < H * W), other=0.0)
         in_row = (hi_y >= r0c) & (hi_y <= r1c)
         in0 = in_row & (span0 >= c0c) & (span0 <= c1c)
@@ -118,9 +118,9 @@ if _HAS_TRITON:
         idx1 = span1x * W + lo_x
         oob = (lo_x < 0) | (lo_x >= W) | (span0x < 0) | (span0x >= H) \
             | (span1x < 0) | (span1x >= H)
-        b0 = tl.load(blocked_ptr + env * H * W + idx0,
+        b0 = tl.load(blocked_ptr + env * H * W + tl.minimum(tl.maximum(idx0, 0), H * W - 1),
                      mask=(idx0 >= 0) & (idx0 < H * W), other=0.0)
-        b1 = tl.load(blocked_ptr + env * H * W + idx1,
+        b1 = tl.load(blocked_ptr + env * H * W + tl.minimum(tl.maximum(idx1, 0), H * W - 1),
                      mask=(idx1 >= 0) & (idx1 < H * W), other=0.0)
         in_col = (lo_x >= c0c) & (lo_x <= c1c)
         in0 = in_col & (span0x >= r0c) & (span0x <= r1c)
@@ -132,9 +132,9 @@ if _HAS_TRITON:
         idx1 = span1x * W + hi_x
         oob = (hi_x < 0) | (hi_x >= W) | (span0x < 0) | (span0x >= H) \
             | (span1x < 0) | (span1x >= H)
-        b0 = tl.load(blocked_ptr + env * H * W + idx0,
+        b0 = tl.load(blocked_ptr + env * H * W + tl.minimum(tl.maximum(idx0, 0), H * W - 1),
                      mask=(idx0 >= 0) & (idx0 < H * W), other=0.0)
-        b1 = tl.load(blocked_ptr + env * H * W + idx1,
+        b1 = tl.load(blocked_ptr + env * H * W + tl.minimum(tl.maximum(idx1, 0), H * W - 1),
                      mask=(idx1 >= 0) & (idx1 < H * W), other=0.0)
         in_col = (hi_x >= c0c) & (hi_x <= c1c)
         in0 = in_col & (span0x >= r0c) & (span0x <= r1c)
@@ -191,6 +191,7 @@ if _HAS_TRITON:
                 gw = w + dc * step
                 ok = (gh >= 0) & (gh < H) & (gw >= 0) & (gw < W)
                 gidx = nenv * HW + gh * W + gw
+                gidx = tl.minimum(tl.maximum(gidx, 0), HW * NENV - 1)  # 防御 OOB
                 gm = m & ok
                 wv = tl.load(wall + gidx, mask=gm, other=True)
                 sv = tl.load(src + gidx, mask=gm, other=False)
@@ -212,11 +213,13 @@ if _HAS_TRITON:
         """
         pid = tl.program_id(0)
         offs = pid * HW + tl.arange(0, BLOCK)
+        offs = tl.minimum(offs, NENV * HW - 1)   # 防御 OOB（mask 仍按原 offs 判）
         m = offs < (pid + 1) * HW
         o = tl.load(owner + offs, mask=m, other=-1)
         f = tl.load(fuse + offs, mask=m, other=0)
         for me in tl.static_range(P):
-            cnt = tl.sum((o == me) & (f > 0))
+            # triton-ascend 3.2.0: tl.sum(bool) 结果错（恒 1）→ 先转 int32 再 sum
+            cnt = tl.sum(tl.where((o == me) & (f > 0), 1, 0))
             tl.store(out + pid * P + me, cnt)
 
     @triton.jit
@@ -225,36 +228,44 @@ if _HAS_TRITON:
                             placed, N,
                             P: tl.constexpr, H: tl.constexpr, W: tl.constexpr,
                             FUSE: tl.constexpr):
-        """放泡：每 program 一个 (env, player)。脚下格 fuse==0 & 非墙/砖 &
-        在场泡数（_count_bombs_kernel 预计算）< 上限 → 写 fuse/owner/blast。
+        """放泡：每 program 一个 **env**，内层按玩家顺序处理（grid=(N,)）。
+
+        **为什么不是每 program 一个 (env, player)**：pl 0 / pl 1 可能同格
+        （角色不碰撞），两人同 tick 都按放泡键时，torch 顺序循环里 pl 1 能看到
+        pl 0 刚写的 fuse=30 → 拒绝（脚下已有泡不能叠放）。若 pl 0/1 分属两个
+        并发 program，pl 1 的 `cur_fuse<=0` 读可能赶在 pl 0 写之前 → 同格叠放
+        （910B 实测 placed 差：env 397 双人同格 (8,7)，triton 叠放、torch 拒绝）。
+        内层 static_range(P) 顺序处理：程序内 store→load 同址可见，逐位复刻
+        torch `_place_bombs` 的 for 循环语义。
         """
-        pid = tl.program_id(0)
-        env = pid // P
-        me = pid % P
-        y = tl.load(pos + env * P * 2 + me * 2)
-        x = tl.load(pos + env * P * 2 + me * 2 + 1)
-        r = tl.floor(y).to(tl.int32)
-        c = tl.floor(x).to(tl.int32)
-        idx = r * W + c
-        cur_fuse = tl.load(fuse + env * H * W + idx)
-        cur_owner = tl.load(owner + env * H * W + idx)
-        cur_blast = tl.load(bomb_blast + env * H * W + idx)
-        on_brick = tl.load(brick + env * H * W + idx)
-        on_wall = tl.load(wall + env * H * W + idx)
-        al = tl.load(alive + env * P + me)
-        bm = tl.load(bomb + env * P + me)
-        cap = tl.load(bombs_cap + env * P + me)
-        bl_cap = tl.load(blast_cap + env * P + me)
-        own = tl.load(live_count + env * P + me)      # 在场泡数（预计算）
-        ok = al & bm & (cur_fuse <= 0) & (on_brick == 0) & (on_wall == 0) \
-            & (own < cap)
-        tl.store(placed + env * P + me, ok.to(tl.int8))
-        tl.store(fuse + env * H * W + idx,
-                 tl.where(ok, FUSE, cur_fuse))
-        tl.store(owner + env * H * W + idx,
-                 tl.where(ok, me, cur_owner))
-        tl.store(bomb_blast + env * H * W + idx,
-                 tl.where(ok, bl_cap, cur_blast))
+        env = tl.program_id(0)
+        for me in tl.static_range(P):
+            y = tl.load(pos + env * P * 2 + me * 2)
+            x = tl.load(pos + env * P * 2 + me * 2 + 1)
+            # triton-ascend 3.2.0：标量 tl.floor 在存储地址链上编译失败
+            # （unresolved materialization → tensor<1xf32>）。pos 恒 >= 0，
+            # 截断 == floor（verify 对拍固化）。
+            r = y.to(tl.int32)
+            c = x.to(tl.int32)
+            idx = r * W + c
+            g = tl.minimum(tl.maximum(env * H * W + idx, 0), N * H * W - 1)  # 防御 OOB
+            cur_fuse = tl.load(fuse + g)
+            on_brick = tl.load(brick + g)
+            on_wall = tl.load(wall + g)
+            al = tl.load(alive + env * P + me)
+            bm = tl.load(bomb + env * P + me) > 0   # int64 -> bool（triton-ascend 不能 bool&int）
+            cap = tl.load(bombs_cap + env * P + me)
+            bl_cap = tl.load(blast_cap + env * P + me)
+            own = tl.load(live_count + env * P + me)      # 在场泡数（预计算）
+            # mask 参数要求严格 i1：~on_brick 替代 on_brick==0（bool==int 会升型）
+            ok = (al & bm & (cur_fuse <= 0) & (~on_brick) & (~on_wall)
+                  & (own < cap)).to(tl.int1)
+            tl.store(placed + env * P + me, ok.to(tl.int8))
+            # 条件写用 mask 参数（in-place 更新：ok 处写新值，其余保持原值）。
+            # tl.store(ptr, tl.where(ok, a, b)) 在 triton-ascend 是编译雷区。
+            tl.store(fuse + g, FUSE, mask=ok)          # FUSE 是 constexpr，triton 自动 cast 到 uint8
+            tl.store(owner + g, me, mask=ok)           # me 是 static_range 的 constexpr，自动 cast
+            tl.store(bomb_blast + g, bl_cap, mask=ok)
 
     @triton.jit
     def _danger_kernel(fuse, wall, bombed, brick, blst, out,
@@ -296,6 +307,7 @@ if _HAS_TRITON:
                 gw = w + dc * step
                 ok = (gh >= 0) & (gh < H) & (gw >= 0) & (gw < W)
                 gidx = nenv * HW + gh * W + gw
+                gidx = tl.minimum(tl.maximum(gidx, 0), HW * NENV - 1)  # 防御 OOB
                 gm = m & ok
                 wv = tl.load(wall + gidx, mask=gm, other=True)
                 sv = tl.load(fuse + gidx, mask=gm, other=0)
@@ -351,6 +363,7 @@ if _HAS_TRITON:
                 gw = wc + dc * step
                 ok = (gh >= 0) & (gh < H) & (gw >= 0) & (gw < W)
                 gidx = nenv * HW + gh * W + gw
+                gidx = tl.minimum(tl.maximum(gidx, 0), HW * NENV - 1)  # 防御 OOB
                 gm = m & ok
                 wv = tl.load(wall + gidx, mask=gm, other=True)
                 bmb = tl.load(bombed + gidx, mask=gm, other=False)
@@ -403,6 +416,7 @@ if _HAS_TRITON:
                 gw = wc + dc * step
                 ok = (gh >= 0) & (gh < H) & (gw >= 0) & (gw < W)
                 gidx = nenv * HW + gh * W + gw
+                gidx = tl.minimum(tl.maximum(gidx, 0), HW * NENV - 1)  # 防御 OOB
                 gm = m & ok
                 wv = tl.load(wall + gidx, mask=gm, other=True)
                 bmb = tl.load(bombed + gidx, mask=gm, other=False)
@@ -503,7 +517,7 @@ def place_bombs_triton(cfg, fuse, owner, bomb_blast, pos, alive, bomb,
         owner.contiguous(), fuse.contiguous(), live_count, hw, n,
         P=p, BLOCK=BLOCK)
     placed = torch.zeros((n, p), dtype=torch.int8, device=fuse.device)
-    _place_bombs_kernel[(n * p,)](
+    _place_bombs_kernel[(n,)](                              # 每 env 一 program（同格竞争见 kernel 注释）
         fuse.contiguous(), owner.contiguous(), bomb_blast.contiguous(),
         pos.contiguous(), alive.contiguous(), bomb.contiguous(),
         bombs_cap.contiguous(), blast_cap.contiguous(),
@@ -513,17 +527,29 @@ def place_bombs_triton(cfg, fuse, owner, bomb_blast, pos, alive, bomb,
 
 
 def resolve_triton(fuse, owner, wall, bomb_blast, brick, max_chain=16,
-                  b_max=7):
+                  b_max=7, early_exit=True):
     """爆炸与连锁（triton explode kernel 链）。返回 (covered, triggered)。
 
-    连锁轮固定（不早退——XLA/triton 图内无同步），与固定轮 torch 逐位一致。
+    语义与 torch resolve_explosions 逐位一致（verify_triton_boom 固化）。
+    `early_exit`：None = 自动（全设备早退）；True 强制；False 强制关
+    （CUDA graph 捕获段必须 False——回放要求固定 kernel 序列，早退的
+    host break 会把轮数钉死在捕获值）。**910B 实测：无爆炸 tick 若跑满
+    max_chain 轮 explode kernel（~24ms/轮）要 384ms+；早退短路到 ~1ms。**
     """
     import torch
+    _CHECK_EVERY = 2    # 与 sim/blast.py CHECK_EVERY 一致（早退检查每 2 轮一次）
+    should_ee = True if early_exit is None else early_exit
     triggered = (fuse == 0) & (owner >= 0)
     live = fuse > 0
+    # 无爆炸短路（同 torch resolve_explosions）：大多数 tick 只是倒计时，
+    # 没有引信走完的泡 → 直接返回空覆盖（1 次 sync 换掉 16 轮 explode kernel）。
+    if should_ee and not bool(triggered.any()):
+        return torch.zeros_like(fuse, dtype=torch.bool), triggered
     covered = explode_triton(triggered, wall, live, brick, bomb_blast, b_max)
-    for _ in range(max_chain - 1):
+    for i in range(max_chain - 1):
         newly = live & covered & ~triggered
+        if should_ee and i % _CHECK_EVERY == 0 and not bool((newly).any()):
+            break
         covered = covered | explode_triton(newly, wall, live, brick,
                                            bomb_blast, b_max)
         triggered = triggered | newly

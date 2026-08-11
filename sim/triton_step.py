@@ -48,11 +48,19 @@ def triton_step_core(sim, actions):
     # 5. 爆炸与连锁（triton explode kernel 链）
     covered, triggered = resolve_triton(sim.fuse, sim.owner, sim.wall,
                                         sim.bomb_blast, sim.brick,
-                                        cfg.max_chain)
+                                        cfg.max_chain,
+                                        early_exit=not sim._graph_mode)
+
+    # 5.5 砖/宝箱更新（torch step 第 4 步 resolve 后同款——**不能漏**：
+    #     爆炸会摧毁 brick 并转 crate；core 若不更新，下一 tick 的 blocked
+    #     = wall|brick|(fuse>0) 就与 torch 分叉，第一波爆炸后级联发散）。
+    if cfg.map_mode == "corridor":
+        sim.crate.bitwise_or_(sim.brick & covered)   # 炸掉的砖 → 宝箱（in-place）
+    sim.brick.bitwise_and_(~covered)                  # 摧毁砖（in-place）
 
     # 6. 伤害判定（中心格着火 + 无敌期）
     cell = center_cell(sim.pos)
-    flat = cell[..., 0] * cfg.width + cell[..., 1]
+    flat = (cell[..., 0] * cfg.width + cell[..., 1]).clamp(0, cfg.width * cfg.height - 1)
     hit = alive0 & covered.view(n, -1).gather(1, flat)
     invuln_ok = sim.invuln <= 0
     hit_eff = hit & invuln_ok
@@ -118,7 +126,8 @@ def triton_step_full(sim, actions):
     # 6. 爆炸与连锁（triton explode 链）
     covered, triggered = resolve_triton(sim.fuse, sim.owner, sim.wall,
                                         sim.bomb_blast, sim.brick,
-                                        cfg.max_chain)
+                                        cfg.max_chain,
+                                        early_exit=not sim._graph_mode)
 
     # 7. 连锁兑现（torch，清场前读 owner/引信）
     chain_bonus_p = torch.zeros(n, p, dtype=torch.float32, device=d)
@@ -139,7 +148,7 @@ def triton_step_full(sim, actions):
 
     # 9. 伤害判定
     cell = center_cell(sim.pos)
-    flat = cell[..., 0] * cfg.width + cell[..., 1]
+    flat = (cell[..., 0] * cfg.width + cell[..., 1]).clamp(0, cfg.width * cfg.height - 1)
     hit = alive0 & covered.view(n, -1).gather(1, flat)
     invuln_ok = sim.invuln <= 0
     hit_eff = hit & invuln_ok
@@ -172,7 +181,7 @@ def triton_step_full(sim, actions):
     #     每 tick 重算 ~44ms 的 danger_map；triton 版 ~1.6ms @N=8192）。
     blast_map = sim._blast_map()
     danger = danger_triton(sim.fuse, sim.wall, sim.fuse > 0, sim.brick,
-                           blast_map, cfg.fuse, cfg.max_chain,
+                           blast_map, cfg.fuse, max_chain=cfg.max_chain,
                            early_exit=not sim._graph_mode)
     sim._dng_cache = danger
     sim._dng_sig = sim._dng_signature()
@@ -210,7 +219,7 @@ def triton_step_full(sim, actions):
     # 15. 宝箱拾取 + 成长（corridor）
     if cfg.map_mode == "corridor":
         cell = center_cell(sim.pos)
-        flat = (cell[..., 0] * cfg.width + cell[..., 1])
+        flat = (cell[..., 0] * cfg.width + cell[..., 1]).clamp(0, cfg.width * cfg.height - 1)
         stood = sim.crate.view(n, -1).gather(1, flat)
         reward = reward + cfg.brick_reward * stood.float() * alive0.float()
         for pl in range(cfg.n_players):
@@ -230,7 +239,7 @@ def triton_step_full(sim, actions):
     #      danger 已在 11.5 由 triton 计算并缓存，这里直接 gather 脚下格。
     if cfg.danger_penalty > 0:
         cell = center_cell(sim.pos)
-        flat = (cell[..., 0] * cfg.width + cell[..., 1])
+        flat = (cell[..., 0] * cfg.width + cell[..., 1]).clamp(0, cfg.width * cfg.height - 1)
         standing = danger.view(n, -1).gather(1, flat)
         reward = reward - sim._explore_coef * cfg.danger_penalty \
             * standing * alive0.float()

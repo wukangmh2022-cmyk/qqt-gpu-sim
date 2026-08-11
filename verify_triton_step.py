@@ -7,19 +7,19 @@ from sim.config import SimConfig
 from sim.torch_sim import BatchedSim
 from sim.triton_step import triton_step_core
 from sim.triton_sim import _HAS_TRITON
+from sim.dev import pick_device
 assert _HAS_TRITON, "triton 不可用"
 
-if torch.backends.mps.is_available():
-    dev = "mps"
-elif torch.cuda.is_available():
-    dev = "cuda"
-else:
-    dev = "cpu"
+dev = pick_device()
 N = 2048
 
 # 关奖励副作用：place/hit_attr/combo/chain 全 0、不成长（crate_prob=0）、win_bonus=0
+# open_fraction 必须 0：open 关强制 crate_prob=1.0（踩箱必拾取成长），而
+# triton_step_core 是 Step 1（核心传播，不含 Step 2 的宝箱拾取/成长）——
+# 混入 open 关会让 torch step 开箱、core 不动 → 成长字段发散（实测 910B/MPS
+# 同款发散）。纯 corridor + growth_crate_prob=0 → 无箱无拾取，core 可对拍。
 cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
-                open_fraction=0.5, timeout_draw=True, combo_reward=0.0,
+                open_fraction=0.0, timeout_draw=True, combo_reward=0.0,
                 hit_attr_penalty=0, place_cover_reward=0.0,
                 place_chain_reward=0.0, place_dist_reward=0.0,
                 chain_blast_bonus=0.0, growth_crate_prob=0.0,
@@ -35,7 +35,12 @@ sim_t.reset_all(); sim_k.reset_all()
 assert (sim_t.fuse == sim_k.fuse).all() and (sim_t.pos == sim_k.pos).all()
 
 def sync():
-    torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize()
+    if dev == "cuda":
+        torch.cuda.synchronize()
+    elif dev.startswith("npu"):
+        torch.npu.synchronize()
+    else:
+        torch.mps.synchronize()
 
 # Step 1 只验证核心状态（成长/拾取字段 bombs_cap/blast_cap/spd_g 属 Step 2 奖励段）
 FIELDS = ["fuse", "owner", "bomb_blast", "pos", "alive", "hp",
@@ -81,6 +86,6 @@ def bt(fn, it=15):
     sync()
     return (time.perf_counter() - t0) / it * 1000
 
-t_t = bt(lambda: sim_t.step(acts))
-t_k = bt(lambda: triton_step_core(sim_k, acts))
+t_t = bt(lambda: sim_t.step(acts_seq[-1]))
+t_k = bt(lambda: triton_step_core(sim_k, acts_seq[-1]))
 print(f"step 同步稳态: torch {t_t:.1f} ms | triton核心 {t_k:.1f} ms | x{t_t/t_k:.1f}")

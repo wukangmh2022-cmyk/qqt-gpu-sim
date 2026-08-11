@@ -24,8 +24,10 @@ from .move import center_cell, move_players
 
 # triton 手写融合 kernel（DCU 100k 目标）：move_players 90× 加速，逐位一致。
 # 无 triton 的环境（本地 MPS/CPU 测试）自动 fallback 到 torch 版 —— 行为不变。
+# 用 sim/triton_sim.py 的版本（bitwise 已在 DCU/本地/910B 验证）；scripts/
+# triton_kernels.py 是旧副本，勿用。
 try:
-    from scripts.triton_kernels import move_players_triton as _move_triton
+    from .triton_sim import move_players_triton as _move_triton
     _HAS_TRITON = True
 except ImportError:                      # 本地无 triton / scripts 不在路径
     _move_triton = None
@@ -789,7 +791,10 @@ class BatchedSim:
         #    **无敌保护期**：被炸伤后 invuln_ticks 内被炸不掉血、不触发对方 hit
         #    奖励（打断"连炮往死里整对手"）；danger 图照常显示（无敌只挡掉血）。
         cell = center_cell(self.pos)
-        flat = cell[..., 0] * cfg.width + cell[..., 1]
+        # 防御：昇腾 gather 越界是未定义行为（官方文档），索引必须钳制。
+        # pos 数学上恒在 [rad, h-rad]（move_players clamp），但 torch_npu 的
+        # floor/long 曾偶发垃圾值（1.67e18）→ 先 clamp 再 gather。
+        flat = (cell[..., 0] * cfg.width + cell[..., 1]).clamp(0, cfg.height * cfg.width - 1)
         hit = alive0 & covered.view(n, -1).gather(1, flat)
         invuln_ok = self.invuln <= 0                 # (n,p) 无敌期结束才能掉血
         hit_eff = hit & invuln_ok                    # 实际扣血命中
@@ -881,7 +886,7 @@ class BatchedSim:
         # 用 stood mask 过滤 —— 零 host 同步、零设备 RNG，capture 可过。
         if cfg.map_mode == "corridor":
             cell = center_cell(self.pos)
-            flat = (cell[..., 0] * cfg.width + cell[..., 1])       # (n,p)
+            flat = (cell[..., 0] * cfg.width + cell[..., 1]).clamp(0, cfg.height * cfg.width - 1)   # (n,p) 防御（见 hit 处）
             stood = self.crate.view(n, -1).gather(1, flat)          # (n,p) 脚下有宝箱
             # 踩箱即得分（与概率无关）。**不乘退火系数**：成长是每局从起点重新
             # 开始的物理必需（炸墙→宝箱→变强），探索奖励退火只针对"刷分放炮"
@@ -930,7 +935,7 @@ class BatchedSim:
         self._dng_cache = danger                 # 缓存给本 tick 的 observe 复用
         self._dng_sig = self._dng_signature()
         cell = center_cell(self.pos)
-        flat = cell[..., 0] * cfg.width + cell[..., 1]
+        flat = (cell[..., 0] * cfg.width + cell[..., 1]).clamp(0, cfg.height * cfg.width - 1)   # 防御（见 hit 处）
         standing = danger.view(n, -1).gather(1, flat)
         reward = reward - self._explore_coef * cfg.danger_penalty * standing \
             * alive0.float()
@@ -1049,7 +1054,7 @@ class BatchedSim:
         weight = (cfg.chain_time_factor
                   + (1.0 - cfg.chain_time_factor) * (1.0 - fuse_frac))
         cell = center_cell(self.pos)
-        flat_cell = cell[..., 0] * w + cell[..., 1]          # (n,p) 玩家所在格
+        flat_cell = (cell[..., 0] * w + cell[..., 1]).clamp(0, w * self.cfg.height - 1)   # (n,p) 防御
         # 刚放的泡占的格：连锁判定要排除自己（新泡覆盖自己格 ≠ 连锁自己）
         placed_map = torch.zeros(n, w * self.cfg.height,
                                  dtype=torch.bool, device=self.pos.device)
@@ -1125,7 +1130,9 @@ class BatchedSim:
         cell = center_cell(self.pos)
         placed = torch.zeros((n, cfg.n_players), dtype=torch.bool, device=self.pos.device)
         for me in range(cfg.n_players):
-            idx = (cell[:, me, 0] * w + cell[:, me, 1]).unsqueeze(1)
+            # 防御：昇腾 gather/scatter 索引越界=未定义行为（不检查）→ 必须 clamp
+            idx = (cell[:, me, 0] * w + cell[:, me, 1]).clamp(
+                0, cfg.height * cfg.width - 1).unsqueeze(1)
             live = ((self.owner == me) & (self.fuse > 0)).flatten(1).sum(dim=1)
             cur_f = flat_fuse.gather(1, idx).squeeze(1)
             on_brick = flat_brick.gather(1, idx).squeeze(1).bool()
@@ -1177,7 +1184,7 @@ class BatchedSim:
         # 可通行格：无墙/砖、无在场泡；活人脚下排除（死者格不占位置）
         free = (~self.wall) & (~self.brick) & (self.fuse <= 0)      # (n,h,w)
         cell = center_cell(self.pos)
-        flat = cell[..., 0] * w + cell[..., 1]                      # (n,p)
+        flat = (cell[..., 0] * w + cell[..., 1]).clamp(0, w * self.cfg.height - 1)      # 防御
         for pl in range(p):
             free.view(n, -1).scatter_(
                 1, flat[:, pl].unsqueeze(1),

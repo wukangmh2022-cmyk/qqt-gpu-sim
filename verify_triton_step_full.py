@@ -7,14 +7,10 @@ from sim.config import SimConfig
 from sim.torch_sim import BatchedSim
 from sim.triton_step import triton_step_full
 from sim.triton_sim import _HAS_TRITON
+from sim.dev import pick_device
 assert _HAS_TRITON
 
-if torch.backends.mps.is_available():
-    dev = "mps"
-elif torch.cuda.is_available():
-    dev = "cuda"
-else:
-    dev = "cpu"
+dev = pick_device()
 N = 1024
 cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
                 open_fraction=0.5, timeout_draw=True, combo_reward=0.10,
@@ -28,7 +24,12 @@ sim_k.bombs_cap[:] = 10; sim_k.blast_cap[:] = 7; sim_k.spd_g[:] = 2.1
 sim_t.reset_all(); sim_k.reset_all()
 
 def sync():
-    torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize()
+    if dev == "cuda":
+        torch.cuda.synchronize()
+    elif dev.startswith("npu"):
+        torch.npu.synchronize()
+    else:
+        torch.mps.synchronize()
 
 FIELDS = ["fuse", "owner", "bomb_blast", "pos", "alive", "hp", "invuln",
           "t", "since_bomb", "bombs_cap", "blast_cap", "spd_g", "crate",

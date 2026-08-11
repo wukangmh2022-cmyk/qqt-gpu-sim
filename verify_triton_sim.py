@@ -10,6 +10,7 @@ if not _HAS_TRITON:
     print("triton 不可用（未编译好）"); sys.exit(1)
 
 from sim.triton_sim import move_players_triton, explode_triton
+from sim.dev import pick_device
 from sim.move import move_players
 from sim.blast import rays
 from sim.config import SimConfig
@@ -19,12 +20,7 @@ if os.environ.get("TRITON_INTERPRET"):
     dev = "cpu"                    # interpreter 模式：解释执行，无 GPU 后端
     N = 64
 else:
-    if torch.backends.mps.is_available():
-        dev = "mps"
-    elif torch.cuda.is_available():
-        dev = "cuda"
-    else:
-        dev = "cpu"
+    dev = pick_device()
 N, H, W = 4096, 13, 13
 cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
                 open_fraction=0.5, timeout_draw=True, combo_reward=0.10)
@@ -55,8 +51,12 @@ print(f"explode: 不一致 {d}/{ref.numel()} {'✓' if d == 0 else '✗ 不一�
 
 print(f"=== 3. 速度（MPS 参考）===")
 def bt(fn, it=20):
-    sync = (torch.cuda.synchronize if dev == "cuda"
-            else torch.mps.synchronize)
+    if dev == "cuda":
+        sync = torch.cuda.synchronize
+    elif dev.startswith("npu"):
+        sync = torch.npu.synchronize
+    else:
+        sync = torch.mps.synchronize
     for _ in range(3): fn()
     sync()
     t0 = time.perf_counter()

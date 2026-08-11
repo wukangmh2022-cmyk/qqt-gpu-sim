@@ -15,13 +15,9 @@ from sim.triton_sim import (_HAS_TRITON, resolve_triton, explode_triton)
 assert _HAS_TRITON, "triton 不可用（本地编译未完成）"
 
 from sim.blast import resolve_explosions, rays
+from sim.dev import pick_device
 
-if torch.backends.mps.is_available():
-    dev = "mps"
-elif torch.cuda.is_available():
-    dev = "cuda"
-else:
-    dev = "cpu"
+dev = pick_device()
 N = 1024
 cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
                 open_fraction=0.5, timeout_draw=True, combo_reward=0.10,
@@ -30,7 +26,12 @@ cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
 H, W = cfg.height, cfg.width
 
 def sync():
-    torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize()
+    if dev == "cuda":
+        torch.cuda.synchronize()
+    elif dev.startswith("npu"):
+        torch.npu.synchronize()
+    else:
+        torch.mps.synchronize()
 
 ok = True
 def check(name, cond, extra=""):

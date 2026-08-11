@@ -17,13 +17,9 @@ if not _HAS_TRITON:
 from sim.config import SimConfig
 from sim.torch_sim import BatchedSim
 from sim.blast import danger_map
+from sim.dev import pick_device
 
-if torch.backends.mps.is_available():
-    dev = "mps"
-elif torch.cuda.is_available():
-    dev = "cuda"
-else:
-    dev = "cpu"
+dev = pick_device()
 N, H, W = 4096, 13, 13
 cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
                 open_fraction=0.5, timeout_draw=True, combo_reward=0.10)
@@ -35,6 +31,8 @@ def sync():
         torch.cuda.synchronize()
     elif dev == "mps":
         torch.mps.synchronize()
+    elif dev.startswith("npu"):
+        torch.npu.synchronize()
 
 
 def compare(tag, fuse, wall, brick, blast_map, mc):

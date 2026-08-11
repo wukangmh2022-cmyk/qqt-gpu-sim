@@ -9,13 +9,9 @@ if not _HAS_TRITON:
     print("triton 不可用"); sys.exit(1)
 from sim.config import SimConfig
 from sim.torch_sim import BatchedSim, center_cell
+from sim.dev import pick_device
 
-if torch.backends.mps.is_available():
-    dev = "mps"
-elif torch.cuda.is_available():
-    dev = "cuda"
-else:
-    dev = "cpu"
+dev = pick_device()
 N, H, W = 4096, 13, 13
 cfg = SimConfig(map_mode="corridor", speed=3.0, max_steps=1800,
                 open_fraction=0.5, timeout_draw=True, combo_reward=0.10)
@@ -31,6 +27,8 @@ for _ in range(15):
 def sync():
     if dev == "cuda":
         torch.cuda.synchronize()
+    elif dev.startswith("npu"):
+        torch.npu.synchronize()
     elif dev == "mps":
         torch.mps.synchronize()
 sync()
