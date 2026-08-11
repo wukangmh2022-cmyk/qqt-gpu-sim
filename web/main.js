@@ -32,6 +32,7 @@
   const elMode = $('mode'), elModel = $('model'), elScene = $('scene'),
         elSpectate = $('spectate'), elDanger = $('danger'), elSound = $('sound'),
         elBgm = $('bgm'), elApplyModel = $('apply-model'), elCurModel = $('cur-model'),
+        elEnemyAi = $('enemy-ai'), elP0Ai = $('p0-ai'), elP0AiWrap = $('p0-ai-wrap'),
         elRestart = $('restart'), elStatus = $('status'), elBanner = $('banner'),
         elLoading = $('loading'), elLoadingText = $('loading-text');
 
@@ -49,6 +50,17 @@
   let gameSeed = 1;
   const face = [MOVE_DOWN, MOVE_DOWN];
   const human = { dirStack: [], latch: new Set(), move: MOVE_IDLE, pendingBomb: false };
+  const hunter = new Q.HunterAI();   // 规则 AI（纯进攻寻路），可当敌/我方
+
+  // 玩家决策来源：'human' | 'model' | 'hunter'（观战/规则 AI 时用）
+  function aiOf(pid) {
+    const kind = pid === 0
+      ? (elSpectate.checked ? elP0Ai.value : 'human')
+      : elEnemyAi.value;
+    if (kind === 'hunter') return hunter.act(sim, pid);
+    if (kind === 'human') return [MOVE_IDLE, human.pendingBomb ? 1 : 0];
+    return model.act(sim, pid, rng);
+  }
 
   // ------------------------------------------------------------ 素材加载
   const imgCache = new Map();
@@ -226,24 +238,32 @@
   // ------------------------------------------------------------ 背景音乐
   // 场景 BGM（ogg）懒加载 + 循环播放；随场景切换换曲；浏览器自动播放策略
   // 要求用户先有交互，首次按键/点击时 resume AudioContext 并开始播放。
+  // bgmGen 是"代际号"：每次启动/停止递增，异步加载完成后校验自己是否还是
+  // 最新一代 —— 快速连切场景时旧请求作废，绝不出现"旧曲加载完又把新场景
+  // 的 BGM 顶掉/两首叠播"的竞态。
   const bgmBuffers = new Map();
-  let bgmSrc = null, bgmGain = null, bgmUrl = null;
+  let bgmSrc = null, bgmGain = null, bgmUrl = null, bgmGen = 0;
 
   async function startBgm() {
     if (!res || !res.audio || !bgmOn) return;
     const sc = res.scenes[elScene.value];
-    if (!sc || !sc.bgm) return;
+    if (!sc || !sc.bgm) { stopBgm(); return; }   // 新场景无 BGM：旧曲必须停
     const url = 'assets/' + sc.bgm;
-    if (url === bgmUrl && bgmSrc) return;      // 同一首已在播
-    if (bgmSrc) { try { bgmSrc.stop(); } catch (e) { /* */ } bgmSrc = null; }
+    if (url === bgmUrl && bgmSrc) return;        // 同一首已在播
+    const gen = ++bgmGen;
+    if (bgmSrc) { try { bgmSrc.stop(); } catch (e) { /* */ } }
+    bgmSrc = null; bgmUrl = null;                // 先停旧曲，再加载新曲
     try {
       if (res.audio.state === 'suspended') await res.audio.resume();
       let buf = bgmBuffers.get(url);
       if (!buf) {
         const ab = await (await fetch(url)).arrayBuffer();
+        if (gen !== bgmGen) return;              // 已被更新的切换作废
         buf = await res.audio.decodeAudioData(ab);
+        if (gen !== bgmGen) return;
         bgmBuffers.set(url, buf);
       }
+      if (gen !== bgmGen) return;
       const src = res.audio.createBufferSource();
       src.buffer = buf;
       src.loop = true;
@@ -260,6 +280,7 @@
   }
 
   function stopBgm() {
+    bgmGen++;                                   // 作废任何进行中的加载
     if (bgmSrc) { try { bgmSrc.stop(); } catch (e) { /* */ } }
     bgmSrc = null;
     bgmUrl = null;
@@ -436,8 +457,14 @@
   elRestart.addEventListener('click', startGame);
   elMode.addEventListener('change', startGame);
   elApplyModel.addEventListener('click', applyModel);
-  elSpectate.addEventListener('change', startGame);
-  elScene.addEventListener('change', () => { startGame(); startBgm(); });
+  elSpectate.addEventListener('change', () => {
+    // 勾选观战时显示「我方角色由什么 AI 替换」下拉
+    elP0AiWrap.style.display = elSpectate.checked ? '' : 'none';
+    startGame();
+  });
+  elScene.addEventListener('change', () => { stopBgm(); startGame(); });  // 先停旧曲，startGame 内再播新曲
+  elEnemyAi.addEventListener('change', startGame);   // 换敌方 AI → 重开一局
+  elP0Ai.addEventListener('change', startGame);
   elDanger.addEventListener('change', () => { showDanger = elDanger.checked; });
   elSound.addEventListener('change', () => { soundOn = elSound.checked; });
   elBgm.addEventListener('change', () => {
@@ -449,9 +476,9 @@
   function logicTick() {
     if (!running || !model || !sim || sim.done) return;
     const spectate = elSpectate.checked;
-    const a0 = spectate ? model.act(sim, 0, rng) : [MOVE_IDLE, human.pendingBomb ? 1 : 0];
+    const a0 = aiOf(0);
     if (!spectate) human.pendingBomb = false;
-    const a1 = model.act(sim, 1, rng);
+    const a1 = aiOf(1);
     // 拾取判定：人类玩家脚下 step 前有宝箱 → step 后没有 = 吃到
     const hc = Math.floor(sim.pos[1]), hr = Math.floor(sim.pos[0]);
     const hadCrate = !spectate && sim.alive[0] && sim.crate[hr * W + hc] === 1;
@@ -459,6 +486,7 @@
     const info = sim.step([a0, a1]);
     curPos.set(sim.pos);
     lastTickT = performance.now();
+    face[0] = a0[0];
     face[1] = a1[0];
     // 音效（以人类玩家为监听者，只播人类相关事件）
     if (info.placed[0]) playSnd('place');
@@ -670,9 +698,12 @@
     ctx.fillRect(0, y0, BOARD_PX, HUD_PX);
     ctx.strokeStyle = 'rgba(255,255,255,0.08)';
     ctx.strokeRect(0, y0, BOARD_PX, HUD_PX);
+    const p0Kind = elSpectate.checked ? (elP0Ai.value === 'hunter' ? '规则 Hunter' : '模型')
+                                      : '你';
+    const p1Kind = elEnemyAi.value === 'hunter' ? '规则 Hunter' : '模型';
     const names = [
-      sim.alive[0] ? '你（P0）' : '你（P0·阵亡）',
-      sim.alive[1] ? 'AI（P1）' : 'AI（P1·阵亡）',
+      sim.alive[0] ? `${p0Kind}（P0）` : `${p0Kind}（P0·阵亡）`,
+      sim.alive[1] ? `${p1Kind}（P1）` : `${p1Kind}（P1·阵亡）`,
     ];
     const colors = ['#ff6b6b', '#5aa7ff'];
     for (let p = 0; p < 2; p++) {

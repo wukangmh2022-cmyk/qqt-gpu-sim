@@ -13,12 +13,12 @@ body {
   color: var(--fg);
   font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
 }
-#wrap { max-width: 1100px; margin: 0 auto; padding: 16px 20px 40px; }
+#wrap { max-width: 1260px; margin: 0 auto; padding: 16px 20px 40px; }
 header h1 { margin: 6px 0 2px; font-size: 22px; }
 header .sub { margin: 0 0 14px; color: var(--dim); font-size: 13px; }
 
-#layout { display: flex; gap: 18px; flex-wrap: wrap; }
-#stage { position: relative; }
+#layout { display: flex; gap: 18px; align-items: flex-start; }
+#stage { position: relative; flex-shrink: 0; }
 canvas#game {
   background: #0c0e13;
   border: 1px solid var(--line);
@@ -62,7 +62,7 @@ canvas#game {
 @keyframes spin { to { transform: rotate(360deg); } }
 #loading.hidden { display: none; }
 
-aside#panel { flex: 1; min-width: 280px; max-width: 360px; }
+aside#panel { flex: 1; min-width: 300px; max-width: 400px; }
 aside section {
   background: var(--panel);
   border: 1px solid var(--line);

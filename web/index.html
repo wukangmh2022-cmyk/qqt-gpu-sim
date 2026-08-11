@@ -9,7 +9,7 @@
 <body>
 <div id="wrap">
   <header>
-    <h1>💣 QQT 格斗（泡泡堂 1v1）</h1>
+    <h1>💣 QQT 格斗</h1>
     <p class="sub">训练侧 PPO 模型（MLP 345K）在浏览器里实时推理 · 原版素材渲染 · 与你对战</p>
   </header>
 
@@ -42,8 +42,21 @@
           <select id="model"></select>
           <button id="apply-model" type="button">应用此模型</button>
         </label>
+        <label>敌方 AI
+          <select id="enemy-ai">
+            <option value="model" selected>模型（上方选择）</option>
+            <option value="hunter">规则 Hunter（纯进攻寻路）</option>
+          </select>
+        </label>
         <label class="row">
           <input type="checkbox" id="spectate"> 观战（AI vs AI，不操作）
+        </label>
+        <label id="p0-ai-wrap" class="row" style="display:none">
+          我方角色由：
+          <select id="p0-ai">
+            <option value="model" selected>模型（上方选择）</option>
+            <option value="hunter">规则 Hunter</option>
+          </select>
         </label>
         <label class="row">
           <input type="checkbox" id="danger" checked> 显示危险图（D 键切换，默认开）

@@ -740,11 +740,255 @@
     }
   }
 
+  // ---------------------------------------------------------------- 规则 AI
+  // sim/bots.py::astar_attack(eat_crates=True) 的标量移植 —— 启动器的「纯进攻
+  // 寻路 hunter」：恒 aggressive（逼近+放泡），成长属性 ≥2 项不满 70% 且有
+  // 宝箱时优先寻路吃箱补属性（适合 corridor）。13×13 每 tick 决策一次，
+  // 169 格 Dijkstra 毫秒级，浏览器无压力。
+  class HunterAI {
+    constructor() {
+      // 独立 rng：噪声用（Python 侧是 torch.rand 独立生成器），不污染 sim 的
+      // 步进随机序列（crate 概率等）。
+      this.rng = mulberry32(0xC0FFEE);
+    }
+
+    // 多源 Dijkstra 价值场（Bellman-Ford）：dist[j] = min over i∈4邻 (dist[i]+cost[j])。
+    // source 为 1 的格是源（dist=0）；cost = 1 + 2×danger，blocked 格 cost=∞。
+    _dijkstra(source, danger, blocked) {
+      const inf = Infinity;
+      const dist = new Float64Array(N);
+      const cost = new Float64Array(N);
+      for (let i = 0; i < N; i++) {
+        dist[i] = source[i] ? 0 : inf;
+        cost[i] = blocked[i] ? inf : 1 + 2 * danger[i];
+      }
+      let changed = true;
+      let passes = 0;
+      while (changed && passes < N) {
+        changed = false;
+        passes++;
+        for (let i = 0; i < N; i++) {
+          if (dist[i] === inf) continue;
+          const r = (i / W) | 0, c = i % W;
+          for (let d = 0; d < 4; d++) {
+            const nr = r + DIRS[d][0], nc = c + DIRS[d][1];
+            if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+            const j = nr * W + nc;
+            if (cost[j] === inf) continue;
+            const nd = dist[i] + cost[j];
+            if (nd < dist[j]) { dist[j] = nd; changed = true; }
+          }
+        }
+      }
+      return dist;
+    }
+
+    // hunter 决策：返回 [move, bomb]（与 MLPModel.act 同签名）。
+    // pid 是物理玩家位；策略直接读 sim 状态（规则 AI 不需要视角置换）。
+    act(sim, pid) {
+      const danger = sim.dangerMap();
+      const own = sim.centerCell(pid);            // [r, c]
+      const ownIdx = own[0] * W + own[1];
+      const ownDng = danger[ownIdx];
+      const r = sim.pos[pid * 2], c = sim.pos[pid * 2 + 1];
+      const rIdx = Math.min(Math.max(Math.floor(r), 0), H - 1);
+      const cIdx = Math.min(Math.max(Math.floor(c), 0), W - 1);
+
+      // 威胁区：自己名下在场泡的爆炸范围（膨胀 growthBlastMax 次，绕行惩罚）
+      const threat = new Uint8Array(N);
+      for (let i = 0; i < N; i++) {
+        if (sim.owner[i] === pid && sim.fuse[i] > 0) threat[i] = 1;
+      }
+      for (let k = 0; k < CFG.growthBlastMax; k++) {
+        const nb = new Uint8Array(N);
+        for (let i = 0; i < N; i++) {
+          if (!threat[i]) continue;
+          const rr = (i / W) | 0, cc = i % W;
+          for (let d = 0; d < 4; d++) {
+            const nr = rr + DIRS[d][0], nc = cc + DIRS[d][1];
+            if (nr >= 0 && nr < H && nc >= 0 && nc < W) nb[nr * W + nc] = 1;
+          }
+        }
+        threat.set(nb);
+      }
+
+      // 障碍 = 墙 | 砖 | 在场泡（与 legal_mask 的 blocked 一致）
+      const blocked = new Uint8Array(N);
+      for (let i = 0; i < N; i++) {
+        blocked[i] = sim.wall[i] || sim.brick[i] || sim.fuse[i] > 0 ? 1 : 0;
+      }
+
+      // 两个基础场：逃生场（安全格为源）+ 逼近场（对手为源）
+      const safeSrc = new Uint8Array(N);
+      for (let i = 0; i < N; i++) safeSrc[i] = danger[i] < 0.35 ? 1 : 0;
+      const V_safe = this._dijkstra(safeSrc, danger, blocked);
+      const oppSrc = new Uint8Array(N);
+      for (let o = 0; o < 2; o++) {
+        if (o === pid || !sim.alive[o]) continue;
+        const [ro, co] = sim.centerCell(o);
+        oppSrc[ro * W + co] = 1;
+      }
+      const V_opp = this._dijkstra(oppSrc, danger, blocked);
+
+      // 5 个候选动作的目标格（4 方向 + IDLE = 当前格）
+      const cells = new Int32Array(5);
+      const dngC = new Float64Array(5), thrC = new Float64Array(5);
+      for (let mv = 0; mv < 4; mv++) {
+        let nr = rIdx + DIRS[mv][0], nc = cIdx + DIRS[mv][1];
+        nr = Math.min(Math.max(nr, 0), H - 1);
+        nc = Math.min(Math.max(nc, 0), W - 1);
+        cells[mv] = nr * W + nc;
+      }
+      cells[MOVE_IDLE] = ownIdx;
+      for (let mv = 0; mv < 5; mv++) {
+        dngC[mv] = danger[cells[mv]];
+        thrC[mv] = threat[cells[mv]];
+      }
+      const noise = [];
+      for (let mv = 0; mv < 5; mv++) noise.push(0.05 * this.rng());
+
+      // 合法掩码（已含泡挡路），hunter 额外排除砖墙格（与 Python blk_c 一致）
+      const { mm, bm } = sim.legalMask();
+      const legal = [];
+      for (let mv = 0; mv < 5; mv++) {
+        legal.push(mm[pid][mv] === 1 &&
+          !(sim.wall[cells[mv]] || sim.brick[cells[mv]]));
+      }
+
+      // --- 吃道具层（hunter 专属，高优先级）---
+      // 成长属性 ≥2 项低于上限 70% 且场上有宝箱 → 朝最近宝箱寻路（走路踩箱
+      // 升级），优先级高于逼近、低于逃生（命要紧）。
+      const bMax = CFG.growthBombsMax, zMax = CFG.growthBlastMax,
+            sMax = CFG.growthSpeedMax;
+      const fracs = [sim.bombsCap[pid] / bMax, sim.blastCap[pid] / zMax,
+                     sim.spdG[pid] / sMax];
+      const hungry = fracs.filter((f) => f < 0.7).length >= 2;
+      let hasCrate = false;
+      for (let i = 0; i < N; i++) if (sim.crate[i]) { hasCrate = true; break; }
+      let eatOn = hungry && hasCrate && sim.alive[pid];
+
+      const app = [], esc = [], eat = [];
+      const inf = Infinity;
+      const VoppC = [], VsafeC = [];
+      for (let mv = 0; mv < 5; mv++) {
+        VoppC.push(V_opp[cells[mv]]);
+        VsafeC.push(V_safe[cells[mv]]);
+      }
+      let V_crate = null, VcrateC = null;
+      if (eatOn) {
+        const crateSrc = new Uint8Array(N);
+        for (let i = 0; i < N; i++) if (sim.crate[i]) crateSrc[i] = 1;
+        V_crate = this._dijkstra(crateSrc, danger, blocked);
+        VcrateC = [];
+        for (let mv = 0; mv < 5; mv++) VcrateC.push(V_crate[cells[mv]]);
+      }
+
+      for (let mv = 0; mv < 5; mv++) {
+        // 逼近：沿 V_opp 最速下降；dng≥0.5（快爆的泡）禁行
+        let a = VoppC[mv] + 2 * dngC[mv] + 2 * thrC[mv] + noise[mv];
+        if (dngC[mv] >= 0.5 || !legal[mv]) a = inf;
+        app.push(a);
+        // 逃生：只按 Vsafe（安全距离），顺带绕威胁；脚下危险时禁止停（IDLE）
+        let e = VsafeC[mv] * 100 + 2 * thrC[mv] + noise[mv];
+        if (!legal[mv]) e = inf;
+        esc.push(e);
+        // 吃箱：朝最近宝箱，避险（dng≥0.5 禁行）
+        let t = eatOn
+          ? (VcrateC[mv] * 100 + 2 * dngC[mv] + noise[mv]) : inf;
+        if (eatOn && (dngC[mv] >= 0.5 || !legal[mv])) t = inf;
+        eat.push(t);
+      }
+      // 吃箱禁停：四周有更优非停方向就不许停（防原地发呆被炸）
+      if (eatOn) {
+        let eatNoIdle = inf;
+        for (let mv = 0; mv < 4; mv++) eatNoIdle = Math.min(eatNoIdle, eat[mv]);
+        if (eatNoIdle < eat[MOVE_IDLE]) eat[MOVE_IDLE] = inf;
+        // 吃箱路径必须可达（全 inf 时回退逼近）
+        let eatMin = inf;
+        for (let mv = 0; mv < 5; mv++) eatMin = Math.min(eatMin, eat[mv]);
+        if (!isFinite(eatMin)) { eatOn = false; eat.fill(inf); }
+      }
+
+      // 逼近无路 / 脚下危险 → 转逃生
+      let appOk = false;
+      for (let mv = 0; mv < 5; mv++) if (isFinite(app[mv])) appOk = true;
+      const useEsc = ownDng >= 0.35 || !appOk;
+      if (useEsc) {
+        // 逃生禁停：停 = 留在必受伤的格（被围死时 fallback 兜底允许）
+        esc[MOVE_IDLE] = inf;
+      }
+
+      // 合并打分：逃生 > 吃箱 > 逼近（逃生最优先）
+      const score = [];
+      for (let mv = 0; mv < 5; mv++) {
+        score.push(useEsc ? esc[mv] : (eatOn ? eat[mv] : app[mv]));
+      }
+      let move = MOVE_IDLE;
+      let best = inf;
+      for (let mv = 0; mv < 5; mv++) {
+        if (score[mv] < best) { best = score[mv]; move = mv; }
+      }
+      // 终极兜底：打分全 inf（被泡/火完全围死）→ 选最小 danger 的合法格；
+      // 优先非停方向（走比等死强），全方向更危险才允许停
+      let anyLegal = false;
+      for (let mv = 0; mv < 5; mv++) if (legal[mv]) { anyLegal = true; break; }
+      let noPath = true;
+      for (let mv = 0; mv < 5; mv++) if (isFinite(score[mv])) { noPath = false; break; }
+      if (noPath && anyLegal) {
+        let bm = MOVE_IDLE, bs = inf, bm2 = MOVE_IDLE, bs2 = inf;
+        for (let mv = 0; mv < 5; mv++) {
+          if (!legal[mv]) continue;
+          if (dngC[mv] < bs2) { bs2 = dngC[mv]; bm2 = mv; }      // 含停兜底
+          if (mv !== MOVE_IDLE && dngC[mv] < bs) { bs = dngC[mv]; bm = mv; }
+        }
+        move = isFinite(bs) ? bm : bm2;
+      }
+
+      // --- 放泡：十字内打得到对手 / 连锁老泡 / 近身压制，且不自爆、能撤 ---
+      const cap = sim.blastCap[pid];
+      const orow = [], ocol = [];
+      for (let o = 0; o < 2; o++) {
+        if (o === pid || !sim.alive[o]) continue;
+        const [ro, co] = sim.centerCell(o);
+        orow.push(ro); ocol.push(co);
+      }
+      let alignedOpp = false, manh = 1e9;
+      for (let o = 0; o < orow.length; o++) {
+        const drO = Math.abs(rIdx - orow[o]), dcO = Math.abs(cIdx - ocol[o]);
+        if ((drO === 0 && dcO <= cap) || (dcO === 0 && drO <= cap)) alignedOpp = true;
+        manh = Math.min(manh, drO + dcO);
+      }
+      const nearOpp = manh <= cap + 1;
+      // 连锁：附近（blast 十字内）有引信 ≤10 的老泡可"时间差连锁"
+      let chain = false;
+      for (let k = 1; k <= cap && !chain; k++) {
+        for (let d = 0; d < 4; d++) {
+          const nr = rIdx + DIRS[d][0] * k, nc = cIdx + DIRS[d][1] * k;
+          if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+          const f = sim.fuse[nr * W + nc];
+          if (f > 0 && f <= 10) { chain = true; break; }
+        }
+      }
+      // 能撤：有合法且低危险且非威胁的目标格
+      let canEscape = false;
+      for (let mv = 0; mv < 5; mv++) {
+        if (legal[mv] && dngC[mv] < 0.35 && !thrC[mv]) { canEscape = true; break; }
+      }
+      let bomb = 0;
+      if (bm[pid][1] === 1 && (alignedOpp || nearOpp || chain) &&
+          ownDng < 0.2 && canEscape && sim.alive[pid]) {
+        bomb = 1;
+      }
+      if (!sim.alive[pid]) { move = MOVE_IDLE; bomb = 0; }
+      return [move, bomb];
+    }
+  }
+
   const QQT = {
     H, W, N, N_PLAYERS, N_MOVES, N_BOMB,
     MOVE_UP, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_IDLE,
     DIRS, EPS, CFG,
-    Sim, MLPModel, mulberry32, resolveAxis, decodeB64,
+    Sim, MLPModel, HunterAI, mulberry32, resolveAxis, decodeB64,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = QQT;
   else root.QQT = QQT;

@@ -80,7 +80,9 @@ global.Image = class {
 global.AudioContext = class {
   constructor() { this.destination = {}; }
   createBufferSource() {
-    return { buffer: null, connect() { return this; }, start() {}, gain: { value: 0 } };
+    return { buffer: null, connect() { return this; },
+             start() { global._acStart = (global._acStart || 0) + 1; },
+             stop() { global._acStop = (global._acStop || 0) + 1; } };
   }
   createGain() { return { gain: { value: 0 }, connect() { return this; } }; }
   async decodeAudioData() { return {}; }
@@ -156,6 +158,31 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   (els['bgm'].listeners['change'] || []).forEach((fn) => fn());
   console.log('BGM 开关切换正常（on/off）✔');
 
+  // 敌方 AI 下拉：切到规则 Hunter → 重开一局不炸，P1 由 hunter 决策
+  els['enemy-ai'].value = 'hunter';
+  (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(500);
+  if (!qqt.sim) { console.error('FAIL: 切敌方 AI 后 sim 丢失'); process.exit(1); }
+  console.log('敌方 AI 切到规则 Hunter 后正常 ✔');
+
+  // 观战勾选 → 「我方替换 AI」下拉显示
+  els['spectate'].checked = true;
+  (els['spectate'].listeners['change'] || []).forEach((fn) => fn());
+  if (els['p0-ai-wrap'].style.display !== '') {
+    console.error(`FAIL: 观战勾选后 p0-ai-wrap 未显示（display=${els['p0-ai-wrap'].style.display}）`);
+    process.exit(1);
+  }
+  // 观战 + 我方也换 Hunter（双规则 AI 对局）
+  els['p0-ai'].value = 'hunter';
+  (els['p0-ai'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(600);
+  console.log('观战：我方替换为规则 Hunter 后正常 ✔');
+  els['p0-ai'].value = 'model';
+  (els['p0-ai'].listeners['change'] || []).forEach((fn) => fn());
+  els['enemy-ai'].value = 'model';
+  (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(300);
+
   // 逻辑节拍推进检查（setInterval 100ms）
   const t0 = qqt.sim.t;
   await wait(1200);
@@ -200,8 +227,20 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // 换场景/换模式/观战 各触发一次 startGame，确认不炸
   const fire = (id) => (els[id].listeners['change'] || []).forEach((fn) => fn());
+  // BGM：先确保在播（重新勾选），再切场景 → 旧曲必须被 stop
+  els['bgm'].checked = true;
+  fire('bgm');
+  await wait(400);
+  const stopsBefore = global._acStop || 0;
   els['scene'].value = '矿洞';
   fire('scene');
+  await wait(500);
+  const stopsAfter = global._acStop || 0;
+  if (stopsAfter <= stopsBefore) {
+    console.error(`FAIL: 切场景后旧 BGM 未停（stop 次数 ${stopsBefore} → ${stopsAfter}）`);
+    process.exit(1);
+  }
+  console.log(`切场景旧 BGM 已停（stop ${stopsBefore} → ${stopsAfter}）✔`);
   els['mode'].value = 'corridor';
   fire('mode');
   await wait(600);
