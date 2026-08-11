@@ -368,25 +368,42 @@ MLP baseline:                503 ms   ★ x12.21 ← 达成 10x
 | **更大的 N** | 35k @ n=20000（HANDOFF L208） | **89.4k @ N=20000（实测）** | 910B 快 2.4x |
 
 **17k 的来源**（不是优化前的数字）：
-- 910B 真实训练 17k 是 **CNN 300M（duel_cnn.pt）@ N=2048** 的完整训练。
-- 两个维度都变了：模型 345k→281M（参数多 816 倍）+ N 被显存逼到 2048。
+- 910B 真实训练 17k 是 **CNN（duel_cnn.pt，步数 300M）@ N=2048** 的完整训练。
+- 两个维度都变了：架构 MLP→CNN（**计算量反而大 14 倍**，见下）+ N 被显存逼到 2048。
 - CNN @ N=8192 实测 OOM（warmup 就占 46GB）→ N 只能 2048-4096 → SPS 低。
+
+### 2b. 为什么"参数更少的 CNN"反而慢 12 倍？（用户追问）
+**参数少 ≠ 计算量少**。实测参数量与 FLOPs（batch=131072, obs 14×13×13）：
+
+| | 参数 | 每前向 FLOPs | 910B ppo_update |
+|---|---|---|---|
+| CNN（3×3x3 卷积 + 1x1） | 240,672（0.70x） | **1182 GFLOP（14.1x）** | 6142 ms |
+| MLP（2 层全连接） | 344,776 | 83.7 GFLOP | 503 ms |
+
+- CNN 的 FLOPs 高 14 倍来自 4 个卷积层（14→16→32→64→8）在 13×13 全图上
+  反复滑窗：`FLOPs = batch×cout×k²×cin×h×w`，通道越堆越多、每层扫全图。
+- MLP 只有 2 个全连接层（2366→128→128），大 FLOPs 只有第一层一个点。
+- 注意：真实 update 慢 12.2x 略小于 FLOPs 比 14x —— 910B 的 3x3 小卷积
+  在 AI Core 利用率 <2%（第九节），卷积只花了理论该花的一部分时间；
+  MLP 的 GEMM 走 Cube 单元效率高，实测贴近理论。两者差距 = 卷积的
+  "理论 FLOPs 巨大 × 硬件效率低"双重打击。
 
 ### 3. 关键实测（bench_dcu_parity.py，本会话 910B 上跑）
 ```
 [parity] N=20000 arch=mlp   collect=25.7s update=3.0s  final sps = 89.4k   ← DCU 35k 的 2.4x
 [parity] N=5632  arch=mlp   collect=15.6s update=1.1s  final sps = 43.2k   ← DCU 36-41k 的 ~1.1x
-[parity] N=8192  arch=cnn   → OOM（warmup 46GB，300M CNN + N 大）
+[parity] N=8192  arch=cnn   → OOM（warmup 46GB，CNN 大激活 + N 大）
 ```
 - 口径定义：完整训练（collect 128 tick + ppo_update），SPS = N×128 / 迭代秒。
-- 这解释了"为什么我之前说 17k"：真实训练 resume 的是 **CNN 300M ckpt**，
-  CNN 小卷积在 910B AI Core 利用率 <2%（第九节），update 慢 12 倍（6142 vs 503ms），
-  且显存限制 N 只能 2048 → 完整训练只有 17k。
+- 这解释了"为什么我之前说 17k"：真实训练 resume 的是 **CNN ckpt**（duel_cnn.pt，
+  步数 300M，参数 281k），CNN 每前向 FLOPs 是 MLP 的 14x（见 2b）+ 910B 小卷积
+  AI Core 利用率 <2%（第九节）→ update 慢 12 倍（6142 vs 503ms），且显存
+  限制 N 只能 2048 → 完整训练只有 17k。
 
 ### 4. 教训
 - **跨平台/跨配置比 SPS 必须同 N + 同模型 + 同迭代**。N=2048 的 CNN 训练
   和 N=20000 的 MLP 训练差 5-10 倍很正常，与优化无关。
 - 用户印象里的"DCU 38k"来自 performance.md §6 的 **5632 env MLP** 真实训练
   （36-41k）；910B 同配置实测 **43.2k** —— 优化没有丢分，还高了 10-20%。
-- 唯一真正"低"的是 **CNN 300M @ N=2048 = 17k**，那是模型架构 + 显存上限
+- 唯一真正"低"的是 **CNN @ N=2048 = 17k**，那是模型计算量大 14x + 显存上限
   的物理结果，不是模拟器优化的锅。
