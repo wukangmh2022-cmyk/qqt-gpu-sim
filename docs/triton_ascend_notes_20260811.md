@@ -135,3 +135,49 @@ SIMD 架构上编译/执行极差（每格 ~196 次内存操作）。torch 的 `
 3. gather 扫描型 kernel 的 SIMD 代码生成质量 → 收集 explode/danger 复现
    用例提交给 bisheng 编译器团队（昇腾 SIMD 为主的架构对 per-lane gather
    的支持是性能分水岭）。
+
+---
+
+## 六、100万 SPS 攻坚剖析（2026-08-11 第二轮，单卡 910B3）
+
+### 实测基线（N=16384，torch step 稳态）
+- 单 step **~108ms = 15.2万 SPS**（放炮率 0.03~0.45 均为 ~100-122ms，非 dense 假象）
+- 成本分解（mock 分段）：
+  | 块 | 贡献 | 说明 |
+  |---|---|---|
+  | danger_map(16) | ~33ms | 含同步冲刷效应；独立测 15.7ms |
+  | reward 其余（damage/clear/combo/win/pickup/结算） | ~47ms | ~1000 小算子 × 19µs |
+  | 同步（_local_scalar_dense ×94/step） | ~36ms | bool(any())/.item()/reset_ |
+  | place_predict | 5.6ms | 火焰预测 rays |
+  | 核心（triton move/place/count） | ~10ms | 已经很快 |
+  | reset_ + 成长 | ~10ms | |
+
+### 根因：dispatch-bound（不是 device-bound）
+- **单算子 dispatch = 19.3µs**（(16384,13,13) mul）
+- step 内 ~3000 算子 × 19µs ≈ **58ms dispatch**
+- 每算子都建临时张量：4940 empty_tensor/5step = **988 alloc/step**
+- bool(any()) 同步 0.38ms/次 × 94 = 36ms
+
+### 已排除的路线（实测数据）
+| 方案 | 结果 |
+|---|---|
+| triton gather 扫描 kernel（explode/danger） | 慢 8-50x（昇腾 SIMD 对 per-lane gather 无解） |
+| BLOCK 扫描（256~8192） | 无效（static_range 展开非慢因） |
+| int32/动态 range 变体 | 53ms vs 24ms 更慢 |
+| danger fixed b_max（免 max 同步） | 3x 更慢（空轮 pad 比同步贵） |
+| torch.compile(backend='npu') | 8.0ms vs 4.6ms 更慢 |
+| danger stack 融合（fw+fd 一次 shift） | 16.8→15.7ms（+6%，保留） |
+| 多卡并行 | 单卡（davinci6），不可行 |
+
+### 100万 SPS 路线图（单卡，按收益排序）
+1. **reward 段 triton 化**（最大块，~47ms → 目标 5ms）：reward 数学是
+   elementwise（mul/where/clamp/sum）—— 910B 上 elementwise triton kernel
+   已验证快（move 0.35ms/place 0.95ms @N=2048）。预计 +42ms。
+2. **danger 重写**（~33ms → 目标 6ms）：stage A/B 换更省算子的波前
+   （少 pad、少轮），或验证昇腾 aclnn 的融合算子（aclnnMax 等）。
+3. **同步消除**（~36ms → 目标 10ms）：resolve/danger 的早退轮检查从
+   CHECK_EVERY=2 → 4 降频；reset_ 空 mask 短路免 int(sum)；reward 门控
+   改设备端掩码。
+4. 达成后 step ~35ms → **47万 SPS**；再叠加 1-3 的极端版（danger 4ms +
+   reward 2ms + 同步 5ms）→ ~20ms → **80万+**，逼近 100万。
+5. 1000万量级需多卡（当前 Dev Space 单卡）或换算法（距离变换/前缀扫描）。

@@ -224,14 +224,20 @@ def danger_map(
         front = torch.where(bombed, w, torch.zeros_like(w))   # 波前权重
         fdist = torch.where(bombed, blast_f, torch.zeros_like(w))  # 剩余距离
         spread = torch.zeros_like(weight)
+        # **stack 融合（2026-08-11，910B dispatch-bound 优化）**：fw/fd 两个
+        # 张量叠成 (2,n,h,w) 一次 _shift + 一次 passable 乘法（原来 2 pad + 2 mul）。
+        # **注意**：not_solid 必须在 maximum() **之后**乘（先记录后挡穿透），
+        # 不能并进 shift 的 gate —— 否则 solid 格的记录值被提前清零，语义不同。
+        # 逐位一致（F.pad 按通道独立、元素级乘法可结合），verify_danger_v2 对拍。
         rounds = max_chain   # 比引擎多留 1 轮：危险度是预警，链尾也多标一格
         for i in range(rounds):
             spread.zero_()
             for drow, dcol in _DIRS:
                 fw_p, fd_p = front, fdist
                 for _ in range(max_b):
-                    fw1 = _shift(fw_p, drow, dcol) * passable
-                    fd1 = _shift(fd_p, drow, dcol) * passable
+                    st = torch.stack([fw_p, fd_p])
+                    st = _shift(st, drow, dcol) * passable
+                    fw1, fd1 = st[0], st[1]
                     fd1 = fd1 - 1.0
                     keep = fd1 >= 0          # 第 b 格（fd1=0）也记录；耗尽才停
                     fw1 = torch.where(keep, fw1, torch.zeros_like(fw1))
@@ -269,8 +275,9 @@ def danger_map(
     for drow, dcol in _DIRS:
         fw_p, fd_p = fw, fd
         for _ in range(max_b):
-            fw1 = _shift(fw_p, drow, dcol) * passable
-            fd1 = _shift(fd_p, drow, dcol) * passable
+            st = torch.stack([fw_p, fd_p])       # 同阶段 A：fw/fd 一次 shift（910B 融合）
+            st = _shift(st, drow, dcol) * passable
+            fw1, fd1 = st[0], st[1]
             fd1 = fd1 - 1.0
             keep = fd1 >= 0          # 第 b 格（fd1=0）也记录；耗尽才停
             fw1 = torch.where(keep, fw1, torch.zeros_like(fw1))
