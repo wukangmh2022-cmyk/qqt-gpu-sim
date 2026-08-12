@@ -71,40 +71,50 @@ class CurriculumState:
 
 
 def lstm_curriculum() -> list[Stage]:
-    """LSTM 从零课程（2026-08-12）：**敌人与地图双维度循序渐进**。
+    """LSTM 从零课程（2026-08-12，v3）：**敌人与地图双维度循序渐进**。
 
     敌人维度：random/greedy 启蒙 → greedy → +astar → +hunter → 池子天梯。
-    地图维度：open 纯空场 → open/corridor 50% 混合 → +环岛 +随机立柱(0.3)
-            → 立柱 0.5 + 环岛 30% → 全混合常驻（立柱 0.5）。
-    防过拟合设计：
-    - **地图**：多关混合（open_fraction/ring_fraction）+ wall_density 随机立柱
-      密度克制递增 0 → 0.3 → 0.5（经典炸弹人奇数行列图案随机保留，每局不同）。
-    - **敌人**：课程阶段 bot 为主（bot_prob 0.9）；s5 起 self_play=True 进入
-      天梯（池子 ELO 就近采样为主），bot_prob 降到 0.3 少量混入 —— 防只打
-      接近型网络的分布单一化（"对手可能不接近/躲闪"的遗忘）。
+    地图维度（用户定，训练不用环岛）：
+      - open：纯空场 → 随机散点立柱（wall_density 渐进），学基础 + 绕柱。
+      - **corridor 前期就引入**（可炸墙多 → 宝箱奖励稠密，学习效率高），
+        障碍三维循序渐进，前期简单后期障碍多样：
+        * 顶墙行数 top_wall_rows **2 → 3 → 4**（默认形态是 4 行永久墙，
+          "变化着来"：前期少留活动空间、后期顶到默认形态）；
+        * 通道宽度 corridor_width **7 → 5**（左右可炸墙列 3 → 4）；
+        * 边缘连续横/纵 brick 段 wall_density **0 → 0.25 → 0.45**
+          （贴可通行区边缘与顶墙下方，连续段而非散点，放边缘不放中间）。
+      - 中后期按 open_fraction 混合 open 关（练纯空场交战 + 立柱泛化）。
+      设计权衡：前期（s2）顶墙少/通道宽/无额外段 → 不困难；后期（s4/s5）
+      障碍多样（顶墙 4 + 通道 5 + 边缘连续段）→ 保留地图障碍感知能力，
+      泛化到 ring 等训练外地图（eval_lstm_ring.py 测）。
+      环岛/特殊设计地图只用于泛化测试，不进训练。
     对局总预算 ~900 万局（50/100/150/200/400 万），跑不完也能按胜率提前晋级。
     """
     return [
         Stage("s1-open-basic", SimConfig(map_mode="open"),
               500_000, 0.55, bots=("random", "greedy"), bot_prob=0.9,
               notes="纯空场学移动/放泡/躲避：random 靶子 + greedy 初阶；曲线不涨立刻停"),
-        Stage("s2-mix-wall",
-              SimConfig(map_mode="corridor", open_fraction=0.5),
+        Stage("s2-corridor-easy",
+              SimConfig(map_mode="corridor", open_fraction=0.3,
+                        top_wall_rows=2, corridor_width=7),
               1_000_000, 0.60, bots=("greedy",), bot_prob=0.9,
-              notes="一半空场一半 corridor：学炸墙开图（顶墙+左右可炸墙+宝箱成长）"),
-        Stage("s3-pillar-astar",
+              notes="corridor 前期引入且**简单**：顶墙 2 行 + 宽通道 7 + 无额外段"
+                    " —— 稠密宝箱奖励学炸墙开图，不困难"),
+        Stage("s3-corridor-mid",
               SimConfig(map_mode="corridor", open_fraction=0.3,
-                        ring_fraction=0.2, wall_density=0.3),
+                        top_wall_rows=3, corridor_width=5, wall_density=0.25),
               1_500_000, 0.55, bots=("greedy", "astar"), bot_prob=0.9,
-              notes="随机立柱密度 0.3（克制起步）+ 环岛 20% + 对手加 astar（会躲会攻）"),
-        Stage("s4-hunter-dense",
-              SimConfig(map_mode="corridor", open_fraction=0.3,
-                        ring_fraction=0.3, wall_density=0.5),
+              notes="顶墙 3 行 + 通道收窄 5 + 边缘连续段起步（~9 块）"
+                    " + 对手加 astar（会躲会攻）"),
+        Stage("s4-corridor-hard",
+              SimConfig(map_mode="corridor", open_fraction=0.4,
+                        top_wall_rows=4, corridor_width=5, wall_density=0.45),
               2_000_000, 0.55, bots=("astar", "hunter"), bot_prob=0.9,
-              notes="立柱 0.5 + 环岛 30% + hunter 纯进攻强敌（地图敌人双升级）"),
+              notes="默认形态顶墙 4 + 通道 5 + 边缘连续段最密 + open 混合 40%"
+                    " + hunter 纯进攻强敌（障碍感知泛化）"),
         Stage("s5-ladder",
-              SimConfig(map_mode="corridor", open_fraction=0.35,
-                        ring_fraction=0.3, wall_density=0.5),
+              SimConfig(map_mode="corridor", open_fraction=0.45,
+                        top_wall_rows=4, corridor_width=5, wall_density=0.45),
               4_000_000, 0.55, bots=("greedy", "astar", "hunter"), bot_prob=0.3,
               self_play=True,
               notes="天梯自我对弈：池子快照为主（ELO 就近采样），bot 少量混入防遗忘"),

@@ -18,8 +18,7 @@ def make_walls(
     """返回 (count, H, W) bool。wall_density=0 时是纯空场。
 
     corridor 模式：**顶部 top_wall_rows 行全部永久墙**（不可炸），与
-    wall_density 无关（即使 density=0 也有顶墙）；wall_density>0 时空旷区
-    额外按经典炸弹人图案随机立柱（障碍物渐进课程用，密度克制递增）。
+    wall_density 无关（即使 density=0 也有顶墙）。
     非零 density 时按经典炸弹人的"奇数行奇数列立柱"图案随机保留柱子，
     并强制清空出生点及其四邻，避免开局就被闷死。
     """
@@ -27,15 +26,10 @@ def make_walls(
     if cfg.map_mode == "corridor":
         # 顶部 top_wall_rows 行全部永久墙 —— 出生点在空旷区下方，
         # 顶墙把场地顶住，火也不会烧到地图外。与 density 无关。
+        # corridor 的障碍在 brick（可炸）里加连续段（见 make_bricks），
+        # 不做散点立柱。
         wall = torch.zeros((count, h, w), dtype=torch.bool, device=device)
         wall[:, : cfg.top_wall_rows, :] = True
-        # wall_density>0：空旷区也随机立柱（每局图案不同，防地图过拟合）
-        if cfg.wall_density > 0:
-            rows = torch.arange(h).view(-1, 1)
-            cols = torch.arange(w).view(1, -1)
-            pillars = (rows % 2 == 1) & (cols % 2 == 1)
-            keep = torch.rand((count, h, w), generator=gen) < cfg.wall_density
-            wall |= pillars.unsqueeze(0) & keep
     elif cfg.wall_density <= 0:
         return torch.zeros((count, h, w), dtype=torch.bool, device=device)
     else:
@@ -61,6 +55,12 @@ def make_bricks(
     - open 模式：无 brick（纯空场）。
     - corridor 模式：中间 corridor_width 列可通行，左右两侧**整列** brick。
       开局出生点及四邻清空，保证不被墙闷死。
+      wall_density>0 时在**可通行区边缘**加**连续性强的横/纵 brick 段**
+      （用户定：corridor 障碍要连续段、放边缘不放中间）：
+      - 垂直段：贴左右 brick 内侧的边缘列（c0/c0+1/c1-2/c1-1），连续 2-4 格高；
+      - 水平段：贴顶部永久墙下方 2 行，连续 2-4 格宽。
+      数量由 wall_density 控制（克制递增 0→0.25→0.45），每局随机位置。
+      段生成后统一清出生点四邻，避免开局被连续段闷住。
     可炸墙被火焰覆盖即摧毁（见 blast.py / torch_sim），挡火但会被烧掉。
     """
     h, w = cfg.height, cfg.width
@@ -76,9 +76,47 @@ def make_bricks(
     in_top = rows < cfg.top_wall_rows
     brick = side & ~in_top
     out = brick.expand(count, h, w).clone()
-    # **不**清出生点四邻：corridor 里出生点在可通行区（脚下非 brick），
-    # 四邻可能正好是 brick 墙（如 (8.5,8.5) 的东邻 (8,9) 是右墙第一列）——
-    # 清空会把墙炸出一个开局缺口。可通行区内部本来就通，不会闷死。
+
+    if cfg.wall_density > 0:
+        # ---- 垂直连续段：可通行区边缘列（贴左右 brick 内侧），2-4 格高 ----
+        edge_cols = torch.tensor([c0, c0 + 1, c1 - 2, c1 - 1],
+                                 dtype=torch.long)
+        edge_cols = edge_cols[edge_cols >= c0]          # 保险（cw 很小时去重/越界）
+        edge_cols = edge_cols[edge_cols < c1]
+        ncols = edge_cols.numel()
+        if ncols > 0:
+            starts = (torch.rand((count, ncols), generator=gen)
+                      * (h - cfg.top_wall_rows - 4) + cfg.top_wall_rows).long()
+            lens = 2 + (torch.rand((count, ncols), generator=gen) * 3).long()
+            act = torch.rand((count, ncols), generator=gen) < cfg.wall_density
+            rows_v = (torch.arange(h).view(1, 1, -1).expand(count, ncols, h))
+            seg = (act.unsqueeze(-1)
+                   & (rows_v >= starts.unsqueeze(-1))
+                   & (rows_v < (starts + lens).unsqueeze(-1)))
+            for ci in range(ncols):
+                out[:, :, int(edge_cols[ci])] |= seg[:, ci]
+        # ---- 水平连续段：顶墙下方 2 行，2-4 格宽 ----
+        band_rows = min(2, h - cfg.top_wall_rows)
+        if band_rows > 0 and (c1 - c0) > 4:
+            hstarts = (torch.rand((count,), generator=gen)
+                       * (c1 - c0 - 4) + c0).long()
+            hlens = 2 + (torch.rand((count,), generator=gen) * 3).long()
+            hact = torch.rand((count,), generator=gen) < cfg.wall_density
+            cols_h = (torch.arange(c0, c1).view(1, -1).expand(count, c1 - c0))
+            hseg = (hact.unsqueeze(-1)
+                    & (cols_h >= hstarts.unsqueeze(-1))
+                    & (cols_h < (hstarts + hlens).unsqueeze(-1)))
+            for r in range(cfg.top_wall_rows, cfg.top_wall_rows + band_rows):
+                out[:, r, c0:c1] |= hseg
+
+    # 清出生点四邻：左右 brick 在出生点行可能正好贴着，且新增边缘连续段
+    # 可能挡住出生点 —— 统一清空避免开局被闷死（清掉的 1-2 格不影响主结构）。
+    for row, col in cfg.spawn_cells():
+        out[:, row, col] = False
+        for drow, dcol in DIRS:
+            nr, nc = row + int(drow), col + int(dcol)
+            if 0 <= nr < h and 0 <= nc < w:
+                out[:, nr, nc] = False
     return out.to(device)
 
 
