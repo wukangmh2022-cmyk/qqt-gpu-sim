@@ -316,6 +316,28 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     process.exit(1);
   }
 
+  // 移动端虚拟摇杆：pointer 事件 → P0 按摇杆方向帧级移动
+  // 先取消观战（前面观战测试一直勾着，观战模式不采样人类输入）
+  els['spectate'].checked = false;
+  (els['spectate'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(400);
+  // mock 里 joystick 无 getBoundingClientRect → main.js 兜底 {0,0,128,128}，
+  // 中心 = (64,64)。向右拖 40px（> 死区 14px）→ joyMove = MOVE_RIGHT。
+  {
+    const joy = els['joystick'];
+    const fire = (ev, e) => (joy.listeners[ev] || []).forEach((fn) => fn(e));
+    const yBefore = qqt.sim.pos[0], xBefore = qqt.sim.pos[1];
+    fire('pointerdown', { pointerId: 1, clientX: 64, clientY: 64, preventDefault() {} });
+    fire('pointermove', { pointerId: 1, clientX: 64 + 40, clientY: 64, preventDefault() {} });
+    await wait(700);                     // 帧循环采样摇杆方向持续移动
+    fire('pointerup', { pointerId: 1 });
+    if (!(qqt.sim.pos[1] > xBefore + 0.05)) {
+      console.error(`FAIL: 摇杆右推后 P0 未向右移动（x ${xBefore} → ${qqt.sim.pos[1]}）`);
+      process.exit(1);
+    }
+    console.log(`移动端摇杆：右推后 P0 向右移动（${xBefore.toFixed(2)} → ${qqt.sim.pos[1].toFixed(2)}）✔`);
+  }
+
   // 渲染帧无异常：手动多跑几帧（rAF mock 每 16ms 一帧）
   await wait(1000);
   console.log(`渲染帧正常（tick=${qqt.sim.t}，done=${qqt.sim.done}）`);

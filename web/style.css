@@ -92,3 +92,48 @@ button:hover { filter: brightness(1.1); }
 #status b { color: var(--accent); }
 section.meta { font-size: 11.5px; color: var(--dim); line-height: 1.6; }
 section.meta code { background: #262c39; padding: 1px 4px; border-radius: 4px; }
+
+/* ---------- 移动端（触屏竖屏）：上正方形画面，下左摇杆 + 右放泡键 ---------- */
+#touch-controls { display: none; }
+@media (pointer: coarse) and (orientation: portrait) {
+  body { margin: 0; }
+  #wrap { max-width: 100%; padding: 0 0 8px; }
+  header { padding: 8px 12px; }
+  header h1 { font-size: 18px; }
+  header .sub { display: none; }
+  #layout { flex-direction: column; gap: 8px; }
+  #stage { width: 100%; }
+  #stage canvas { display: block; width: 100%; height: auto; }
+  aside#panel { display: none; }   /* 移动端专注对战，设置面板隐藏 */
+
+  #touch-controls {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 22px 18px;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  #joystick {
+    width: 128px; height: 128px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    border: 2px solid rgba(255, 255, 255, 0.22);
+    position: relative; touch-action: none;
+  }
+  #joystick-knob {
+    width: 56px; height: 56px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.32);
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    position: absolute; left: 50%; top: 50%;
+    margin-left: -28px; margin-top: -28px;
+    pointer-events: none;
+  }
+  #bomb-btn {
+    width: 96px; height: 96px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ff9a56, #e05a2b);
+    color: #fff; font-size: 40px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    border: 3px solid rgba(255, 255, 255, 0.35);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+    touch-action: none; cursor: pointer;
+  }
+  #bomb-btn:active { transform: scale(0.92); }
+}

@@ -369,6 +369,60 @@
   for (const k of Object.keys(KEY_TO_MV)) MV_KEYS[KEY_TO_MV[k]].push(k);
   const held = new Set();
 
+  // ---- 移动端触屏：虚拟摇杆 + 放泡键（joyMove 优先于键盘） ----
+  // 摇杆位移 → 主方向（4 向 + 死区）；释放回 IDLE。放泡键按下即 pendingBomb。
+  let joyMove = null;
+  const elJoy = document.getElementById('joystick');
+  const elKnob = document.getElementById('joystick-knob');
+  const elBombBtn = document.getElementById('bomb-btn');
+  if (elJoy && elKnob) {
+    const JOY_R = 54;    // 摇杆可拖动半径（≈ 底座 128px 的一半）
+    const joyRect = () => (elJoy.getBoundingClientRect
+      ? elJoy.getBoundingClientRect()
+      : { left: 0, top: 0, width: 128, height: 128 });   // mock 兜底
+    let joyActive = false;
+    const moveKnob = (dx, dy) => {
+      const d = Math.hypot(dx, dy) || 1;
+      const c = Math.min(d, JOY_R);
+      elKnob.style.transform = `translate(${dx / d * c}px, ${dy / d * c}px)`;
+    };
+    const dirFrom = (dx, dy) => {
+      if (Math.hypot(dx, dy) < 14) return null;          // 死区
+      return Math.abs(dx) > Math.abs(dy)
+        ? (dx > 0 ? MOVE_RIGHT : MOVE_LEFT)
+        : (dy > 0 ? MOVE_DOWN : MOVE_UP);
+    };
+    const joyMoveEv = (e) => {
+      if (!joyActive) return;
+      const r = joyRect();
+      const dx = e.clientX - (r.left + r.width / 2);
+      const dy = e.clientY - (r.top + r.height / 2);
+      moveKnob(dx, dy);
+      joyMove = dirFrom(dx, dy);
+    };
+    const joyDown = (e) => {
+      joyActive = true;
+      if (elJoy.setPointerCapture) elJoy.setPointerCapture(e.pointerId);
+      joyMove = null;
+      joyMoveEv(e);
+    };
+    const joyUp = () => {
+      joyActive = false;
+      joyMove = null;
+      elKnob.style.transform = 'translate(0px, 0px)';
+    };
+    elJoy.addEventListener('pointerdown', joyDown);
+    elJoy.addEventListener('pointermove', joyMoveEv);
+    elJoy.addEventListener('pointerup', joyUp);
+    elJoy.addEventListener('pointercancel', joyUp);
+  }
+  if (elBombBtn) {
+    elBombBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      human.pendingBomb = true;
+    });
+  }
+
   window.addEventListener('keydown', (e) => {
     held.add(e.code);
     if (e.code === 'Space') {
@@ -397,6 +451,7 @@
   });
 
   function sampleHumanMove() {
+    if (joyMove !== null) return joyMove;   // 移动端摇杆优先（覆盖键盘方向）
     const active = new Set(human.latch);
     for (const mv of human.dirStack) {
       if (MV_KEYS[mv].some((k) => held.has(k))) active.add(mv);
@@ -471,6 +526,7 @@
     sim.reset(elMode.value === 'corridor' ? 'corridor' : 'open');
     rng = Q.mulberry32(gameSeed ^ 0x13579BDF);
     human.dirStack = []; human.latch.clear(); human.move = MOVE_IDLE; human.pendingBomb = false;
+    joyMove = null;                    // 摇杆归位（移动端）
     explosion = null; explosionTrig = null; resultShown = false;
     dangerCache = null;             // 开局清掉旧危险图缓存
     prevPos.set(sim.pos); curPos.set(sim.pos);
@@ -890,13 +946,18 @@
   }
 
   // ------------------------------------------------------------ 启动
+  // 触屏检测：移动端竖屏显示摇杆布局 + 欢迎文案
+  const isTouch = () => !!(window.matchMedia &&
+    window.matchMedia('(pointer: coarse)').matches);
   // 加载完成后显示欢迎窗口（操作说明），按空格或点击开始第一局
   function showWelcome() {
     elBanner.innerHTML =
       `<div class="wl-title">💣 QQT 格斗</div>` +
-      `<span class="tip">方向键 / WASD 移动 · 空格 放泡</span>` +
-      `<span class="tip">D 危险图 · M 静音 · R 重开</span>` +
-      `<span class="tip act">按 空格 或 点击 开始游戏</span>`;
+      (isTouch()
+        ? `<span class="tip">左摇杆移动 · 💣 键放泡</span>`
+        : `<span class="tip">方向键 / WASD 移动 · 空格 放泡</span>`) +
+      `<span class="tip">R 重开</span>` +
+      `<span class="tip act">点击 开始游戏</span>`;
     elBanner.classList.remove('hidden');
   }
 
