@@ -601,8 +601,29 @@ python3 -m train.train \
 
 ### 5. 启动与监控
 - `run_train_lstm_course.sh`：N=4096, bptt_window=8, `python3 -u`（修 stdout
-  缓冲），total-steps 2e9, time-budget 86400s, resume 接力。
+  缓冲），total-steps 2e9, time-budget 86400s, **ckpt 存在自动 resume 接力**。
 - 24h 监控脚本（后台）：每 5 分钟查 CSV 的 stage 列变化（课程切换打标记）、
   胜率/sps、进程健康、停滞检测（15 分钟无增长告警）。
 - 实测：s1 启动 sps≈19.9k（open 空场比 corridor 快），首迭代无 20 分钟
   TBE 编译（缓存复用）。
+
+### 6. 课程 v3 修订（用户连续两轮指导）
+- **环岛不进训练**（用户定：留给我测试泛化性）：训练课程去掉 ring_fraction，
+  新增 `eval_lstm_ring.py` 在环岛/特殊地图上评估泛化（CPU 跑，不抢 NPU）。
+- **corridor 前期就引入**（可炸墙多 → 宝箱奖励稠密，学习效率高），
+  障碍三维循序渐进（既不让训练困难，又保留后期障碍感知泛化）：
+  - 顶墙行数 `top_wall_rows` **2 → 3 → 4**（默认形态就是顶部 4 行永久墙）；
+  - 通道宽度 `corridor_width` **7 → 5**（左右可炸墙列 3 → 4）；
+  - 边缘连续横/纵 brick 段 `wall_density` **0 → 0.25 → 0.45**。
+- **corridor 障碍用连续段而非散点**：垂直段贴可通行区边缘列（c0/c0+1/
+  c1-2/c1-1，连续 2-4 格高）+ 水平段贴顶墙下方 2 行（连续 2-4 格宽），
+  放边缘不放中间；open 场景保持随机散点立柱（经典炸弹人图案）。
+  段生成后统一清出生点四邻，避免开局被闷。
+- 课程表（v3，5 阶段）：
+  | 阶段 | 敌人 | 地图（corridor 关） |
+  |---|---|---|
+  | s1-open-basic | random+greedy | open 空场 |
+  | s2-corridor-easy | greedy | top_wall=2, cw=7, wd=0（简单） |
+  | s3-corridor-mid | greedy+astar | top_wall=3, cw=5, wd=0.25 |
+  | s4-corridor-hard | astar+hunter | top_wall=4, cw=5, wd=0.45 + open 40% |
+  | s5-ladder | 池子为主 | top_wall=4, cw=5, wd=0.45 + open 45%（天梯） |
