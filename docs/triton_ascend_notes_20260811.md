@@ -550,3 +550,59 @@ python3 -m train.train \
   （19.6k bench → 17.6k 实际）但足够跑 1B；若要继续压，方向是 sim.step/
   legal_mask 的 triton 化（MacBook 上已验证 step -24%）
 - stdout 块缓冲是本次最大的"假卡死"来源，后续 910B 训练统一加 `-u`
+
+## 十四、LSTM 双维度课程 + 天梯自我对弈（2026-08-12，重构训练流程）
+
+### 1. 背景：用户对上一版训练的批评
+- 上一版 `run_train_lstm_1b.sh` 用 `--single-stage --bot-opp-prob 1.0
+  --warmup-steps 1e9` 把课程机制整个绕过（当时 LSTM 的 build_opponents 池
+  快照会崩，用纯 greedy bot 避开）→ 结果 **969M 步全程只打 greedy**，
+  对 hunter 只有 11.5% 胜率（评估见第十三节流程）。
+- 用户要求：**开训前就要规划好课程链路** + 课程结束进天梯自我对弈的时机；
+  敌人要循序渐进（课程里已有的 random/greedy/astar/hunter 都要排进去）；
+  **地图也要循序渐进**（open/corridor 两个地图，到一定时机随机加障碍物，
+  个数克制递增）—— 防对地图过拟合、对敌人过拟合。
+
+### 2. 双维度课程表（train/curriculum.py::lstm_curriculum，5 阶段）
+| 阶段 | 敌人（bots） | 地图 | 说明 |
+|---|---|---|---|
+| s1-open-basic | random+greedy | map=open（纯空场） | 移动/放泡/躲避启蒙 |
+| s2-mix-wall | greedy | corridor + open 50% | 学炸墙开图（顶墙+左右 brick+宝箱） |
+| s3-pillar-astar | greedy+astar | corridor, open 30%, ring 20%, **wall_d=0.3** | 随机立柱起步 + 环岛 + astar |
+| s4-hunter-dense | astar+hunter | corridor, open 30%, ring 30%, **wall_d=0.5** | 立柱加密 + hunter 纯进攻强敌 |
+| s5-ladder | greedy+astar+hunter（bp 0.3）| corridor, open 35%, ring 30%, wall_d=0.5 | **天梯**：池子为主，bot 少量防遗忘 |
+
+- 晋级：`CurriculumState.should_advance` = 跑满对局数 **或** 近 500 局胜率
+  ≥ 目标（s1 0.55 / s2 0.60 / s3-s5 0.55）—— 达标自动切下一阶段。
+- **防过拟合设计**：多关混合（open_fraction/ring_fraction）+ wall_density 随机
+  立柱（经典炸弹人奇数行列图案，每局不同）+ 密度克制递增 0→0.3→0.5；
+  敌人维度 bot 全程混入（bot_prob 0.9），天梯阶段 bot_prob 降到 0.3
+  （池子为主）防"只打接近型网络"的分布单一化。
+
+### 3. 关键机制改动
+- **build_opponents 池快照键推断**：LSTM 第一层是 `l_conv1.weight`（不是
+  cnn 的 conv0 / mlp 的 shared.0），按 arch 分支取通道数 → 天梯阶段
+  build_opponents 不再 KeyError。
+- **adapt_first_conv 支持 lstm**：l_conv1 输入通道按视角序分段搬运
+  （自身 2 通道 + 墙/危/进 3 通道对齐，对手段按 min(P) 截断，新通道置零）
+  —— 课程切 1v2（通道 14→19）时权重不丢、行为不掉坑。
+- **Stage 加 per-stage 对手**：`bots`（本阶段 bot 组合，优先于
+  --bot-opponents 全局）、`bot_prob`（0 = 沿用全局）、`self_play`
+  （True = 天梯：关 warmup → 对手以池子为主）。
+- **wall_density 接线**（此前从未生效）：open 分支 + 混合地图 open 关都改调
+  `make_walls`（density=0 返回空场行为不变）；make_walls 的 corridor 分支
+  顶墙之外也按 density 随机立柱。出生点及四邻统一清空，不闷死。
+
+### 4. 教训（为什么上一版浪费了算力）
+- 绕过课程机制（single-stage + 纯 bot）= 把"课程/天梯/池子"全丢了，只打
+  单一对手 → 泛化差（hunter 11.5%）。
+- **没有定时监控** → 胜率 91%→100% 后还在傻跑 greedy，969M 步后半程几乎
+  无信息量。用户明确要求"自己定时监控"。
+
+### 5. 启动与监控
+- `run_train_lstm_course.sh`：N=4096, bptt_window=8, `python3 -u`（修 stdout
+  缓冲），total-steps 2e9, time-budget 86400s, resume 接力。
+- 24h 监控脚本（后台）：每 5 分钟查 CSV 的 stage 列变化（课程切换打标记）、
+  胜率/sps、进程健康、停滞检测（15 分钟无增长告警）。
+- 实测：s1 启动 sps≈19.9k（open 空场比 corridor 快），首迭代无 20 分钟
+  TBE 编译（缓存复用）。
