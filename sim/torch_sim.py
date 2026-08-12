@@ -15,7 +15,15 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
+
+# GE 自动融合（AutoFuse）：torch.compile(backend='npu') 生成的图在 CANN GE
+# 层做算子融合（Elemwise/Broadcast 默认开）。实测 danger 段 x3.6-3.9 且
+# 位级完全一致；不设则编译退化未融合（仍位级一致，仅慢）。setdefault
+# 兜底：调用方不 export 也能拿到融合收益（GE 在编译时读取该变量）。
+os.environ.setdefault("AUTOFUSE_FLAGS", "--enable_autofuse=true")
 
 from .blast import danger_map, rays, resolve_explosions
 from .config import DIRS, SimConfig
@@ -104,6 +112,12 @@ class BatchedSim:
         # cfg.X * tensor 换成 预分配 (n,p) 张量操作数（张量-张量 op 零同步）。
         # 键 = (值, shape)：cfg 常量命中缓存；_explore_coef 退火变化时自然失效。
         self._sc_cache: dict[tuple[float, tuple], torch.Tensor] = {}
+        # danger 分档编译缓存（2026-08-11）：AUTOFUSE（GE 自动融合）+
+        # torch.compile(backend='npu') 把 danger 的 Elemwise/Broadcast 链融合成
+        # 大 kernel —— 实测 max_b∈{1..7} 全档位 x3.6-3.9、**位级完全一致**
+        # （maxdiff=0）。档位（blast_max_hint）作编译常量，每档一份图；
+        # dynamo 磁盘缓存跨进程复用，训练首次每档编译几十秒一次性。
+        self._dng_tier: dict[int, object] = {}
         self._last_hit = torch.full((n, p), -10**9, dtype=torch.long, device=d)
         # open 关宝箱布局缓存（懒初始化，cfg 固定）：排除格 / 随机回收池 / 十字格
         self._open_excl: torch.Tensor | None = None
@@ -171,7 +185,9 @@ class BatchedSim:
         if self.cfg.map_mode != "corridor":
             # 纯 open 训练（或空场测试）：固定能力无成长。
             # 对手（pid 1）初始属性按 _opp_boost（训练难度）。
-            self.wall[idx] = False
+            # wall_density>0 时按经典炸弹人图案随机立柱（障碍物渐进课程用）；
+            # =0 时 make_walls 返回纯空场，行为与旧版一致。
+            self.wall[idx] = self._make_walls(count)
             self.brick[idx] = False
             b0 = torch.full((count,), self.cfg.max_bombs, dtype=torch.float,
                             device=self.device)
@@ -224,7 +240,8 @@ class BatchedSim:
             corr_idx = idx[~(is_open | is_ring)]
 
             if open_idx.numel():
-                self.wall[open_idx] = False
+                # wall_density>0 时 open 关也随机立柱（每局图案不同，防地图过拟合）
+                self.wall[open_idx] = self._make_walls(int(open_idx.numel()))
                 self.brick[open_idx] = False
                 no = int(open_idx.numel())
                 b0 = torch.full((no,), float(self.cfg.open_growth_bombs),
@@ -575,11 +592,7 @@ class BatchedSim:
                 self.bomb_blast._version)
 
     def legal_mask(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """返回 (move_mask (N,P,5), bomb_mask (N,P,2))。
-
-        2026-08-11 实测 triton 复用 move kernel 试探（位级一致）只省 6%
-        （16.3→15.4ms）—— AABB 碰撞计算量是硬成本，保留 torch 版。
-        """
+        """返回 (move_mask (N,P,5), bomb_mask (N,P,2))。"""
         return legal_mask(
             self.cfg, self.wall, self.fuse, self.owner, self.pos, self.alive,
             self.brick, self.bombs_cap,
@@ -669,6 +682,26 @@ class BatchedSim:
         """(N,H,W) int32：每格泡泡的威力。0（手工种泡/未设）回退 cfg.blast。"""
         return torch.where(self.bomb_blast > 0,
                            self.bomb_blast.long(), self.cfg.blast)
+
+    def _danger_c(self, fuse, wall, blast_map, brick, max_b: int):
+        """分档编译的 danger_map（AUTOFUSE + backend='npu'）。
+
+        max_b（= blast_max_hint）作编译常量：每档一份 GE 融合图。调用前
+        必须已 export AUTOFUSE_FLAGS（torch_sim 顶部 setdefault 兜底），
+        否则退化未融合编译（位级仍一致，仅不加速）。只用于非 graph 模式
+        （graph 捕获段内不能走 torch.compile）。
+        """
+        f = self._dng_tier.get(max_b)
+        if f is None:
+            cfg = self.cfg
+            def _d(fuse, wall, blast_map, brick, _mb=max_b):
+                return danger_map(fuse, wall, blast_map, cfg.fuse,
+                                  brick=brick, max_chain=cfg.max_chain,
+                                  early_exit=False, blast_max_hint=_mb,
+                                  chain_cap=cfg.chain_cap_rounds)
+            f = torch.compile(_d, backend="npu", dynamic=False)
+            self._dng_tier[max_b] = f
+        return f(fuse, wall, blast_map, brick)
 
     def _sc(self, value: float, shape: tuple) -> torch.Tensor:
         """缓存的全值张量操作数（标量 op 免 item 同步的载体）。
@@ -987,16 +1020,18 @@ class BatchedSim:
         # max≤4）+ 上方提前取的 blast_hint（放泡后 max ≥ 结算后 max，恒安全）
         # → danger 零 host 同步（原来 5 次：守卫/轮检查/档位 max）。graph
         # 捕获段（_graph_mode）仍需静态固定轮 + 静态档位。
-        # **danger 保持 eager（2026-08-11 实测）**：AUTOFUSE 单段编译 x3.6-3.9
-        # 位级一致，但 step 里 blast_max_hint 每 tick 动态变化 → 编译函数
-        # 每次调用 guard 检查 + GE 图切换，调度开销吃掉融合收益（集成后
-        # 89.9ms vs eager 80.6ms 净负）。编译只适合固定输入段（obs/legal_mask）。
-        danger = danger_map(self.fuse, self.wall, self._blast_map(), cfg.fuse,
-                            self.brick, cfg.max_chain,
-                            early_exit=not self._graph_mode,
-                            blast_max_hint=blast_hint,
-                            chain_cap=None if self._graph_mode
-                            else cfg.chain_cap_rounds)
+        if not self._graph_mode:
+            # 分档编译版（AUTOFUSE 融合，位级一致 x3.6-3.9）；graph 捕获段
+            # 保持 eager（capture 内不能 torch.compile）。
+            danger = self._danger_c(self.fuse, self.wall, self._blast_map(),
+                                    self.brick, blast_hint)
+        else:
+            danger = danger_map(self.fuse, self.wall, self._blast_map(), cfg.fuse,
+                                self.brick, cfg.max_chain,
+                                early_exit=not self._graph_mode,
+                                blast_max_hint=blast_hint,
+                                chain_cap=None if self._graph_mode
+                                else cfg.chain_cap_rounds)
         self._dng_cache = danger                 # 缓存给本 tick 的 observe 复用
         self._dng_sig = self._dng_signature()
         cell = center_cell(self.pos)

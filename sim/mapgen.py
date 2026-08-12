@@ -18,7 +18,8 @@ def make_walls(
     """返回 (count, H, W) bool。wall_density=0 时是纯空场。
 
     corridor 模式：**顶部 top_wall_rows 行全部永久墙**（不可炸），与
-    wall_density 无关（即使 density=0 也有顶墙）。
+    wall_density 无关（即使 density=0 也有顶墙）；wall_density>0 时空旷区
+    额外按经典炸弹人图案随机立柱（障碍物渐进课程用，密度克制递增）。
     非零 density 时按经典炸弹人的"奇数行奇数列立柱"图案随机保留柱子，
     并强制清空出生点及其四邻，避免开局就被闷死。
     """
@@ -28,6 +29,13 @@ def make_walls(
         # 顶墙把场地顶住，火也不会烧到地图外。与 density 无关。
         wall = torch.zeros((count, h, w), dtype=torch.bool, device=device)
         wall[:, : cfg.top_wall_rows, :] = True
+        # wall_density>0：空旷区也随机立柱（每局图案不同，防地图过拟合）
+        if cfg.wall_density > 0:
+            rows = torch.arange(h).view(-1, 1)
+            cols = torch.arange(w).view(1, -1)
+            pillars = (rows % 2 == 1) & (cols % 2 == 1)
+            keep = torch.rand((count, h, w), generator=gen) < cfg.wall_density
+            wall |= pillars.unsqueeze(0) & keep
     elif cfg.wall_density <= 0:
         return torch.zeros((count, h, w), dtype=torch.bool, device=device)
     else:

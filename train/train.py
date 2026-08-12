@@ -27,7 +27,7 @@ from sim.config import N_BOMB, N_MOVES, SimConfig, obs_extra
 from sim.factory import make_sim
 from sim.bots import make_bot
 
-from .curriculum import CurriculumState, default_curriculum
+from .curriculum import CurriculumState, default_curriculum, lstm_curriculum
 from .bc import load_recordings, bc_update
 from .model import ActorCritic, infer_players
 from .model_pool import ModelPool, load_frozen
@@ -134,6 +134,14 @@ def adapt_first_conv(model: ActorCritic, new_shape: tuple[int, int, int],
                 w[:, 2:2 + keep] = o[:, 2:2 + keep]              # 对手位置段
                 w[:, new_p + 1:new_p + 1 + keep] = o[:, old_p + 1:old_p + 1 + keep]
             new_sd[key] = w
+        elif key == "l_conv1.weight":      # LSTM 局部 CNN 第一层（输入通道 = 共享
+            o, w = old_sd[key], torch.zeros_like(new_sd[key])   # 观测通道数，同视角序分段）
+            w[:, :2] = o[:, :2]
+            w[:, 2 * new_p:2 * new_p + 3] = o[:, 2 * old_p:2 * old_p + 3]
+            if keep > 0:
+                w[:, 2:2 + keep] = o[:, 2:2 + keep]
+                w[:, new_p + 1:new_p + 1 + keep] = o[:, old_p + 1:old_p + 1 + keep]
+            new_sd[key] = w
         elif key == "shared.0.weight":      # MLP：第一层 Linear 按视角列块搬运
             o, w = old_sd[key], torch.zeros_like(new_sd[key])
             hw = new_shape[1] * new_shape[2]
@@ -197,8 +205,12 @@ def build_opponents(pool: ModelPool, learner: ActorCritic, elo: float,
             snaps.append({"name": name, "elo": fixed_elo.get(name, 1000.0)})
             continue
         snap = pool.sample(elo)
-        snap_c = snap["state"]["conv0.weight"].shape[1] if "conv0.weight" in snap["state"] \
-            else (snap["state"]["shared.0.weight"].shape[1] // (h * w))
+        if learner.arch == "lstm":
+            snap_c = snap["state"]["l_conv1.weight"].shape[1]
+        elif "conv0.weight" in snap["state"]:
+            snap_c = snap["state"]["conv0.weight"].shape[1]
+        else:
+            snap_c = snap["state"]["shared.0.weight"].shape[1] // (h * w)
         state = snap["state"]
         if snap_c != learner.obs_shape[0]:
             old = load_frozen(ActorCritic, (snap_c, h, w), state, device,
@@ -478,7 +490,9 @@ def main() -> None:
         base = SimConfig(timeout_draw=args.timeout_draw,
                          combo_reward=args.combo_reward,
                          combo_gap_factor=args.combo_gap_factor)
-    stages = default_curriculum(base)
+    # LSTM 从零训练走双维度课程（敌人 + 地图循序渐进，含天梯自我对弈阶段）；
+    # cnn/mlp 沿用默认课程。
+    stages = lstm_curriculum() if args.arch == "lstm" else default_curriculum(base)
     cstate = CurriculumState()
     pcfg = PPOConfig(rollout_steps=args.rollout_steps, lr=args.lr,
                      minibatches=args.minibatches, gae_lambda=args.gae_lambda,
@@ -614,19 +628,27 @@ def main() -> None:
     if args.warmup_steps > 0 and not args.fixed_ckpt and not args.bot_opponents:
         print("[warn] --warmup-steps 指定了但没有任何固定对手/bot，"
               "热身期退化为纯池子采样")
+    # 课程 bot：按当前 stage 的 bots 编排（LSTM 双维度课程每阶段指定对手；
+    # 空 = 回退 --bot-opponents 全局配置）
+    bot_kinds = stage.bots or tuple(
+        s.strip() for s in args.bot_opponents.split(",") if s.strip())
     bot_items: list[tuple[str, object]] = []
-    for kind in [s.strip() for s in args.bot_opponents.split(",") if s.strip()]:
+    for kind in bot_kinds:
         if kind not in ("random", "greedy", "astar", "hunter"):
             raise ValueError(f"未知 bot 类型: {kind}（可选 random/greedy/astar/hunter）")
         bot_items.append((kind, make_bot(sim, kind)))
-        print(f"[opponent] bot {kind}")
+        print(f"[opponent] stage={stage.name} bot {kind}")
+    # 对手 mix：课程阶段（self_play=False）走 warmup 期 → 只从 fixed+bot 采样
+    # （不打池子）；天梯阶段（self_play=True）关 warmup → 池子为主 + bot 少量
+    # 混入（bot_prob 由 stage 指定，0 = 沿用全局）。
+    bot_prob = stage.bot_prob if stage.bot_prob > 0 else args.bot_opp_prob
 
     nets, snaps = build_opponents(pool, learner, elo, stage.cfg.n_players, device,
                                   fixed_items=fixed_items, bot_items=bot_items,
                                   fixed_elo=fixed_elo,
-                                  warmup=global_step < args.warmup_steps,
+                                  warmup=not stage.self_play,
                                   fixed_prob=args.fixed_opp_prob,
-                                  bot_prob=args.bot_opp_prob)
+                                  bot_prob=bot_prob)
     # 训练难度：对手初始属性按类型增强（历史网络 ×mult / 规则 bot 80%）
     apply_opp_boost(sim, nets, args.opp_boost)
     runner = SelfPlayRunner(sim, learner, nets, pcfg, stage.opponent_handicap)
@@ -755,9 +777,9 @@ def main() -> None:
             nets, snaps = build_opponents(pool, learner, elo, stage.cfg.n_players,
                                           device, fixed_items=fixed_items,
                                           bot_items=bot_items, fixed_elo=fixed_elo,
-                                          warmup=global_step < args.warmup_steps,
+                                          warmup=not stage.self_play,
                                           fixed_prob=args.fixed_opp_prob,
-                                          bot_prob=args.bot_opp_prob)
+                                          bot_prob=bot_prob)
             apply_opp_boost(sim, nets, args.opp_boost)
             runner.opponents = nets
             runner.clear_stats()
@@ -774,8 +796,12 @@ def main() -> None:
                 opt = torch.optim.Adam(learner.parameters(), lr=pcfg.lr, eps=1e-5)
                 sim = make_sim(stage.cfg, args.num_envs, backend=args.backend,
                                device=device, seed=args.seed + it)
-                # bot 绑定着旧 sim 的状态（放泡/位置），换图后必须重建
-                bot_items = [(kind, make_bot(sim, kind)) for kind, _ in bot_items]
+                # bot 绑定着旧 sim 的状态（放泡/位置），换图后必须重建；
+                # LSTM 课程每阶段指定 bot 组合（stage.bots 优先，空 = 沿用旧组合）
+                stage_bots = stage.bots or tuple(kind for kind, _ in bot_items)
+                bot_items = [(kind, make_bot(sim, kind)) for kind in stage_bots]
+                if stage.bot_prob > 0:
+                    bot_prob = stage.bot_prob
                 # 固定陪练按启动时的 obs_shape 适配过，人数变多后要重新适配
                 # （只有 1v1 单阶段训练不触发；跨阶段课程需要时按原路径重载）
                 if fixed_items and any(
@@ -788,9 +814,9 @@ def main() -> None:
                                               fixed_items=fixed_items,
                                               bot_items=bot_items,
                                               fixed_elo=fixed_elo,
-                                              warmup=global_step < args.warmup_steps,
+                                              warmup=not stage.self_play,
                                               fixed_prob=args.fixed_opp_prob,
-                                              bot_prob=args.bot_opp_prob)
+                                              bot_prob=bot_prob)
                 apply_opp_boost(sim, nets, args.opp_boost)
                 runner = SelfPlayRunner(sim, learner, nets, pcfg,
                                         stage.opponent_handicap)
