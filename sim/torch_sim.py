@@ -699,7 +699,12 @@ class BatchedSim:
                                   brick=brick, max_chain=cfg.max_chain,
                                   early_exit=False, blast_max_hint=_mb,
                                   chain_cap=cfg.chain_cap_rounds)
-            f = torch.compile(_d, backend="npu", dynamic=False)
+            try:
+                f = torch.compile(_d, backend="npu", dynamic=False)
+            except Exception:
+                # 非 NPU 环境（本地 CPU/MPS 开发）：无 'npu' 编译后端，
+                # 退化未编译的 danger_map（位级一致，仅不加速）。
+                f = _d
             self._dng_tier[max_b] = f
         return f(fuse, wall, blast_map, brick)
 

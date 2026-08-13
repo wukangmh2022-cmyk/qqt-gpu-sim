@@ -37,6 +37,7 @@ from sim.config import (DIRS, MOVE_DOWN, MOVE_IDLE, MOVE_LEFT, MOVE_RIGHT,  # no
 from sim.move import _EPS, _resolve_axis  # noqa: E402
 from sim.torch_sim import BatchedSim  # noqa: E402
 from sim.bots import make_bot  # noqa: E402
+from sim.obs import local_view_features  # noqa: E402
 from train.model import ActorCritic, infer_players  # noqa: E402
 from train.train import adapt_first_conv  # noqa: E402
 
@@ -736,6 +737,10 @@ def run_game(*, ckpt: str = "ckpt/duel_rw_ckpt.pt", ckpt_b: str | None = None,
     bot1 = make_bot(sim, opp_bot) if (opp_bot and not human1) else None
     bot0 = make_bot(sim, p0_bot) if (p0_bot and not human0) else None
 
+    # LSTM 时序状态（按 pid 分开放，跨 tick 传递；对局结束 sim.step 返回
+    # done 时清零，见主循环终局处理）。
+    hidden_st: dict[int, object] = {0: None, 1: None}
+
     def _ai(pid: int, net_ref, bot_ref) -> torch.Tensor:
         """该玩家的决策：规则 bot 优先，否则网络（pid 决定视角）。
 
@@ -745,9 +750,23 @@ def run_game(*, ckpt: str = "ckpt/duel_rw_ckpt.pt", ckpt_b: str | None = None,
         对打多个 ckpt 时每个模型都用自己的训练视角，公平且行为正常。
         旧版 P1 模型用 pid=1，per-player extra 通道不置换 → 把对手的泡数
         当成自己的 → 行为乱。规则 bot 读 sim 原始状态，不走网络视角，任意位。
+
+        **LSTM 例外**：局部特征（local 7×7 窗口 + rel/glob）以自己为中心生成，
+        自带视角 —— 直接用本角色的特征三元组喂模型（模型恒 pid=0 视角 =
+        "自己"，等价于 CNN 的重排），不需要 _swap_player_channels。
         """
         if bot_ref is not None:
             return bot_ref.act(obs, mm[:, pid], bm[:, pid], pid)
+        if getattr(net_ref, "arch", "cnn") == "lstm":
+            lf = local_view_features(sim.cfg, obs, sim.pos, sim.alive,
+                                     sim.t, sim.fuse, sim.hp, only_p0=False)
+            # lf 返回 (N,P,C,7,7)/(N,P,MAX_T,6)/(N,P,5)：按 pid 取本角色（去 P 维）
+            feats = (lf[0][:, pid], lf[1][:, pid], lf[2][:, pid])
+            with torch.no_grad():
+                a, _, _, h = net_ref.act(feats, mm[:, pid], bm[:, pid], 0,
+                                         hidden_st[pid])
+            hidden_st[pid] = h
+            return a
         if pid == 1 and net_ref is not None:
             # P1 网络模型：观测重排（自己→通道0）+ pid=0 视角；掩码用**物理 P1**
             # 的（mm[:,1] 已切好，物理位置决定可行动作）。不能走 ai_action ——
@@ -1131,6 +1150,9 @@ def run_game(*, ckpt: str = "ckpt/duel_rw_ckpt.pt", ckpt_b: str | None = None,
                 done = True
                 r0 = float(rew[0, 0])
                 result_msg = "你赢了!" if r0 > 0.5 else ("你输了" if r0 < -0.5 else "平局")
+                # 对局结束：LSTM 时序记忆清零（下局从零开始）
+                hidden_st[0] = None
+                hidden_st[1] = None
             if auto_ticks > 0:
                 auto_ticks -= 1
                 if auto_ticks == 0:
