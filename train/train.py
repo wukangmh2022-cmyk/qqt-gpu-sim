@@ -27,7 +27,8 @@ from sim.config import N_BOMB, N_MOVES, SimConfig, obs_extra
 from sim.factory import make_sim
 from sim.bots import make_bot
 
-from .curriculum import CurriculumState, default_curriculum, lstm_curriculum
+from .curriculum import (CurriculumState, cnn_curriculum, default_curriculum,
+                         lstm_curriculum)
 from .bc import load_recordings, bc_update
 from .model import ActorCritic, infer_players
 from .model_pool import ModelPool, load_frozen
@@ -388,6 +389,10 @@ def main() -> None:
     ap.add_argument("--single-stage", action="store_true",
                     help="只跑课程第一阶段（1v1），不推进到 1v2 —— 对打 UI 用纯 1v1 模型，"
                          "避免 1v2 权重缩回 1v1 后行为退化（不放炮、往角落偏移）")
+    ap.add_argument("--cnn-course", action="store_true",
+                    help="CNN 泛化专项课程（curriculum.cnn_curriculum）：resume "
+                         "duel_cnn 后敌人/地图渐进，把对打寻路 AI（astar/hunter）"
+                         "胜率拉到 90%+。不加则走 default_curriculum（旧 1v1→1v2）")
     ap.add_argument("--fixed-ckpt", action="append", default=[], metavar="NAME=PATH",
                     help="固定陪练 checkpoint（可重复指定）：启动时加载为冻结网络并"
                          "适配到当前观测，始终作为潜在对手。ELO 走 fixed_elo 字典"
@@ -490,9 +495,14 @@ def main() -> None:
         base = SimConfig(timeout_draw=args.timeout_draw,
                          combo_reward=args.combo_reward,
                          combo_gap_factor=args.combo_gap_factor)
-    # LSTM 从零训练走双维度课程（敌人 + 地图循序渐进，含天梯自我对弈阶段）；
-    # cnn/mlp 沿用默认课程。
-    stages = lstm_curriculum() if args.arch == "lstm" else default_curriculum(base)
+    # 课程选择：LSTM 从零走双维度课程（敌人+地图渐进）；CNN 泛化专项课程
+    # （--cnn-course，resume duel_cnn 打寻路 AI 到 90%+）；cnn/mlp 默认课程。
+    if args.arch == "lstm":
+        stages = lstm_curriculum()
+    elif args.cnn_course:
+        stages = cnn_curriculum(base)
+    else:
+        stages = default_curriculum(base)
     cstate = CurriculumState()
     pcfg = PPOConfig(rollout_steps=args.rollout_steps, lr=args.lr,
                      minibatches=args.minibatches, gae_lambda=args.gae_lambda,

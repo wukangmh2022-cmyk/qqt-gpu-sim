@@ -119,3 +119,44 @@ def lstm_curriculum() -> list[Stage]:
               self_play=True,
               notes="天梯自我对弈：池子快照为主（ELO 就近采样），bot 少量混入防遗忘"),
     ]
+
+
+def cnn_curriculum(base: SimConfig = SimConfig()) -> list[Stage]:
+    """CNN 泛化专项课程（2026-08-12）：**resume duel_cnn，打寻路 AI 到 90%+**。
+
+    依据（本地 eval_cnn_bots.py 多 seed 摸底，duel_cnn 300M，512 局合并）：
+      cnn-mix(训练分布) 100% | open80(80% 成长空场) 78% | corridor astar 75%
+      hunter 45% | pure-open(固定能力无成长) 2% | pillar 0% | ring 0%。
+      环岛按用户要求**不进训练**（留泛化测试）。
+    敌人维度：greedy → astar → hunter（最终目标对打这两个寻路 AI 90%+）。
+    地图维度：训练分布保底 → 空场 80% 成长（launcher 空场景同款）→ 纯走廊
+    硬形态 → 纯 open 固定能力分支（用户：空旷场景随机障碍）→ 随机立柱 →
+    混合 + 天梯收尾。各阶段胜率达标即提前晋级，预算跑不完不阻塞。
+    """
+    return [
+        Stage("s1-cnn-mix", replace(base, open_fraction=0.5),
+              800_000, 0.95, bots=("greedy", "astar"), bot_prob=0.5,
+              notes="训练分布保底：resume duel_cnn 平滑，守住 100%"),
+        Stage("s2-open-empty", replace(base, open_fraction=1.0,
+                                       open_growth_bombs=8, open_growth_blast=6,
+                                       open_growth_speed=1.68),
+              1_500_000, 0.90, bots=("astar",), bot_prob=0.5,
+              notes="launcher 空场景同款（80% 成长上限 8/6/1.68）：astar 78% → 90%"),
+        Stage("s3-corridor", replace(base, open_fraction=0.0,
+                                     top_wall_rows=4, corridor_width=5,
+                                     wall_density=0.45),
+              1_500_000, 0.85, bots=("astar", "hunter"), bot_prob=0.5,
+              notes="纯走廊硬形态：astar 75% / hunter 45% → 85%"),
+        Stage("s4-pure-open", replace(base, map_mode="open", open_fraction=0.0),
+              800_000, 0.85, bots=("astar", "hunter"), bot_prob=0.5,
+              notes="纯 open 固定能力无成长分支：2% → 85%（训练时随机障碍渐进）"),
+        Stage("s5-pillar", replace(base, map_mode="open", open_fraction=0.0,
+                                   wall_density=0.5),
+              1_000_000, 0.85, bots=("astar", "hunter"), bot_prob=0.5,
+              notes="随机立柱：0% → 85%"),
+        Stage("s6-mix-ladder", replace(base, open_fraction=0.45,
+                                       wall_density=0.45),
+              2_000_000, 0.90, bots=("greedy", "astar", "hunter"), bot_prob=0.3,
+              self_play=True,
+              notes="混合 + 天梯收尾：多图泛化巩固，bot 混入防遗忘"),
+    ]
