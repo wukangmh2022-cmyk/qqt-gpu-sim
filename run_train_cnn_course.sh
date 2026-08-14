@@ -21,7 +21,7 @@ exec python3 -u -m train.train \
   --num-envs 2048 \
   --device npu:0 \
   --rollout-steps 128 \
-  --minibatches 1 \
+  --minibatches 2 \
   --max-mem-frac 0.85 \
   --total-steps 2000000000 \
   --snapshot-every 20 \
