@@ -148,11 +148,18 @@ def cnn_curriculum(base: SimConfig = SimConfig()) -> list[Stage]:
               1_500_000, 0.90, bots=("astar",), bot_prob=0.5,
               notes="launcher 空场景同款（80% 成长上限 8/6/1.68）：属性过渡，"
                     "astar → 90%（上版直接跳 80% 自杀 70%，需先熟悉 40%）"),
-        Stage("s3-corridor", replace(base, open_fraction=0.0,
-                                     top_wall_rows=4, corridor_width=5,
-                                     wall_density=0.45),
+        Stage("s3a-corridor-astar", replace(base, open_fraction=0.0,
+                                            top_wall_rows=4, corridor_width=5,
+                                            wall_density=0.45),
+              1_200_000, 0.90, bots=("astar",), bot_prob=0.5,
+              notes="纯走廊先只打 astar（本地 75.4%）：走廊地图专精，练到 90%"
+                    "再放 hunter 进来，避免混合对手互相拖累达标"),
+        Stage("s3b-corridor-hunter", replace(base, open_fraction=0.0,
+                                             top_wall_rows=4, corridor_width=5,
+                                             wall_density=0.45),
               1_500_000, 0.85, bots=("astar", "hunter"), bot_prob=0.5,
-              notes="纯走廊硬形态：astar 75% / hunter 45% → 85%"),
+              notes="加入 hunter（走廊主场，本地仅 44.7% 为最大短板）："
+                    "hunter → 85%（s3 混合版实测卡 0.70 平台，需拆开专项练）"),
         Stage("s4-pure-open", replace(base, map_mode="open", open_fraction=0.0),
               800_000, 0.85, bots=("astar", "hunter"), bot_prob=0.5,
               notes="纯 open 固定能力无成长分支：2% → 85%（训练时随机障碍渐进）"),
