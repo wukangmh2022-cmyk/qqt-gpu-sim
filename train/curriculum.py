@@ -158,18 +158,27 @@ def cnn_curriculum(base: SimConfig = SimConfig()) -> list[Stage]:
         Stage("s3b-corridor-hunter", replace(base, open_fraction=0.0,
                                              top_wall_rows=4, corridor_width=5,
                                              wall_density=0.45),
-              1_500_000, 0.85, bots=("hunter",), bot_prob=0.5,
-              notes="走廊**纯 hunter 专项**（本地 44.7% 为最大短板）：wr 直接"
-                    "反映 hunter 真实水平，练到 85%（v1 误用 astar+hunter 混合，"
-                    "wr 0.77 是平均被 astar 拉高，hunter 实际 ~0.66）"),
-        Stage("s4-pure-open", replace(base, map_mode="open", open_fraction=0.0),
-              800_000, 0.85, bots=("astar", "hunter"), bot_prob=0.5,
-              notes="纯 open 固定能力无成长分支：2% → 85%（训练时随机障碍渐进）"),
-        Stage("s5-pillar", replace(base, map_mode="open", open_fraction=0.0,
+              1_200_000, 0.70, bots=("hunter",), bot_prob=0.5,
+              notes="走廊**纯 hunter 专项**（本地 44.7%→训练 0.60-0.65 平台）："
+                    "走廊 hunter 是额外泛化不是最终环境，wr≥0.70 即晋级（实测"
+                    "50 迭代卡 0.64，hunter 走廊主场过强，目标现实化）"),
+        Stage("s4-open80-hunter", replace(base, open_fraction=1.0,
+                                          open_growth_bombs=8, open_growth_blast=6,
+                                          open_growth_speed=1.68),
+              1_500_000, 0.90, bots=("hunter",), bot_prob=0.5,
+              notes="**launcher 空场景 × 纯 hunter**（80% 成长 8/6/1.68）：用户"
+                    "最终目标的核心场景（本地 open80 hunter 77.9%）→ 90%。"
+                    "课程原缺口：s2b 只练了 open80 astar，hunter 没有 launcher "
+                    "环境专项"),
+        Stage("s5-pure-open", replace(base, map_mode="open", open_fraction=0.0),
+              800_000, 0.70, bots=("astar", "hunter"), bot_prob=0.5,
+              notes="纯 open 固定能力无成长分支（本地 0%）：从零学，目标现实化"
+                    "0.70（用户：空旷场景随机障碍泛化）"),
+        Stage("s6-pillar", replace(base, map_mode="open", open_fraction=0.0,
                                    wall_density=0.5),
-              1_000_000, 0.85, bots=("astar", "hunter"), bot_prob=0.5,
-              notes="随机立柱：0% → 85%"),
-        Stage("s6-mix-ladder", replace(base, open_fraction=0.45,
+              1_000_000, 0.70, bots=("astar", "hunter"), bot_prob=0.5,
+              notes="随机立柱（本地 0%）：从零学，目标 0.70"),
+        Stage("s7-mix-ladder", replace(base, open_fraction=0.45,
                                        wall_density=0.45),
               2_000_000, 0.90, bots=("greedy", "astar", "hunter"), bot_prob=0.3,
               self_play=True,
