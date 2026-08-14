@@ -158,9 +158,10 @@ def cnn_curriculum(base: SimConfig = SimConfig()) -> list[Stage]:
         Stage("s3b-corridor-hunter", replace(base, open_fraction=0.0,
                                              top_wall_rows=4, corridor_width=5,
                                              wall_density=0.45),
-              1_500_000, 0.85, bots=("astar", "hunter"), bot_prob=0.5,
-              notes="加入 hunter（走廊主场，本地仅 44.7% 为最大短板）："
-                    "hunter → 85%（s3 混合版实测卡 0.70 平台，需拆开专项练）"),
+              1_500_000, 0.85, bots=("hunter",), bot_prob=0.5,
+              notes="走廊**纯 hunter 专项**（本地 44.7% 为最大短板）：wr 直接"
+                    "反映 hunter 真实水平，练到 85%（v1 误用 astar+hunter 混合，"
+                    "wr 0.77 是平均被 astar 拉高，hunter 实际 ~0.66）"),
         Stage("s4-pure-open", replace(base, map_mode="open", open_fraction=0.0),
               800_000, 0.85, bots=("astar", "hunter"), bot_prob=0.5,
               notes="纯 open 固定能力无成长分支：2% → 85%（训练时随机障碍渐进）"),
