@@ -138,9 +138,10 @@ def cnn_curriculum(base: SimConfig = SimConfig()) -> list[Stage]:
               800_000, 0.95, bots=("greedy", "astar"), bot_prob=0.5,
               notes="训练分布保底：resume duel_cnn 平滑，守住 100%"),
         Stage("s2a-open40", replace(base, open_fraction=1.0),
-              1_200_000, 0.90, bots=("astar",), bot_prob=0.5,
+              1_200_000, 0.80, bots=("astar",), bot_prob=0.5,
               notes="全空场但属性仍是训练分布的 40% 成长（3/3/0.84）——只变地图"
-                    "不变量力：练整局空场交战，astar 78% → 90%"),
+                    "不变量力：练整局空场交战。过渡阶段 wr 0.80 即可晋级"
+                    "（实测 110 迭代 0.80 达标），40% 不是最终环境不用磨到 0.90"),
         Stage("s2b-open80", replace(base, open_fraction=1.0,
                                     open_growth_bombs=8, open_growth_blast=6,
                                     open_growth_speed=1.68),
