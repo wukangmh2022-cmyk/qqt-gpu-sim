@@ -151,9 +151,10 @@ def cnn_curriculum(base: SimConfig = SimConfig()) -> list[Stage]:
         Stage("s3a-corridor-astar", replace(base, open_fraction=0.0,
                                             top_wall_rows=4, corridor_width=5,
                                             wall_density=0.45),
-              1_200_000, 0.90, bots=("astar",), bot_prob=0.5,
-              notes="纯走廊先只打 astar（本地 75.4%）：走廊地图专精，练到 90%"
-                    "再放 hunter 进来，避免混合对手互相拖累达标"),
+              1_200_000, 0.85, bots=("astar",), bot_prob=0.5,
+              notes="纯走廊先只打 astar（本地 75.4%→训练 0.85-0.92）：走廊地图"
+                    "专精。0.90 名义达标边际收益低（astar 强寻路上限~0.90），"
+                    "wr≥0.85 即晋级 s3b 练 hunter 短板"),
         Stage("s3b-corridor-hunter", replace(base, open_fraction=0.0,
                                              top_wall_rows=4, corridor_width=5,
                                              wall_density=0.45),
