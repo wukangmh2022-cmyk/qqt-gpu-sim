@@ -171,13 +171,15 @@ def cnn_curriculum(base: SimConfig = SimConfig()) -> list[Stage]:
                     "课程原缺口：s2b 只练了 open80 astar，hunter 没有 launcher "
                     "环境专项"),
         Stage("s5-pure-open", replace(base, map_mode="open", open_fraction=0.0),
-              800_000, 0.70, bots=("astar", "hunter"), bot_prob=0.5,
-              notes="纯 open 固定能力无成长分支（本地 0%）：从零学，目标现实化"
-                    "0.70（用户：空旷场景随机障碍泛化）"),
+              800_000, 0.30, bots=("astar", "hunter"), bot_prob=0.5,
+              notes="纯 open 固定能力无成长分支（本地 0%）：完全陌生环境，实测"
+                    "崩盘后 40 迭代仅回升 0.16（自杀 99→74%），0.70 不现实。"
+                    "目标 0.30 = 学会基本生存即过（泛化补充，非最终环境）"),
         Stage("s6-pillar", replace(base, map_mode="open", open_fraction=0.0,
                                    wall_density=0.5),
-              1_000_000, 0.70, bots=("astar", "hunter"), bot_prob=0.5,
-              notes="随机立柱（本地 0%）：从零学，目标 0.70"),
+              1_000_000, 0.30, bots=("astar", "hunter"), bot_prob=0.5,
+              notes="随机立柱（本地 0%，用户：空旷场景随机障碍）：泛化补充，"
+                    "目标 0.30 学会绕柱生存即过"),
         Stage("s7-mix-ladder", replace(base, open_fraction=0.45,
                                        wall_density=0.45),
               2_000_000, 0.90, bots=("greedy", "astar", "hunter"), bot_prob=0.3,
