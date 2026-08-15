@@ -122,67 +122,36 @@ def lstm_curriculum() -> list[Stage]:
 
 
 def cnn_curriculum(base: SimConfig = SimConfig()) -> list[Stage]:
-    """CNN 泛化专项课程（2026-08-12）：**resume duel_cnn，打寻路 AI 到 90%+**。
+    """CNN 对打寻路 AI 专精课程（2026-08-15 重写）。
 
-    依据（本地 eval_cnn_bots.py 多 seed 摸底，duel_cnn 300M，512 局合并）：
-      cnn-mix(训练分布) 100% | open80(80% 成长空场) 78% | corridor astar 75%
-      hunter 45% | pure-open(固定能力无成长) 2% | pillar 0% | ring 0%。
-      环岛按用户要求**不进训练**（留泛化测试）。
-    敌人维度：greedy → astar → hunter（最终目标对打这两个寻路 AI 90%+）。
-    地图维度：训练分布保底 → 空场 80% 成长（launcher 空场景同款）→ 纯走廊
-    硬形态 → 纯 open 固定能力分支（用户：空旷场景随机障碍）→ 随机立柱 →
-    混合 + 天梯收尾。各阶段胜率达标即提前晋级，预算跑不完不阻塞。
+    **上一版教训（2026-08-15 训练日志诊断）**：旧课程末尾 s7 天梯用自博弈
+    快照当对手，wr 0.93 是对越来越弱的自己历史版本 —— 最终 ckpt 对纯 astar
+    只剩 0.45（连 duel_cnn 基线 0.46 都没保住）。**训练评估口径必须与目标
+    环境一致**：对手 = 纯规则 bot（astar/hunter），无自博弈快照、无天梯。
+    此时训练内 wr 直接 = 对目标 bot 的胜率（已验证 NPU/CPU 上 bot 行为一致：
+    NPU eval 0.443 vs CPU eval 0.471，同 ckpt 同配置）。
+
+    目标：launcher open80（corridor + open_fraction=1.0 + 80% 成长 8/6/1.68）
+    打 astar + hunter 各 90%+。从 duel_cnn 基线起步：
+      open80 astar 0.463 / open80 hunter 0.297（本地 eval_cnn_bots 多 seed 合并）。
+    先专项（greedy 热身 → astar → hunter），再混合收尾（两个都保 90% 防
+    专项间互相遗忘）。bot_prob=1.0：课程阶段非 self_play 走 warmup 分支，
+    build_opponents 恒从 fixed+bot 选，fixed 为空 → 对手恒为规则 bot。
     """
+    open80 = replace(base, open_fraction=1.0, open_growth_bombs=8,
+                     open_growth_blast=6, open_growth_speed=1.68)
     return [
-        Stage("s1-cnn-mix", replace(base, open_fraction=0.5),
-              800_000, 0.95, bots=("greedy", "astar"), bot_prob=0.5,
-              notes="训练分布保底：resume duel_cnn 平滑，守住 100%"),
-        Stage("s2a-open40", replace(base, open_fraction=1.0),
-              1_200_000, 0.80, bots=("astar",), bot_prob=0.5,
-              notes="全空场但属性仍是训练分布的 40% 成长（3/3/0.84）——只变地图"
-                    "不变量力：练整局空场交战。过渡阶段 wr 0.80 即可晋级"
-                    "（实测 110 迭代 0.80 达标），40% 不是最终环境不用磨到 0.90"),
-        Stage("s2b-open80", replace(base, open_fraction=1.0,
-                                    open_growth_bombs=8, open_growth_blast=6,
-                                    open_growth_speed=1.68),
-              1_500_000, 0.90, bots=("astar",), bot_prob=0.5,
-              notes="launcher 空场景同款（80% 成长上限 8/6/1.68）：属性过渡，"
-                    "astar → 90%（上版直接跳 80% 自杀 70%，需先熟悉 40%）"),
-        Stage("s3a-corridor-astar", replace(base, open_fraction=0.0,
-                                            top_wall_rows=4, corridor_width=5,
-                                            wall_density=0.45),
-              1_200_000, 0.85, bots=("astar",), bot_prob=0.5,
-              notes="纯走廊先只打 astar（本地 75.4%→训练 0.85-0.92）：走廊地图"
-                    "专精。0.90 名义达标边际收益低（astar 强寻路上限~0.90），"
-                    "wr≥0.85 即晋级 s3b 练 hunter 短板"),
-        Stage("s3b-corridor-hunter", replace(base, open_fraction=0.0,
-                                             top_wall_rows=4, corridor_width=5,
-                                             wall_density=0.45),
-              1_200_000, 0.70, bots=("hunter",), bot_prob=0.5,
-              notes="走廊**纯 hunter 专项**（本地 44.7%→训练 0.60-0.65 平台）："
-                    "走廊 hunter 是额外泛化不是最终环境，wr≥0.70 即晋级（实测"
-                    "50 迭代卡 0.64，hunter 走廊主场过强，目标现实化）"),
-        Stage("s4-open80-hunter", replace(base, open_fraction=1.0,
-                                          open_growth_bombs=8, open_growth_blast=6,
-                                          open_growth_speed=1.68),
-              1_500_000, 0.90, bots=("hunter",), bot_prob=0.5,
-              notes="**launcher 空场景 × 纯 hunter**（80% 成长 8/6/1.68）：用户"
-                    "最终目标的核心场景（本地 open80 hunter 77.9%）→ 90%。"
-                    "课程原缺口：s2b 只练了 open80 astar，hunter 没有 launcher "
-                    "环境专项"),
-        Stage("s5-pure-open", replace(base, map_mode="open", open_fraction=0.0),
-              800_000, 0.30, bots=("astar", "hunter"), bot_prob=0.5,
-              notes="纯 open 固定能力无成长分支（本地 0%）：完全陌生环境，实测"
-                    "崩盘后 40 迭代仅回升 0.16（自杀 99→74%），0.70 不现实。"
-                    "目标 0.30 = 学会基本生存即过（泛化补充，非最终环境）"),
-        Stage("s6-pillar", replace(base, map_mode="open", open_fraction=0.0,
-                                   wall_density=0.5),
-              1_000_000, 0.30, bots=("astar", "hunter"), bot_prob=0.5,
-              notes="随机立柱（本地 0%，用户：空旷场景随机障碍）：泛化补充，"
-                    "目标 0.30 学会绕柱生存即过"),
-        Stage("s7-mix-ladder", replace(base, open_fraction=0.45,
-                                       wall_density=0.45),
-              2_000_000, 0.90, bots=("greedy", "astar", "hunter"), bot_prob=0.3,
-              self_play=True,
-              notes="混合 + 天梯收尾：多图泛化巩固，bot 混入防遗忘"),
+        Stage("s1-open80-astar", open80, 600_000, 0.95,
+              bots=("astar",), bot_prob=1.0,
+              notes="open80 × 纯 astar 专项（基线 0.463 → 0.95）：launcher 空场景"
+                    "同款 + 最终目标对手之一。上一版败因正是最后被天梯弱对手"
+                    "带偏，本阶段全程只打 astar"),
+        Stage("s2-open80-hunter", open80, 600_000, 0.95,
+              bots=("hunter",), bot_prob=1.0,
+              notes="open80 × 纯 hunter 专项（基线 0.297 → 0.95）：旧课程缺口 ——"
+                    "hunter 从未在 launcher 环境专项练过"),
+        Stage("s3-open80-both", open80, 800_000, 0.90,
+              bots=("astar", "hunter"), bot_prob=1.0,
+              notes="open80 × astar+hunter 混合收尾：最终验收口径（两个都要 "
+                    "90%+），混合防专项间互相遗忘。全程无自博弈快照"),
     ]
