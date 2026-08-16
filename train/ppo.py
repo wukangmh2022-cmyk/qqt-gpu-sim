@@ -20,9 +20,11 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import dataclass
+import time
 
 import torch
 
+from sim.dev import synchronize
 from sim.move import center_cell  # noqa: E402
 
 from sim.config import N_BOMB, N_MOVES
@@ -112,13 +114,17 @@ class SelfPlayRunner:
     """把 sim + learner + 冻结对手串起来，产出一个装满的 buffer。"""
 
     def __init__(self, sim, learner: ActorCritic, opponents: list, cfg: PPOConfig,
-                 handicap: float = 1.0) -> None:
+                 handicap: float = 1.0, measure_timing: bool = False) -> None:
         self.sim = sim
         self.learner = learner
         self.opponents = opponents          # 长度 P-1 的冻结网络列表
         self.cfg = cfg
         self.handicap = handicap
         self.device = next(learner.parameters()).device
+        self.sim_device = sim.device
+        self.measure_timing = measure_timing
+        self.last_timing = {"sim_ms": 0.0, "transfer_ms": 0.0,
+                            "policy_ms": 0.0, "total_ms": 0.0}
         n_players = sim.cfg.n_players
         assert len(opponents) == n_players - 1, "对手数量必须是 P-1"
         self.buf = RolloutBuffer(
@@ -134,18 +140,51 @@ class SelfPlayRunner:
         self.ep_stats = {"win": 0, "draw": 0, "loss": 0, "len_sum": 0, "count": 0,
                          "kills": 0, "suicide": 0, "bombs": 0,
                          "danger_ticks": 0, "danger_sum": 0.0}
-        self._ep_len = torch.zeros((sim.num_envs,), dtype=torch.long, device=self.device)
+        self._ep_len = torch.zeros((sim.num_envs,), dtype=torch.long,
+                                   device=self.sim_device)
+        # _tally 零 host 同步（2026-08-16）：终局统计在 device 上逐 tick 累积
+        # （无同步），每 16 tick flush 一次 + collect 末尾补一次 —— 原版
+        # bool(done.any()) 每 tick 一次 GPU→CPU 同步（DCU ~3ms/次，128 tick
+        # 的 collect 白白卡 ~380ms）。统计语义不变：win/loss/draw/count 由
+        # 累积掩码给出；len_sum 在 16 tick 窗口内 env 罕见二次完成时略偏
+        # （一局几百 tick，双完成概率可忽略）。
+        self._done_acc = torch.zeros((sim.num_envs,), dtype=torch.bool,
+                                     device=self.sim_device)
+        self._win_acc = torch.zeros((sim.num_envs,), dtype=torch.bool,
+                                    device=self.sim_device)
+        self._lose_acc = torch.zeros((sim.num_envs,), dtype=torch.bool,
+                                     device=self.sim_device)
+        self._len_acc = torch.zeros((sim.num_envs,), dtype=torch.long,
+                                    device=self.sim_device)
+
+    def _to_train(self, value):
+        if isinstance(value, tuple):
+            return tuple(self._to_train(v) for v in value)
+        return value.to(self.device, non_blocking=True)
+
+    def _sync_train(self) -> None:
+        if self.measure_timing:
+            synchronize(self.device)
 
     @torch.no_grad()
-    def _opponent_actions(self, obs, mmask, bmask, actions) -> None:
+    def _opponent_actions(self, obs, mmask, bmask, actions,
+                          train_obs=None, train_mmask=None,
+                          train_bmask=None) -> None:
+        if train_obs is None:
+            train_obs = self._to_train(obs)
+        if train_mmask is None:
+            train_mmask = self._to_train(mmask)
+        if train_bmask is None:
+            train_bmask = self._to_train(bmask)
         for k, net in enumerate(self.opponents):
             pid = k + 1
             if getattr(net, "is_bot", False):
                 # 课程 bot：规则策略直连，不削弱（它按自己的逻辑打，不是神经网络）
                 actions[:, pid] = net.act(obs, mmask[:, pid], bmask[:, pid], pid)
                 continue
-            # obs 是共享的那一份；视角靠 pid 传给网络，不切片、不拷贝
-            a, _, _ = net.act(obs, mmask[:, pid], bmask[:, pid], pid)
+            # 网络对手固定在训练设备，CPU Simulator 的状态只在动作边界转换。
+            a, _, _ = net.act(train_obs, train_mmask[:, pid],
+                               train_bmask[:, pid], pid)
             if self.handicap < 1.0:
                 # 削弱对手 = 按概率吞掉它的放泡键，移动完全不动。
                 # 因子化动作空间的一个附带好处：这里直接把 bomb 位清零就行，
@@ -153,13 +192,15 @@ class SelfPlayRunner:
                 # 全掩码出 NaN 的隐患。
                 keep = torch.rand_like(a[:, 1], dtype=torch.float) <= self.handicap
                 a = torch.stack([a[:, 0], a[:, 1] * keep.long()], dim=-1)
-            actions[:, pid] = a
+            actions[:, pid] = a.to(self.sim_device, non_blocking=True)
 
     def collect(self) -> tuple[RolloutBuffer, torch.Tensor]:
         sim, cfg = self.sim, self.cfg
         self.buf.reset()
+        started = time.perf_counter()
+        sim_time = transfer_time = policy_time = 0.0
         n = sim.num_envs
-        dev = self.device
+        dev = self.sim_device
         is_lstm = self.learner.arch == "lstm"
         n_players = sim.cfg.n_players              # sim 的 SimConfig（cfg 是 PPOConfig）
         # 健康度统计缓冲（每 tick 向量累积，无 host 同步；collect 末尾一次性 sum）
@@ -170,50 +211,74 @@ class SelfPlayRunner:
         st_dv = torch.zeros(n, dtype=torch.float32, device=dev)
         hidden = None                              # LSTM 时序状态（沿 tick 传递）
         for i in range(cfg.rollout_steps):
+            phase = time.perf_counter()
             obs = sim.observe()                      # (N, C, H, W) 共享
             mmask, bmask = sim.legal_mask()
+            sim_time += time.perf_counter() - phase
+            phase = time.perf_counter()
+            train_obs = self._to_train(obs)
+            train_mmask = self._to_train(mmask)
+            train_bmask = self._to_train(bmask)
+            transfer_time += time.perf_counter() - phase
             actions = torch.zeros((n, sim.cfg.n_players, 2),
-                                  dtype=torch.long, device=obs.device)
+                                  dtype=torch.long, device=self.sim_device)
+            phase = time.perf_counter()
             with torch.no_grad():
                 if is_lstm:
-                    # 每角色局部特征（player 0 喂 learner，only_p0 省一半 gather/topk）
+                    # 每角色局部特征在 Simulator 设备提取，再送到 learner 设备。
                     lf = local_view_features(sim.cfg, obs, sim.pos, sim.alive,
                                              sim.t, sim.fuse, sim.hp, only_p0=True)
-                    f0 = (lf[0][:, 0], lf[1][:, 0], lf[2][:, 0])
+                    f0 = self._to_train((lf[0][:, 0], lf[1][:, 0], lf[2][:, 0]))
                     a0, logp, value, hidden = self.learner.act(
-                        f0, mmask[:, 0], bmask[:, 0], 0, hidden)
+                        f0, train_mmask[:, 0], train_bmask[:, 0], 0, hidden)
                 else:
                     a0, logp, value = self.learner.act(
-                        obs, mmask[:, 0], bmask[:, 0], 0)
-            actions[:, 0] = a0
-            self._opponent_actions(obs, mmask, bmask, actions)
+                        train_obs, train_mmask[:, 0], train_bmask[:, 0], 0)
+            self._sync_train()
+            policy_time += time.perf_counter() - phase
+            phase = time.perf_counter()
+            actions[:, 0] = a0.to(self.sim_device, non_blocking=True)
+            self._opponent_actions(obs, mmask, bmask, actions,
+                                   train_obs, train_mmask, train_bmask)
+            transfer_time += time.perf_counter() - phase
 
             owner_snap = sim.owner.clone()           # 自杀判定：死前自己名下泡数
             fuse_snap = sim.fuse.clone()             # fuse 清场前快照（死后 owner 已置 -1）
             hp0 = sim.hp[:, 0].clone()               # 濒死/死亡帧过采样要用的掉血标志
+            phase = time.perf_counter()
             reward, done, info = sim.step(actions)
+            sim_time += time.perf_counter() - phase
             dmg = (hp0 - sim.hp[:, 0]).clamp(min=0) > 0
             self._ep_len += 1
-            self._tally(info, done)
+            # _tally 零同步版：device 累积，每 16 tick flush 一次 + 末尾
+            #（见 __init__ 注释；原 bool(done.any()) 每 tick 同步）。
+            self._done_acc |= done
+            self._win_acc |= done & info["winner"][:, 0]
+            self._lose_acc |= done & info["winner"][:, 1]
+            self._len_acc += self._ep_len * done.long()
+            if i % 16 == 15:
+                self._flush_tally()
             # LSTM：本 tick 结束的 env 清零 hidden（下 tick 是新局首帧，从零记忆）
             if hidden is not None and bool(done.any()):
-                dk = done.to(dev).to(hidden[0].dtype).view(1, -1, 1)
+                dk = done.to(self.device).to(hidden[0].dtype).view(1, -1, 1)
                 hidden = (hidden[0] * (1 - dk), hidden[1] * (1 - dk))
-            # 掉血回收（延迟 flush，2026-08-10）：step 内只累积（零同步），
-            # 这里降频 flush —— 每 4 tick 一次 + collect 末尾补一次。回收箱
-            # 延迟 ≤4 tick 出（掉血补偿资源，拾取时机影响可忽略）；省 3/4 的
-            # bool(lost.sum()>0) 同步（每 tick flush 在 collect 里 ~70ms/tick）。
-            if i % 4 == 3:
+            # 掉血回收（延迟 flush，2026-08-10 → 2026-08-16 降频到 16 tick）：
+            # step 内只累积（零同步），这里降频 flush —— 每 16 tick 一次 +
+            # collect 末尾补一次。回收箱延迟 ≤16 tick 出（掉血补偿资源，
+            # 拾取时机影响可忽略）；省 15/16 的 bool(lost.sum()>0) 同步
+            #（每 tick flush 在 collect 里 ~70ms/tick）。
+            if i % 16 == 15:
                 sim.flush_recycle()
             # buffer 存观测：lstm 存特征三元组，否则存共享全图
-            buf_obs = f0 if is_lstm else obs
-            self.buf.add(buf_obs, mmask[:, 0], bmask[:, 0], a0, logp, value,
-                         reward[:, 0], done.float(), dmg)
+            buf_obs = f0 if is_lstm else train_obs
+            self.buf.add(buf_obs, train_mmask[:, 0], train_bmask[:, 0], a0,
+                         logp, value, self._to_train(reward[:, 0]),
+                         self._to_train(done.float()), self._to_train(dmg))
             # ---- 健康度统计（向量累积，零 host 同步）----
             died0 = info["died"][:, 0]
             own_live = ((owner_snap == 0) & (fuse_snap > 0)).flatten(1).sum(dim=1)
             st_sui += (died0 & (own_live > 0)).long()
-            st_bmb += (a0[:, 1] == 1).long()
+            st_bmb += (a0[:, 1].to(self.sim_device) == 1).long()
             # 危险站桩：用**模型决策时**的 obs 危险通道 + 脚下位置（step 前）
             cell = center_cell(sim.pos)
             flat = (cell[:, 0, 0].long() * sim.cfg.width
@@ -226,43 +291,56 @@ class SelfPlayRunner:
         self.ep_stats["bombs"] += int(st_bmb.sum())
         self.ep_stats["danger_ticks"] += int(st_dt.sum())
         self.ep_stats["danger_sum"] += float(st_dv.sum())
-        sim.flush_recycle()    # 末尾补一次：清掉最后 ≤4 tick 累积的回收
+        self._flush_tally()            # 末尾补一次：清掉最后 ≤16 tick 的终局
+        sim.flush_recycle()            # 末尾补一次：清掉最后 ≤16 tick 累积的回收
         with torch.no_grad():
+            final_obs = sim.observe()
             if is_lstm:
                 # 用最后的 hidden 算终局 value（BPTT 的 next_val）
-                lf = local_view_features(sim.cfg, sim.observe(), sim.pos,
-                                         sim.alive, sim.t, sim.fuse, sim.hp,
+                lf = local_view_features(sim.cfg, final_obs, sim.pos, sim.alive,
+                                         sim.t, sim.fuse, sim.hp,
                                          only_p0=True)
-                f0 = (lf[0][:, 0], lf[1][:, 0], lf[2][:, 0])
+                f0 = self._to_train((lf[0][:, 0], lf[1][:, 0], lf[2][:, 0]))
                 *_, last_val, _ = self.learner(f0, 0, hidden)
             else:
-                *_, last_val = self.learner(sim.observe(), 0)
+                *_, last_val = self.learner(self._to_train(final_obs), 0)
+        self._sync_train()
+        self.last_timing = {
+            "sim_ms": sim_time * 1000.0,
+            "transfer_ms": transfer_time * 1000.0,
+            "policy_ms": policy_time * 1000.0,
+            "total_ms": (time.perf_counter() - started) * 1000.0,
+        }
         return self.buf, last_val
 
-    def _tally(self, info: dict, done: torch.Tensor) -> None:
-        """胜负从 step 返回的 info['winner'] 判断，不依赖 reward 阈值。
 
-        默认 win_bonus=0 后，终局 tick 的 reward 可能≈0（掉血/打中净零和），
-        靠阈值分不出胜负；info['winner'] 是 reset 前算好的真值。
+    def _flush_tally(self) -> None:
+        """把累积的终局统计 flush 进 ep_stats（唯一同步点，16 tick 一次）。
+
+        胜负从累积掩码（done/win/lose）给出，语义与旧 _tally 一致
+        （win_bonus=0 后靠 info['winner'] 真值，不依赖 reward 阈值）。
         """
+        done = self._done_acc
         if not bool(done.any()):
+            self._done_acc.zero_()
             return
-        winner = info["winner"]                     # (N, P) bool
-        win = done & winner[:, 0]                   # player 0 赢
-        lose = done & winner[:, 1]                  # 对方赢 = 我输（1v1）
+        win = self._win_acc
+        lose = self._lose_acc
         draw = done & ~win & ~lose
         self.ep_stats["win"] += int(win.sum())
         self.ep_stats["loss"] += int(lose.sum())
         self.ep_stats["draw"] += int(draw.sum())
         finished = done.nonzero(as_tuple=True)[0]
         self.ep_stats["count"] += finished.numel()
-        self.ep_stats["len_sum"] += int(self._ep_len[finished].sum())
+        self.ep_stats["len_sum"] += int(self._len_acc.sum())
         self._ep_len[finished] = 0
         # 击杀统计（探索退火的 x 数据源）：敌方（pid≥1）死亡的终局数。
-        # 1v1 敌方死亡 = 我方赢的终局（win）。按迭代归一成"平均每局击杀"，
-        # 论文 x ∈ [0,2]（2v2 最多杀 2 个）；1v1 上限 1，k 相应取 1.2 曲线仍平滑。
-        # 双亡平局/超时不算击杀（win/lose 都不置位）。
+        # 1v1 敌方死亡 = 我方赢的终局（win）。按迭代归一成"平均每局击杀"。
         self.ep_stats["kills"] += int(win.sum())
+        self._done_acc.zero_()
+        self._win_acc.zero_()
+        self._lose_acc.zero_()
+        self._len_acc.zero_()
 
     def mean_ep_len(self) -> float:
         return self.ep_stats["len_sum"] / max(1, self.ep_stats["count"])

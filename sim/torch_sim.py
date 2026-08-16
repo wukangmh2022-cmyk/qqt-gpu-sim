@@ -124,6 +124,10 @@ class BatchedSim:
         # （maxdiff=0）。档位（blast_max_hint）作编译常量，每档一份图；
         # dynamo 磁盘缓存跨进程复用，训练首次每档编译几十秒一次性。
         self._dng_tier: dict[int, object] = {}
+        # 静态档位（_danger_hint）下的单档缓存：resolve/legal 各一份编译图
+        self._res_cached: object | None = None
+        self._legal_cached: object | None = None
+        self._last_hint: int | None = None   # step 算的档位，observe 复用（pad 安全）
         self._last_hit = torch.full((n, p), -10**9, dtype=torch.long, device=d)
         # open 关宝箱布局缓存（懒初始化，cfg 固定）：排除格 / 随机回收池 / 十字格
         self._open_excl: torch.Tensor | None = None
@@ -583,6 +587,18 @@ class BatchedSim:
         dng = None
         if self._dng_cache is not None and self._dng_sig == self._dng_signature():
             dng = self._dng_cache          # step 刚算过、状态没变 → 复用
+        elif not self._graph_mode:
+            # 缓存 miss（collect 里 step 的 reset_ 会改 fuse/brick/bomb_blast
+            # 版本号 → 每 tick miss）：用编译版 _danger_c 重算（零同步），
+            # 避免 encode_obs 内部的 eager 动态 danger —— 那是每 tick 的
+            # **第二遍 danger**（step 已算一遍），还带 early_exit 的 host
+            # 同步。档位复用 step 的 _last_hint（reset 后泡只会更少 →
+            # hint ≥ 实际，pad 安全）；没 step 过（eval 首帧）就动态算一次。
+            hint = self._last_hint
+            if hint is None:
+                hint = max(int(self.bomb_blast.max()), int(self.cfg.blast))
+            dng = self._danger_c(self.fuse, self.wall, self._blast_map(),
+                                 self.brick, hint)
         return encode_obs(
             self.cfg, self.wall, self.fuse, self.owner, self.pos, self.alive,
             self.t, self.brick, self.bomb_blast,
@@ -600,10 +616,14 @@ class BatchedSim:
 
     def legal_mask(self) -> tuple[torch.Tensor, torch.Tensor]:
         """返回 (move_mask (N,P,5), bomb_mask (N,P,2))。"""
-        return legal_mask(
-            self.cfg, self.wall, self.fuse, self.owner, self.pos, self.alive,
-            self.brick, self.bombs_cap,
-        )
+        if self._graph_mode:
+            # graph 捕获段内不能 torch.compile → eager
+            return legal_mask(
+                self.cfg, self.wall, self.fuse, self.owner, self.pos, self.alive,
+                self.brick, self.bombs_cap,
+            )
+        return self._legal_c(self.wall, self.fuse, self.owner, self.pos,
+                             self.alive, self.brick, self.bombs_cap)
 
     # ---------------- CUDA graph 热路径（训练用，跳过 PPO 依赖的 mask 奖励） ----------------
 
@@ -734,6 +754,68 @@ class BatchedSim:
                 BatchedSim._triton_ok._v = False
         return BatchedSim._triton_ok._v
 
+    @staticmethod
+    def _compile_cascade(fn):
+        """npu → inductor → eager 级联编译（与 _danger_c 同一策略，供
+        resolve/legal 等纯张量段复用）。triton 不可用时跳过 inductor。
+        """
+        backends = ["npu"]
+        if BatchedSim._triton_ok():
+            backends.append("inductor")
+        for backend in backends:
+            try:
+                return torch.compile(fn, backend=backend, dynamic=False)
+            except Exception:
+                continue
+        return fn
+
+    def _danger_hint(self) -> int:
+        """静态 danger/resolve 档位上限（graph 捕获段用）。
+
+        = max(growth_blast_max, hazard_blast_max) ≥ 任何实际威力 → 逐位一致。
+        非 graph 段不用它：动态 hint（每 tick int(bomb_blast.max()) 同步）
+        多数 tick 泡少只跑 2-3 轮，比固定上限的空档 pad 快（danger_map 内部
+        注释实测固定档位慢 3 倍，编译版同理）。
+        """
+        return max(self.cfg.growth_blast_max, self.cfg.hazard_blast_max)
+
+    def _resolve_c(self, fuse, owner, wall, blast_map, brick, hint: int):
+        """编译版 resolve_explosions（固定轮 + 固定档位，零 host 同步）。
+
+        非 graph 模式原来走 early_exit=True + chain_cap=None：每 tick 一次
+        "无爆炸短路"同步（bool(triggered.any())）+ 连锁轮内每 CHECK_EVERY
+        轮一次 newly 同步。改固定轮（chain_cap=cfg.chain_cap_rounds，与
+        danger 同假设）后无任何同步；链长 ≤cap 时结果与动态逐位一致。
+        只用于非 graph 模式（graph 捕获段内不能 torch.compile）。
+        """
+        f = self._res_cached
+        if f is None:
+            cfg = self.cfg
+            # resolve 是**实际爆炸**链（DCU 实测 ≤3 轮，cap=4 有裕量）——
+            # 与 danger 的**预测**链（≤8，见 chain_cap_rounds 注释）不同，
+            # 分开设 cap 少跑空波前轮。
+            rcap = min(cfg.chain_cap_rounds, 4)
+            def _r(fuse, owner, wall, blast_map, brick, _h=hint):
+                return resolve_explosions(fuse, owner, wall, blast_map,
+                                          cfg.max_chain, brick,
+                                          early_exit=False, blast_max_hint=_h,
+                                          chain_cap=rcap)
+            f = self._compile_cascade(_r)
+            self._res_cached = f
+        return f(fuse, owner, wall, blast_map, brick)
+
+    def _legal_c(self, wall, fuse, owner, pos, alive, brick, bombs_cap):
+        """编译版 legal_mask（纯张量、零同步）。graph 捕获段保持 eager。"""
+        f = self._legal_cached
+        if f is None:
+            cfg = self.cfg
+            def _l(wall, fuse, owner, pos, alive, brick, bombs_cap):
+                return legal_mask(cfg, wall, fuse, owner, pos, alive, brick,
+                                  bombs_cap)
+            f = self._compile_cascade(_l)
+            self._legal_cached = f
+        return f(wall, fuse, owner, pos, alive, brick, bombs_cap)
+
     def _sc(self, value: float, shape: tuple) -> torch.Tensor:
         """缓存的全值张量操作数（标量 op 免 item 同步的载体）。
 
@@ -811,13 +893,16 @@ class BatchedSim:
         # danger 档位上限提前取（**2026-08-11 同步下移**）：此刻 bomb_blast 含
         # 所有在场泡（含本 tick 结算后会爆炸清场的）→ max ≥ 结算后的 danger max，
         # 作为 blast_max_hint 传给 danger 恒安全（多出的空步结果逐位不变）。
-        # 在队列浅处同步（~30 ops ≈ 1-2ms），而不是 danger 内部（L938 处队列
-        # ~2000 ops ≈ 20ms）—— danger 由此完全零 host 同步。hazard 波次炸弹
-        # 的上限由 _hazard_wave() 返回值补充（cfg.hazard_fraction=0 时恒 0）。
+        # 在队列浅处同步（~30 ops ≈ 1-2ms），而不是 danger 内部（深队列
+        # ~2000 ops ≈ 20ms）—— danger 由此完全零 host 同步。**动态档位**：
+        # danger_map 内部注释实测"固定上限让空档 pad 全跑，比动态慢 3 倍"
+        # （编译版同样适用——多数 tick 泡少，动态 hint 只跑 2-3 轮）。
+        # 存 self._last_hint 供 observe 复用（reset 后泡只会更少 → pad 安全）。
         if not self._graph_mode:
             blast_hint = max(int(self.bomb_blast.max()), int(cfg.blast))
         else:
-            blast_hint = cfg.growth_blast_max   # graph 捕获：静态固定档位
+            blast_hint = self._danger_hint()   # graph 捕获：静态固定档位
+        self._last_hint = blast_hint
         # 放泡奖励（即时信号，一次性）：覆盖敌人 + 连锁快爆的泡（见 _place_predict_reward）。
         # **early return**：没有放泡成功的 tick 直接跳过（火焰预测整图传播很贵 ——
         # corridor 满成长 blast=7 时 rays 每 tick 196 kernel，放泡只占 ~10% tick，
@@ -851,21 +936,20 @@ class BatchedSim:
             self.pos.copy_(move_players(cfg, self.pos, move, alive0, blocked, sm))
         # 4. 爆炸与连锁：每颗泡用自己存的威力；brick 挡火但被覆盖即摧毁。
         #    **宝箱模式**：炸掉的砖变宝箱（crate），谁走到谁开 —— 不需要归属图。
-        # graph 模式（_graph_mode）：early_exit 关（固定轮）+ blast 档位静态
-        # 上限（rays 的 max() 是 capture 内非法的 host 同步；空档 pad 被
-        # graph 的固定序列吸收，无 launch 开销）+ chain_cap 固定轮（cap=4，
-        # 910B 实测爆炸链深 max≤4 —— 比固定 max_chain=16 少 4 倍连锁 pad）。
-        # **非 graph 也传 blast_max_hint（2026-08-11）**：blast_hint 已在浅队列
-        # 同步算好（= bomb_blast 实际 max，resolve 的 _blast_map() 同源）→
-        # rays 免每次 int(blast_cell.max()) 深队列同步；hint==实际 max 无空轮
-        # pad，位级不变（blast_max_hint 只要 ≥ 实际档位即逐位一致）。
-        covered, triggered = resolve_explosions(
-            self.fuse, self.owner, self.wall, self._blast_map(),
-            cfg.max_chain, self.brick,
-            early_exit=not self._graph_mode,
-            blast_max_hint=blast_hint,
-            chain_cap=None if not self._graph_mode else 4,
-        )
+        # **非 graph 走编译版**（_resolve_c：固定轮 chain_cap + 固定档位，
+        # 零 host 同步 —— 原来每 tick 一次"无爆炸短路"同步 + 连锁轮内
+        # newly 同步，链长 ≤cap 时与动态逐位一致，cap 与 danger 同假设）。
+        # graph 模式（_graph_mode）：保持 eager 固定轮（capture 内不能
+        # torch.compile）+ 静态档位 + chain_cap=4（910B 实测链深 max≤4）。
+        if not self._graph_mode:
+            covered, triggered = self._resolve_c(
+                self.fuse, self.owner, self.wall, self._blast_map(),
+                self.brick, blast_hint)
+        else:
+            covered, triggered = resolve_explosions(
+                self.fuse, self.owner, self.wall, self._blast_map(),
+                cfg.max_chain, self.brick,
+                early_exit=False, blast_max_hint=blast_hint, chain_cap=4)
         # 爆炸时刻的连锁兑现（chain_blast_bonus）：被**连锁提前点燃**的泡每颗
         # 给**点火源**（引信自然走完的那颗泡的主人）+0.08，奖励"先放 → 别处续
         # → 最后连起来一起爆"的布网+牵引。同一 tick 自然走完的一排泡 k=0 一分

@@ -125,16 +125,15 @@ class SimConfig:
                             # 没引爆）。early_exit（resolve/danger 均早退）保证
                             # 多出的轮在连锁结束即停，不损失性能；CUDA graph
                             # 固定轮模式才按满 16 轮算。
-    chain_cap_rounds: int = 3   # danger 阶段 A 的**同步免除**固定轮上限（仅非 graph
+    chain_cap_rounds: int = 8   # danger 阶段 A 的**同步免除**固定轮上限（仅非 graph
                                 # 模式生效）：链长 ≤ cap 时结果与动态早退逐位一致。
-                                # 910B 训练分布实测 danger 链深 max=3（300 tick
-                                # 抽样：1/2/3 轮 = 7%/76%/17%），cap=3 覆盖且比动态
-                                # 早退（CHECK_EVERY=2 实际跑 1/3/5 轮）更省；
-                                # cap=3 与动态版 200 tick 位级对拍 maxdiff=0。
-                                # 链深=4+ 的合成场景请保持 chain_cap=None 动态路径
-                                # （验证脚本用），或临时调大到 4。代价：链长 ≤cap
-                                # 的 tick 多跑 1-2 轮空波前（结果不变），换取 danger
-                                # 每 tick 少 4 次 host 同步。
+                                # **DCU 实测（2026-08-16，corridor+open0.5 MLP 随机
+                                # 打法 60 tick）：danger 预测链深可达 8**（cap=6 仍
+                                # 有 4/60 tick 差异，cap=8 才 maxdiff=0）——成长
+                                # blast=7 的长炮能连锁 7-8 颗泡；910B 实测 max=3
+                                # 只是它的分布（短 blast）。cap=8 全覆盖 → 与动态
+                                # 早退逐位一致（生产行为不变，只是免同步）。代价：
+                                # 链短 tick 多跑空波前轮（编译后 fused，成本可忽略）。
 
     step_penalty: float = 0.001
     wall_density: float = 0.0   # 0 = 纯空场；>0 时按固定图案摆柱子（永久墙）
