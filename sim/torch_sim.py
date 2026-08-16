@@ -34,9 +34,15 @@ from .move import center_cell, move_players
 # 无 triton 的环境（本地 MPS/CPU 测试）自动 fallback 到 torch 版 —— 行为不变。
 # 用 sim/triton_sim.py 的版本（bitwise 已在 DCU/本地/910B 验证）；scripts/
 # triton_kernels.py 是旧副本，勿用。
+# 注意：triton_sim 模块在"无可用 triton 后端"（如 DCU 上未装 triton-ascend）
+# 时也能被 import（模块内 try/except 兜底），所以这里必须读 triton_sim 自己的
+# _HAS_TRITON，而不是把"import 成功"当成"后端可用"——否则 step 运行时才炸。
 try:
+    from .triton_sim import _HAS_TRITON as _triton_backend_ok
     from .triton_sim import move_players_triton as _move_triton
-    _HAS_TRITON = True
+    _HAS_TRITON = _triton_backend_ok
+    if not _HAS_TRITON:
+        _move_triton = None
 except ImportError:                      # 本地无 triton / scripts 不在路径
     _move_triton = None
     _HAS_TRITON = False
@@ -185,9 +191,9 @@ class BatchedSim:
         if self.cfg.map_mode != "corridor":
             # 纯 open 训练（或空场测试）：固定能力无成长。
             # 对手（pid 1）初始属性按 _opp_boost（训练难度）。
-            # wall_density>0 时按经典炸弹人图案随机立柱（障碍物渐进课程用）；
-            # =0 时 make_walls 返回纯空场，行为与旧版一致。
-            self.wall[idx] = self._make_walls(count)
+            # open 场景**强制纯空场**（用户定 2026-08-16：删掉 wall_density
+            # 随机立柱，训练/试玩统一空场 + MLP 对战）。
+            self.wall[idx] = False
             self.brick[idx] = False
             b0 = torch.full((count,), self.cfg.max_bombs, dtype=torch.float,
                             device=self.device)
@@ -240,8 +246,9 @@ class BatchedSim:
             corr_idx = idx[~(is_open | is_ring)]
 
             if open_idx.numel():
-                # wall_density>0 时 open 关也随机立柱（每局图案不同，防地图过拟合）
-                self.wall[open_idx] = self._make_walls(int(open_idx.numel()))
+                # open 关**强制纯空场**（用户定 2026-08-16：删随机立柱，
+                # 空场 + MLP 对战，不随 wall_density 变）。
+                self.wall[open_idx] = False
                 self.brick[open_idx] = False
                 no = int(open_idx.numel())
                 b0 = torch.full((no,), float(self.cfg.open_growth_bombs),
@@ -684,12 +691,13 @@ class BatchedSim:
                            self.bomb_blast.long(), self.cfg.blast)
 
     def _danger_c(self, fuse, wall, blast_map, brick, max_b: int):
-        """分档编译的 danger_map（AUTOFUSE + backend='npu'）。
+        """分档编译的 danger_map（backend 级联：npu → inductor → eager）。
 
-        max_b（= blast_max_hint）作编译常量：每档一份 GE 融合图。调用前
-        必须已 export AUTOFUSE_FLAGS（torch_sim 顶部 setdefault 兜底），
-        否则退化未融合编译（位级仍一致，仅不加速）。只用于非 graph 模式
-        （graph 捕获段内不能走 torch.compile）。
+        max_b（= blast_max_hint）作编译常量：每档一份编译图。'npu' 给
+        Ascend GE 融合；'inductor' 给 CUDA/DCU（triton 可用时，实测 DCU
+        danger 提速 ~8×）；两者都不可用时（本地 CPU/MPS 开发）退化未编译
+        的 danger_map —— 位级一致，仅不加速。只用于非 graph 模式（graph
+        捕获段内不能走 torch.compile）。
         """
         f = self._dng_tier.get(max_b)
         if f is None:
@@ -699,14 +707,32 @@ class BatchedSim:
                                   brick=brick, max_chain=cfg.max_chain,
                                   early_exit=False, blast_max_hint=_mb,
                                   chain_cap=cfg.chain_cap_rounds)
-            try:
-                f = torch.compile(_d, backend="npu", dynamic=False)
-            except Exception:
-                # 非 NPU 环境（本地 CPU/MPS 开发）：无 'npu' 编译后端，
-                # 退化未编译的 danger_map（位级一致，仅不加速）。
+            backends = ["npu"]
+            if self._triton_ok():
+                backends.append("inductor")
+            f = None
+            for backend in backends:
+                try:
+                    f = torch.compile(_d, backend=backend, dynamic=False)
+                    break
+                except Exception:
+                    f = None
+            if f is None:
                 f = _d
             self._dng_tier[max_b] = f
         return f(fuse, wall, blast_map, brick)
+
+    @staticmethod
+    def _triton_ok() -> bool:
+        """triton 可导入才尝试 inductor（CUDA/DCU 上 inductor 必需 triton，
+        缺 triton 时 torch.compile 编译期不报错、首次调用才炸）。"""
+        if getattr(BatchedSim._triton_ok, "_v", None) is None:
+            try:
+                import triton  # noqa: F401
+                BatchedSim._triton_ok._v = True
+            except Exception:
+                BatchedSim._triton_ok._v = False
+        return BatchedSim._triton_ok._v
 
     def _sc(self, value: float, shape: tuple) -> torch.Tensor:
         """缓存的全值张量操作数（标量 op 免 item 同步的载体）。
@@ -723,42 +749,38 @@ class BatchedSim:
             self._sc_cache[key] = b
         return b
 
-    def _grow_player_vec(self, pl: int, hits_per_env: torch.Tensor,
-                         alive_mask: torch.Tensor) -> None:
-        """玩家 pl 本 tick 的成长（向量化，GPU 批量，**CUDA graph 兼容**）。
+    def _grow_vec_all(self, hits_all: torch.Tensor, alive_mask: torch.Tensor,
+                      rb: torch.Tensor) -> None:
+        """全玩家成长（向量化，(n,p) 一次处理）。
 
-        hits_per_env (n,)：该玩家每 env 触发的成长次数（0/1）。三属性均匀
-        分配用 `_rand_buf`（捕获外预填）读取，不用设备 RNG；按 env 就地
-        scatter_add 后 clamp 到上限。死人不成长（alive_mask 过滤）。
-        **零 host 同步、零设备 RNG** —— graph capture 可过。
+        hits_all (n,p) 每 env 每玩家的成长次数（0/1）；三属性均匀分配读
+        `rb`（调用方已按 RNG 顺序预取，见宝箱段）；死人不成长（alive_mask
+        过滤）。**零 host 同步、零设备 RNG** —— graph capture 可过。
+        结果与逐 pl 版（_grow_player_vec）逐位一致：hits=0 的 pl 保持原值，
+        随机数用途顺序相同。
         """
         cfg = self.cfg
         n = self.num_envs
         d = self.pos.device
-        hits = hits_per_env * alive_mask.long()
-        # 每 env 读一个随机数决定升哪个属性（hits 为 0 的 env 该值被忽略）。
-        # 随机数从 `_rand_buf`（捕获外预填）读取，不用设备 RNG —— graph 兼容。
-        rb = (self._rand_buf[cfg.n_players * n + pl * n:
-                             cfg.n_players * n + (pl + 1) * n]
-              if self._rand_buf is not None
-              else torch.rand(n, device=d))
+        hits = hits_all * alive_mask.long()
         attr = (rb * 3).floor().long()               # 0/1/2 均匀
         if cfg.crate_speed_only:
             # 躲避（hazard）关宝箱只加速度：泡/威在禁放泡关是死通道，学了白学。
             # 按 `_hazard` **逐 env** 生效 —— 融合训练里正常关不受影响，
             # 仍三属性随机成长（"特殊模式宝箱只加速度"的语义）。
-            attr = torch.where(self._hazard,
-                               torch.full((n,), 2, dtype=torch.long, device=d), attr)
+            attr = torch.where(
+                self._hazard.unsqueeze(1),
+                torch.full((n, cfg.n_players), 2, dtype=torch.long, device=d), attr)
         add_bombs = (attr == 0).long() * hits
         add_blasts = (attr == 1).long() * hits
         add_spd = (attr == 2).long() * hits
-        self.bombs_cap[:, pl] = torch.clamp(
-            self.bombs_cap[:, pl] + add_bombs, max=cfg.growth_bombs_max)
-        self.blast_cap[:, pl] = torch.clamp(
-            self.blast_cap[:, pl] + add_blasts, max=cfg.growth_blast_max)
-        self.spd_g[:, pl] = torch.min(
-            self.spd_g[:, pl] + add_spd.float() * cfg.growth_speed_step,
-            torch.full_like(self.spd_g[:, pl], cfg.growth_speed_max))
+        self.bombs_cap = torch.clamp(
+            self.bombs_cap + add_bombs, max=cfg.growth_bombs_max)
+        self.blast_cap = torch.clamp(
+            self.blast_cap + add_blasts, max=cfg.growth_blast_max)
+        self.spd_g = torch.min(
+            self.spd_g + add_spd.float() * cfg.growth_speed_step,
+            torch.full_like(self.spd_g, cfg.growth_speed_max))
 
     def step(
         self, actions: torch.Tensor, auto_reset: bool = True
@@ -986,35 +1008,36 @@ class BatchedSim:
             # 的塑形（place_bonus/chain），吃箱/成长信号恒生效 —— 否则后期模型
             # 停止成长直接废掉（Pommerman 后期已吃满道具可退，我们每局重新开始）。
             reward = reward + self._sc(cfg.brick_reward, stood.shape) * stood.float() * alive0.float()
-            for pl in range(cfg.n_players):
-                rb = (self._rand_buf[pl * n:(pl + 1) * n]
-                      if self._rand_buf is not None
-                      else torch.rand(n, device=d))
-                # 命中判定：**回收箱必升**（recycle_crate_prob=1.0，掉血回收的
-                # 箱踩了必还原 —— 掉多少层补多少，总量守恒可核算）；
-                # 普通炸砖宝箱掷全局爆率（corridor=growth_crate_prob，环岛=100%）。
-                rec_flat = self._recycle_crate.view(n, -1).gather(
-                    1, flat[:, pl].unsqueeze(1)).squeeze(1)
-                prob = torch.where(rec_flat.bool(), cfg.recycle_crate_prob,
-                                   self.crate_prob)
-                hits = stood[:, pl] & (rb < prob) \
-                    & alive0[:, pl]                              # (n,) 命中（开箱成功）
-                self._grow_player_vec(pl, hits.long(), alive0[:, pl])
+            # 命中判定 + 成长（2026-08-16 向量化，一次 (n,p) 处理替代逐 pl 循环：
+            # HIP launch 开销 ~1ms/算子，逐 pl 版 40+ 算子占 corridor step 大头）。
+            # 随机数必须与原版逐位一致：
+            # - graph（_rand_buf 预填）布局 = 前 n*p 宝箱命中 + 后 n*p 成长；
+            # - 非 graph 逐 pl 版每 pl **先宝箱 rand 再成长 rand**（交替）→
+            #   一次 torch.rand(n*2*p) 按 view(p,2,n) 分块即与交替顺序一致。
+            if self._rand_buf is not None:
+                rb_hit = self._rand_buf[:n * cfg.n_players].view(n, cfg.n_players)
+                rb_grow = self._rand_buf[cfg.n_players * n:
+                                         cfg.n_players * n + n * cfg.n_players] \
+                    .view(n, cfg.n_players)
+            else:
+                r = torch.rand(n * cfg.n_players * 2, device=d) \
+                    .view(cfg.n_players, 2, n)
+                rb_hit = r[:, 0, :].transpose(0, 1)      # (n,p) 每 pl 宝箱命中
+                rb_grow = r[:, 1, :].transpose(0, 1)     # (n,p) 每 pl 成长
+
+            # 命中判定：**回收箱必升**（recycle_crate_prob=1.0，掉血回收的
+            # 箱踩了必还原 —— 掉多少层补多少，总量守恒可核算）；
+            # 普通炸砖宝箱掷全局爆率（corridor=growth_crate_prob，环岛=100%）。
+            rec_all = self._recycle_crate.view(n, -1).gather(1, flat)   # (n,p)
+            prob = torch.where(rec_all.bool(), cfg.recycle_crate_prob,
+                               self.crate_prob.unsqueeze(1))
+            hits = stood & (rb_hit < prob) & alive0             # (n,p) 命中（开箱成功）
+            self._grow_vec_all(hits.long(), alive0, rb_grow)
             # 清掉所有被踩过的宝箱（不管命中与否，开箱即消失）。
-            # **只把踩了的格子写 False**：踩的 → 0，没踩的保持原值 ——
-            # 之前用 ~stood 会把"没踩的玩家脚下空地"误写成 crate（真 bug）。
-            for pl in range(cfg.n_players):
-                crate_flat = self.crate.view(n, -1)
-                cur = crate_flat.gather(1, flat[:, pl].unsqueeze(1))
-                new = torch.where(stood[:, pl].unsqueeze(1),
-                                  torch.zeros_like(cur), cur)
-                crate_flat.scatter_(1, flat[:, pl].unsqueeze(1), new)
-                # 同步清掉被踩的回收标记（防 stale 标记把后续普通箱误判为回收箱）
-                rec_flat = self._recycle_crate.view(n, -1)
-                rec_cur = rec_flat.gather(1, flat[:, pl].unsqueeze(1))
-                rec_new = torch.where(stood[:, pl].unsqueeze(1),
-                                      torch.zeros_like(rec_cur), rec_cur)
-                rec_flat.scatter_(1, flat[:, pl].unsqueeze(1), rec_new)
+            # 脚下格写 False 即等价于逐 pl 版"踩的→0、没踩保持"（脚下没箱时
+            # 本来就是 0，写 False 无影响）—— 一个 scatter_ 替代 gather+where+scatter。
+            self.crate.view(n, -1).scatter_(1, flat, False)
+            self._recycle_crate.view(n, -1).scatter_(1, flat, False)
         # 危险区站桩罚：站在"被在场泡泡爆炸范围覆盖"的格每 tick 扣分，
         # 大小 × danger值（1-(fuse-1)/FUSE，越接近爆炸越疼）。
         # danger_map 和观测危险通道同源（同一状态、同一函数）→ 网络有直接的监督。
