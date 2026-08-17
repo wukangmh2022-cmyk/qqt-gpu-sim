@@ -9,6 +9,7 @@ obs7/logits/masks）KL 蒸馏，可接 --distill-then-ppo 继续自对弈 PPO。
 import argparse
 import glob
 import os
+import pickle
 import time
 
 import jax
@@ -290,6 +291,22 @@ def run_distill(params, opt, opt_state, args, key):
     return params, opt_state
 
 
+# ---------------- checkpoint（蒸馏产物 / PPO 续跑） ----------------
+
+def save_params(params, path: str) -> None:
+    """保存 params（嵌套 numpy 数组 pytree）到 pickle。device_get 先搬回 host。"""
+    with open(path, "wb") as f:
+        pickle.dump(jax.device_get(params), f)
+    print(f"params 已保存 -> {path}", flush=True)
+
+
+def load_params(path: str):
+    """从 pickle 加载 params 并放到设备（用于蒸馏初始权重 / PPO 续跑）。"""
+    with open(path, "rb") as f:
+        params = pickle.load(f)
+    return jax.device_put(params)
+
+
 # ---------------- one_iter（可复用，probe 直接测训练主循环） ----------------
 
 
@@ -358,6 +375,11 @@ def main():
                     help="蒸馏后继续自对弈 PPO 微调（不传则蒸馏完即停）")
     ap.add_argument("--no-mask", action="store_true",
                     help="性能 A/B：mask 全放开（行为=无 mask 旧版）")
+    # ---- checkpoint ----
+    ap.add_argument("--load", default=None,
+                    help="初始权重 pickle（蒸馏出的 student / 续跑）")
+    ap.add_argument("--save", default=None,
+                    help="训练结束时保存 params 的路径")
     args = ap.parse_args()
     if args.hidden is None:
         args.hidden = 768 if args.arch == "mlp4" else 256
@@ -374,7 +396,12 @@ def main():
     else:
         kw = {"embed": args.embed, "depth": args.depth}
     params = init_net(net_key, args.arch, N_OBS_CH, H, W, **kw)
-    print(f"arch={args.arch} params={count_params(params):,}", flush=True)
+    if args.load:
+        params = load_params(args.load)
+        print(f"已加载初始权重: {args.load} (params={count_params(params):,})",
+              flush=True)
+    else:
+        print(f"arch={args.arch} params={count_params(params):,}", flush=True)
 
     opt = optax.adam(args.lr)
     opt_state = opt.init(params)
@@ -383,6 +410,8 @@ def main():
     if args.distill_data:
         params, opt_state = run_distill(params, opt, opt_state, args, key)
         if not args.distill_then_ppo:
+            if args.save:
+                save_params(params, args.save)
             print("蒸馏阶段结束（未接 PPO，退出）", flush=True)
             return
         print("接自对弈 PPO 微调：", flush=True)
@@ -408,6 +437,8 @@ def main():
     tot = 2 * n * steps * args.iters / (time.time() - t0)
     print(f"FINAL end-to-end sps = {tot:,.0f} "
           f"({2*n*steps*args.iters:,} steps)", flush=True)
+    if args.save:
+        save_params(params, args.save)
 
 
 if __name__ == "__main__":
