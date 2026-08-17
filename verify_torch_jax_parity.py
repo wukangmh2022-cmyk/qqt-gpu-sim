@@ -35,6 +35,7 @@ if _side in (None, "both", "torch") and "--compare" not in sys.argv:
     import torch
     from sim.config import SimConfig
     from sim.torch_sim import BatchedSim
+    from sim.blast import danger_map
 
 # jax 只在 --side jax/both 时才 import（本地 .venv 无 jax；无参数默认 torch 侧）
 if _side in ("jax", "both") and "--compare" not in sys.argv:
@@ -42,8 +43,9 @@ if _side in ("jax", "both") and "--compare" not in sys.argv:
     import jax
     import jax.numpy as jnp
     from jax_bomb.jax_env import (BLAST, FUSE, H, W, MAX_STEPS, MAX_BOMBS,
-                                  MAX_HP, INVULN, BombState, legal_mask as
-                                  jax_legal, make_obs, step as jax_step)
+                                  MAX_HP, INVULN, MAX_CHAIN, BombState,
+                                  legal_mask as jax_legal, make_obs,
+                                  step as jax_step)
 else:
     BLAST = 7
     FUSE = 30
@@ -52,6 +54,7 @@ else:
     MAX_BOMBS = 10
     MAX_HP = 5
     INVULN = 30
+    MAX_CHAIN = 16
 
 # 与 collect_distill.py 相同的对齐配置（纯空场 50% + 变换 50%，全图满级无宝箱）
 CFG = SimConfig(height=H, width=W, n_players=2, map_mode="corridor",
@@ -136,10 +139,14 @@ def torch_obs7(sim: BatchedSim, pid: int) -> np.ndarray:
     obs[1] = np.where(owner == me, fuse_norm, 0.0).astype(np.float32)
     obs[3] = np.where(owner == opp, fuse_norm, 0.0).astype(np.float32)
     obs[4] = (sim.wall[0] | sim.brick[0]).float().cpu().numpy()
-    bombed = fuse > 0
-    b = bomb_blast
-    bl = np.where(bombed, np.where(b > 0, b, float(BLAST)), 0.0) / float(BLAST)
-    obs[5] = bl.astype(np.float32)
+    # ch5 = 危险图（torch danger_map 同款，与 collect obs7_batch / jax make_obs 对齐）
+    fuse_t = torch.tensor(fuse, dtype=torch.int32)
+    wall_t = (sim.wall[0] | sim.brick[0])
+    b_t = torch.tensor(bomb_blast, dtype=torch.int32)
+    blast_map = torch.where(b_t > 0, b_t, torch.tensor(BLAST))
+    brick_t = sim.brick[0]
+    danger = danger_map(fuse_t, wall_t, blast_map, FUSE, brick_t, MAX_CHAIN)
+    obs[5] = danger.float().cpu().numpy()
     obs[6] = np.full((H, W), t / float(MAX_STEPS), np.float32)
     return obs
 

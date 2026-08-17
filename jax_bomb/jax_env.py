@@ -118,6 +118,81 @@ def _rays(seed, bombed, blast_map, wall):
     return covered
 
 
+def _danger_map(fuse, wall, bomb_blast, fuse_max=FUSE, max_chain=MAX_CHAIN):
+    """torch sim/blast.py::danger_map 的 jax 移植（ch5 危险图，逐位对齐）。
+
+    在场所有泡泡的"时空影响范围"，越接近爆炸值越大，落在 (0, 1]：
+    - 权重 = 指数压缩的引信（(1-(fuse-1)/FUSE)^2，刚放的泡几乎无色）；
+    - 阶段 A（max_chain>1）：炮格间连锁修正（波前接力，while_loop 早退，
+      与 torch 动态早退一致：多跑的空轮只产生零波前）；
+    - 阶段 B：每颗泡沿 4 方向扩散自己的 blast 档距离（固定 BLAST 步，
+      多跑空步 keep=False 零贡献），墙不穿不覆盖、泡记录后不穿透。
+    值域天然 0-1，直接作 obs 通道（torch 同款，无额外归一化）。
+    """
+    bombed = fuse > 0
+    w_raw = 1.0 - (fuse.astype(jnp.float32) - 1.0) / float(fuse_max)
+    weight = jnp.where(bombed, jnp.clip(w_raw, 0.0, None) ** 2,
+                       jnp.zeros_like(w_raw))
+    blast_f = jnp.where(bomb_blast > 0, bomb_blast, BLAST).astype(jnp.float32)
+    not_solid = (~bombed).astype(jnp.float32)      # 泡挡火（无 brick：墙走 passable）
+    passable = (~wall).astype(jnp.float32)
+    one = jnp.ones_like(weight)
+
+    def spread_once(fw, fd):
+        """4 方向 × BLAST 步波前传播一轮，返回本轮覆盖(spread)。"""
+        spread = jnp.zeros_like(fw)
+        for drow, dcol in _DIRS:
+            fw_p, fd_p = fw, fd
+            for _ in range(BLAST):
+                fw1 = _shift(fw_p, drow, dcol) * passable
+                fd1 = _shift(fd_p, drow, dcol) * passable
+                fd1 = fd1 - one
+                keep = fd1 >= 0
+                fw1 = fw1 * keep
+                spread = jnp.maximum(spread, fw1)
+                fw1 = fw1 * not_solid              # 泡记录后不穿透
+                fd1 = fd1 * not_solid
+                fw_p, fd_p = fw1, fd1
+        return spread
+
+    if max_chain > 1:
+        def cond(c):
+            i, newly, _w, _f, _d = c
+            return (i < max_chain) & jnp.any(newly)
+
+        def body(c):
+            i, newly, w, front, fdist = c
+            spread = spread_once(front, fdist) * bombed.astype(jnp.float32)
+            w2 = jnp.maximum(w, spread)
+            newly2 = (spread > w) & bombed
+            return (i + 1, newly2, w2,
+                    jnp.where(newly2, spread, jnp.zeros_like(spread)),
+                    jnp.where(newly2, blast_f, jnp.zeros_like(spread)))
+
+        w0 = weight
+        _, _, weight, _, _ = jax.lax.while_loop(
+            cond, body,
+            (0, bombed, w0,
+             jnp.where(bombed, w0, jnp.zeros_like(w0)),
+             jnp.where(bombed, blast_f, jnp.zeros_like(w0))))
+
+    seed = weight * passable                       # 阶段 B：每方向从 seed 出发
+    danger = seed
+    for drow, dcol in _DIRS:
+        fw_p, fd_p = seed, jnp.where(bombed, blast_f, jnp.zeros_like(seed))
+        for _ in range(BLAST):
+            fw1 = _shift(fw_p, drow, dcol) * passable
+            fd1 = _shift(fd_p, drow, dcol) * passable
+            fd1 = fd1 - one
+            keep = fd1 >= 0
+            fw1 = fw1 * keep
+            danger = jnp.maximum(danger, fw1)      # 先记录（覆盖泡格）
+            fw1 = fw1 * not_solid                  # 再挡穿透
+            fd1 = fd1 * not_solid
+            fw_p, fd_p = fw1, fd1
+    return danger
+
+
 def _resolve_explosions(fuse, owner, bomb_blast, wall, chain_cap=8):
     """返回 (covered, triggered)，连锁最多 chain_cap 轮。
 
@@ -353,27 +428,25 @@ def _splat(pos_me, gate, h, w):
 def make_obs(state: BombState, pid: int) -> jnp.ndarray:
     """(7, H, W) float32，玩家 pid 视角。
 
-    通道 = 炸弹**基础信息**（不预计算危险图——大网络自己学危险推理）：
+    通道 = 炸弹**基础信息 + 危险图**（ch5 = torch 同款 danger_map，网络直接
+    读"火会烧到哪"，不需要自己从泡坐标反推威胁方向）：
       ch0 我位置（双线性 splat）   ch1 我的泡剩余时间 fuse/FUSE
       ch2 对手位置（splat）        ch3 对手泡剩余时间 fuse/FUSE
-      ch4 墙（wall 二值）          ch5 泡威力 blast/BLAST（在场泡格 = 范围）
+      ch4 墙（wall 二值）          ch5 危险图 danger_map（0-1，越接近爆炸越大）
       ch6 局内进度 t/MAX_STEPS
     """
     pos, fuse, owner, bomb_blast, wall, alive, _hp, _invuln, t = state
     me, opp = pid, 1 - pid
     fuse_norm = fuse.astype(jnp.float32) / float(FUSE)
     bombed = fuse > 0
-    blast_norm = jnp.where(
-        bombed,
-        jnp.where(bomb_blast > 0, bomb_blast, BLAST).astype(jnp.float32) / float(BLAST),
-        jnp.zeros_like(fuse, jnp.float32))
+    danger = _danger_map(fuse, wall, bomb_blast)
     obs = jnp.stack([
         _splat(pos[me], alive[me], H, W),
         jnp.where(owner == me, fuse_norm, jnp.zeros_like(fuse_norm)),
         _splat(pos[opp], alive[opp], H, W),
         jnp.where(owner == opp, fuse_norm, jnp.zeros_like(fuse_norm)),
         wall.astype(jnp.float32),                                # 墙（二值）
-        blast_norm,                                              # 泡威力（范围）
+        danger,                                                  # 危险图
         jnp.full((H, W), t.astype(jnp.float32) / float(MAX_STEPS), jnp.float32),
     ])
     return obs

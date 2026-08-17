@@ -144,21 +144,17 @@ def _swap_player_channels(obs: torch.Tensor) -> torch.Tensor:
 def obs7_batch(sim: BatchedSim, obs14: torch.Tensor) -> torch.Tensor:
     """从共享 obs14 + sim 状态批量组装 jax 7 通道双视角 (N,2,7,H,W)。
 
-    ch5 = 泡威力图（bomb_blast/BLAST，不含危险图 —— 化繁为简的关键）。
+    ch5 = **危险图**（共享 obs 通道 5，torch danger_map 已算好 —— 与 jax
+    make_obs ch5 同语义，网络直接读"火会烧到哪"）。
     ch6 = 进度 t/MAX_STEPS（共享通道 6）。
     """
     n = sim.num_envs
-    fuse = sim.fuse.float()                                   # (N,H,W)
-    bomb_blast = sim.bomb_blast.float()
-    bombed = (fuse > 0).float()
-    blast_map = torch.where(bomb_blast > 0, bomb_blast, torch.full_like(
-        bomb_blast, float(BLAST)))
-    ch5 = bombed * (blast_map / float(BLAST))                 # (N,H,W)
+    ch5 = obs14[:, 5:6]                                       # (N,1,H,W) 危险图
     ch6 = obs14[:, 6:7]                                       # (N,1,H,W) 进度
     # pid0 视角：我=共享0/2、对手=共享1/3 → VIEW_MAP5；pid1 视角对调
     o7 = torch.stack([
-        torch.cat([obs14[:, VIEW_MAP5], ch5[:, None], ch6], dim=1),
-        torch.cat([obs14[:, VIEW1_MAP5], ch5[:, None], ch6], dim=1),
+        torch.cat([obs14[:, VIEW_MAP5], ch5, ch6], dim=1),
+        torch.cat([obs14[:, VIEW1_MAP5], ch5, ch6], dim=1),
     ], dim=1)                                                 # (N,2,7,H,W)
     return o7
 
