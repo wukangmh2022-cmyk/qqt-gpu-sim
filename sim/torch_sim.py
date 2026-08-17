@@ -818,10 +818,11 @@ class BatchedSim:
         f = self._res_cached
         if f is None:
             cfg = self.cfg
-            # resolve 是**实际爆炸**链（DCU 实测 ≤3 轮，cap=4 有裕量）——
-            # 与 danger 的**预测**链（≤8，见 chain_cap_rounds 注释）不同，
-            # 分开设 cap 少跑空波前轮。
-            rcap = min(cfg.chain_cap_rounds, 4)
+            # resolve 与 danger 用同一 chain_cap_rounds（8）：满级 blast=7 的
+            # 收集/对拍场景链深可达 7-8（原 min(...,4) 在链深>4 时漏爆，与
+            # jax 对拍 567 处分歧）。固定轮无同步；链深>cap 的截断与 jax
+            # 动态早退逐位一致（都是"最多 cap 轮"）。
+            rcap = cfg.chain_cap_rounds
             def _r(fuse, owner, wall, blast_map, brick, _h=hint):
                 return resolve_explosions(fuse, owner, wall, blast_map,
                                           cfg.max_chain, brick,

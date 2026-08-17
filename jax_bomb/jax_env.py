@@ -94,31 +94,38 @@ def _shift(x, drow, dcol):
 # ---------------- 爆炸传播（同 sim/blast.py 的距离缓冲 v2） ----------------
 
 def _rays(seed, bombed, blast_map, wall):
-    """从 seed 出发的十字覆盖。泡/brick 挡火但被覆盖；wall 永久墙完全挡火；blast 每格自己的威力。
+    """从 seed 出发的十字覆盖。泡挡火但被覆盖；wall 永久墙挡火**且不被覆盖**；
+    blast 每格自己的威力。
 
-    固定 max_b = BLAST 轮（多跑空步结果不变），与 blast.py 的
-    distance-buffer 传播逐位一致。
+    对齐 torch sim/blast.py::rays：`fd1 = _shift * ~wall` 在 covered 之前
+    置 0 —— 墙格既不覆盖也不穿透（旧版先 covered 后置 0 会让墙格进覆盖图，
+    对拍 3 格差异）。固定 max_b = BLAST 轮（多跑空步结果不变）。
     """
+    seed = seed & ~wall                  # 源不在墙上（防御，放泡本就禁墙）
     covered = seed
     fd = seed.astype(jnp.int8) * jnp.clip(blast_map, 0, 127).astype(jnp.int8)
     one = jnp.ones_like(fd)
-    not_solid = ~bombed & ~wall
+    not_wall = (~wall).astype(jnp.int8)
+    not_solid = ~bombed                 # 泡挡火（覆盖后不穿透）；墙靠前置置 0
     for drow, dcol in _DIRS:
         fd_p = fd
         for _ in range(BLAST):
-            fd1 = _shift(fd_p, drow, dcol)
+            fd1 = _shift(fd_p, drow, dcol) * not_wall   # 墙格置 0（不覆盖不穿透）
             covered = covered | (fd1 > 0)
             fd1 = fd1 - one
-            fd1 = fd1 * not_solid.astype(jnp.int8)     # 泡/墙挡火：记录后不穿透
+            fd1 = fd1 * not_solid.astype(jnp.int8)      # 泡记录后不穿透
             fd_p = fd1
     return covered
 
 
-def _resolve_explosions(fuse, owner, bomb_blast, wall):
-    """返回 (covered, triggered)，连锁最多 MAX_CHAIN 轮（动态早退）。
+def _resolve_explosions(fuse, owner, bomb_blast, wall, chain_cap=8):
+    """返回 (covered, triggered)，连锁最多 chain_cap 轮。
 
-    triggered = 本 tick 爆炸的泡；被 covered 覆盖的活泡连锁点燃。
-    链长用 lax.while_loop 动态（jax 无 host 同步；多跑空轮结果不变）。
+    **与 torch 生产对齐**（torch_sim._resolve_c 的 chain_cap = chain_cap_rounds
+    =8，见 2026-08-17 对拍修复：原 resolve cap=4 在满级 blast=7 的密集泡阵
+    链深 >4 时漏爆）。while_loop 动态早退：实际轮数 = 链深，cap 只是上限，
+    调大不增加计算（jax 无 host 同步）。链深 >cap 时与 torch 固定轮截断
+    方式一致 → 覆盖/伤害逐位对齐。
     """
     triggered = (fuse == 0) & (owner >= 0)
     live = fuse > 0
@@ -126,18 +133,18 @@ def _resolve_explosions(fuse, owner, bomb_blast, wall):
     covered = _rays(triggered, live, blast_map, wall)
 
     def cond(c):
-        newly = c[0]
-        return jnp.any(newly)
+        i, newly, _cov, _trig = c
+        return (i < chain_cap) & jnp.any(newly)
 
     def body(c):
-        newly, covered, triggered = c
+        i, newly, covered, triggered = c
         covered2 = covered | _rays(newly, live, blast_map, wall)
         triggered2 = triggered | newly
         newly2 = live & covered2 & ~triggered2
-        return newly2, covered2, triggered2
+        return i + 1, newly2, covered2, triggered2
 
-    _, covered, triggered = jax.lax.while_loop(
-        cond, body, (live & covered & ~triggered, covered, triggered))
+    _, _, covered, triggered = jax.lax.while_loop(
+        cond, body, (0, live & covered & ~triggered, covered, triggered))
     return covered, triggered
 
 
@@ -152,10 +159,12 @@ def _impassable_pair(blocked_flat, r0, c0, r1, c1, y, x):
         jnp.clip(r0, 0, h - 1) * w + jnp.clip(c0, 0, w - 1),
         jnp.clip(r1, 0, h - 1) * w + jnp.clip(c1, 0, w - 1)], axis=-1)
     solid = blocked_flat[idx]
-    r0c = (y - RADIUS).astype(jnp.int32)
-    r1c = (y + RADIUS).astype(jnp.int32)
-    c0c = (x - RADIUS).astype(jnp.int32)
-    c1c = (x + RADIUS).astype(jnp.int32)
+    # floor 语义与 torch 的 .floor().long() 一致（负数必须向下取整，不能
+    # astype 截断 —— 对拍撞边界 new_lead=-0.62→-1 触发 oob 停）。
+    r0c = jnp.floor(y - RADIUS).astype(jnp.int32)
+    r1c = jnp.floor(y + RADIUS).astype(jnp.int32)
+    c0c = jnp.floor(x - RADIUS).astype(jnp.int32)
+    c1c = jnp.floor(x + RADIUS).astype(jnp.int32)
     in0 = (r0 >= r0c) & (r0 <= r1c) & (c0 >= c0c) & (c0 <= c1c)
     in1 = (r1 >= r0c) & (r1 <= r1c) & (c1 >= c0c) & (c1 <= c1c)
     return oob | (solid[0] & ~in0) | (solid[1] & ~in1)
@@ -164,12 +173,12 @@ def _impassable_pair(blocked_flat, r0, c0, r1, c1, y, x):
 def _resolve_axis(coord, delta, other, y, x, blocked_flat, vertical):
     """沿单轴消解碰撞：撞上贴着障碍停下（滑动）。同 move.py _resolve_axis。"""
     sgn = jnp.sign(delta)
-    old_lead = (coord - delta + sgn * RADIUS).astype(jnp.int32)
-    new_lead = (coord + sgn * RADIUS).astype(jnp.int32)
+    old_lead = jnp.floor(coord - delta + sgn * RADIUS).astype(jnp.int32)
+    new_lead = jnp.floor(coord + sgn * RADIUS).astype(jnp.int32)
     lo = jnp.minimum(old_lead, new_lead)
     hi = jnp.maximum(old_lead, new_lead)
-    span0 = (other - RADIUS).astype(jnp.int32)
-    span1 = (other + RADIUS).astype(jnp.int32)
+    span0 = jnp.floor(other - RADIUS).astype(jnp.int32)
+    span1 = jnp.floor(other + RADIUS).astype(jnp.int32)
 
     def hit_at(lead):
         if vertical:
@@ -213,8 +222,14 @@ def _move_player(pos_me, move, alive_me, blocked):
 
 # ---------------- step（对齐 torch_sim.step 的顺序） ----------------
 
-def step(state: BombState, actions: jnp.ndarray) -> tuple[BombState, jnp.ndarray]:
-    """actions: (2, 2) int32 = [dir(0-4), bomb(0/1)]，每玩家。返回 (state, done)。"""
+def step(state: BombState, actions: jnp.ndarray, auto_reset: bool = True,
+         ) -> tuple[BombState, jnp.ndarray]:
+    """actions: (2, 2) int32 = [dir(0-4), bomb(0/1)]，每玩家。返回 (state, done)。
+
+    auto_reset=True（训练/收集默认，对齐 torch 正式版）：终局就地重置为新局。
+    False（对拍用）：终局保留原状态（与 torch step(auto_reset=False) 一致，
+    方便逐 tick 对比终局帧）。Python 静态分支，jit trace 期折叠，无运行时开销。
+    """
     pos, fuse, owner, bomb_blast, wall, alive, hp, invuln, t = state
     dirs, bombs = actions[:, 0], actions[:, 1]
     alive0 = alive
@@ -267,7 +282,10 @@ def step(state: BombState, actions: jnp.ndarray) -> tuple[BombState, jnp.ndarray
     done = (n_alive <= 1) | (t >= MAX_STEPS)
     new_state = BombState(newpos, fuse, owner, bomb_blast, wall, alive_new,
                           hp_new, invuln, t)
-    return jax.lax.cond(done, lambda _: _fresh(), lambda _: new_state, None), done
+    if auto_reset:
+        return jax.lax.cond(done, lambda _: _fresh(), lambda _: new_state,
+                            None), done
+    return new_state, done
 
 
 # ---------------- 合法动作掩码（同 sim/obs.py::legal_mask 语义） ----------------

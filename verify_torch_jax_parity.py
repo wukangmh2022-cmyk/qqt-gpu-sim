@@ -36,8 +36,8 @@ if _side in (None, "both", "torch") and "--compare" not in sys.argv:
     from sim.config import SimConfig
     from sim.torch_sim import BatchedSim
 
-# jax 只在 --side jax/both 时才 import（本地 .venv 无 jax）
-if _side in (None, "both", "jax") and "--compare" not in sys.argv:
+# jax 只在 --side jax/both 时才 import（本地 .venv 无 jax；无参数默认 torch 侧）
+if _side in ("jax", "both") and "--compare" not in sys.argv:
     sys.path.insert(0, os.path.join(PROJ, "jax_bomb"))
     import jax
     import jax.numpy as jnp
@@ -250,7 +250,7 @@ def main():
                              invuln, 0)
         rows = []
         for tick in range(args.ticks):
-            js, done_j = jax_step(js, jnp.array(acts[tick], jnp.int32))
+            js, done_j = jax_step(js, jnp.array(acts[tick], jnp.int32), False)
             rows.append({
                 "pos": np.asarray(jax.device_get(js.pos)).tolist(),
                 "fuse": np.asarray(jax.device_get(js.fuse)).tolist(),
@@ -288,7 +288,7 @@ def run_both(args):
         a_t = torch.tensor(a, dtype=torch.long).unsqueeze(0)
         rew, done_any, _ = sim.step(a_t, auto_reset=False)
         done_t = bool(done_any)
-        js, done_j = jax_step(js, jnp.array(a, jnp.int32))
+        js, done_j = jax_step(js, jnp.array(a, jnp.int32), False)
         checks = [
             ("pos", js.pos, sim.pos[0], 1e-5),
             ("fuse", js.fuse, sim.fuse[0], 0),
