@@ -109,25 +109,29 @@ def torch_obs7(sim: BatchedSim, pid: int) -> np.ndarray:
     owner = sim.owner[0].cpu().numpy()
     bomb_blast = sim.bomb_blast[0].float().cpu().numpy()
     pos = sim.pos[0].float().cpu().numpy()
+    alive = sim.alive[0].cpu().numpy()
     t = float(sim.t[0].item())
     me, opp = pid, 1 - pid
     obs = np.zeros((7, H, W), np.float32)
 
-    def splat(xy):
-        y, x = float(xy[0]), float(xy[1])
-        y0, x0 = int(y), int(x)
-        y0, x0 = max(0, min(y0, H - 1)), max(0, min(x0, W - 1))
+    def splat(xy, gate):
+        # 与 jax _splat / torch obs._splat 一致：格中心 i 对应 fy=i → 先减半格
+        fy = min(max(xy[0] - 0.5, 0.0), float(H - 1))
+        fx = min(max(xy[1] - 0.5, 0.0), float(W - 1))
+        y0 = min(max(int(fy), 0), H - 1)
+        x0 = min(max(int(fx), 0), W - 1)
         y1, x1 = min(y0 + 1, H - 1), min(x0 + 1, W - 1)
-        wy, wx = max(0.0, y - y0), max(0.0, x - x0)
-        g = np.zeros((H, W), np.float32)
-        g[y0, x0] += (1 - wy) * (1 - wx)
-        g[y0, x1] += (1 - wy) * wx
-        g[y1, x0] += wy * (1 - wx)
-        g[y1, x1] += wy * wx
-        return g
+        wy, wx = min(max(fy - y0, 0.0), 1.0), min(max(fx - x0, 0.0), 1.0)
+        g = 1.0 if gate else 0.0
+        out = np.zeros((H, W), np.float32)
+        out[y0, x0] += (1 - wy) * (1 - wx) * g
+        out[y0, x1] += (1 - wy) * wx * g
+        out[y1, x0] += wy * (1 - wx) * g
+        out[y1, x1] += wy * wx * g
+        return out
 
-    obs[0] = splat(pos[me])
-    obs[2] = splat(pos[opp])
+    obs[0] = splat(pos[me], alive[me])
+    obs[2] = splat(pos[opp], alive[opp])
     fuse_norm = fuse / float(FUSE)
     obs[1] = np.where(owner == me, fuse_norm, 0.0).astype(np.float32)
     obs[3] = np.where(owner == opp, fuse_norm, 0.0).astype(np.float32)

@@ -37,8 +37,10 @@ INVULN = 30             # 被炸伤后无敌 tick
 MAX_CHAIN = 16          # 连锁最多迭代轮数
 MAX_STEPS = 1800        # 局长 180 秒
 N_MOVES, N_BOMB = 5, 2
-_MOVE_DELTA = jnp.array([[0.0, 0.0], [0.0, 1.0], [0.0, -1.0],
-                         [1.0, 0.0], [-1.0, 0.0]], jnp.float32)   # 停/右/左/下/上
+# 方向编码与 torch（sim/config.py）一致：0=上 1=下 2=左 3=右 4=停(IDLE)。
+# 之前用 [停/右/左/下/上] 与 torch 错位 —— 对拍/蒸馏动作语义全乱，2026-08-17 修。
+_MOVE_DELTA = jnp.array([[-1.0, 0.0], [1.0, 0.0], [0.0, -1.0], [0.0, 1.0],
+                         [0.0, 0.0]], jnp.float32)   # 上/下/左/右/停
 _DIRS = ((-1, 0), (1, 0), (0, -1), (0, 1))
 
 # 观测通道：0 我位置, 1 我泡, 2 对手位置, 3 对手泡, 4 墙(0), 5 危险图, 6 进度
@@ -190,9 +192,12 @@ def _resolve_axis(coord, delta, other, y, x, blocked_flat, vertical):
 
 
 def _move_player(pos_me, move, alive_me, blocked):
-    """单玩家移动：连续坐标 + AABB 滑动碰撞（角色互不碰撞）。"""
+    """单玩家移动：连续坐标 + AABB 滑动碰撞（角色互不碰撞）。
+
+    方向编码同 torch：0=上 1=下 2=左 3=右 4=停(IDLE)。
+    """
     delta = _MOVE_DELTA[move] * STEP
-    moving = alive_me & (move != 4)              # MOVE_IDLE=4
+    moving = alive_me & (move != 4)              # MOVE_IDLE=4（torch 编码）
     delta = jnp.where(moving, delta, jnp.zeros_like(delta))
     dy, dx = delta[0], delta[1]
     y, x = pos_me[0], pos_me[1]
@@ -270,22 +275,25 @@ def step(state: BombState, actions: jnp.ndarray) -> tuple[BombState, jnp.ndarray
 def legal_mask(state: BombState) -> tuple[jnp.ndarray, jnp.ndarray]:
     """返回 (move_mask (2,5) bool, bomb_mask (2,2) bool)。
 
-    方向掩码只屏蔽"按了也一格都动不了"的方向（贴住墙/泡）——用探针位移
-    判定（IDLE 永远合法）。放泡掩码：存活 & 不在墙格 & 脚下无泡 & 未超上限
-    （bomb=0 不放永远合法）。与 torch sim/obs.py::legal_mask 语义一致。
+    方向编码同 torch：0=上 1=下 2=左 3=右 4=停(IDLE)。
+    方向掩码只屏蔽"按了也一格都动不了"的方向（已贴住墙/泡）——用探针位移
+    判定（位移 > 容差 = 合法）；IDLE(4) 恒合法；死亡角色整行放开（动作不
+    会被执行，调用方免特殊分支）。放泡掩码：存活 & 不在墙格 & 脚下无泡 &
+    未超上限；bomb=0（不放）恒合法，死亡角色 bomb=1 也放开。
     """
     pos, fuse, owner, _bb, wall, alive, _hp, _invuln, _t = state
     blocked = (fuse > 0) | wall
-    # 四个方向各探一次位移：能移动 = 合法（IDLE=4 恒合法）
+    # 四个方向（上/下/左/右）各探一次位移：能移动 = 合法（IDLE=4 恒合法）
     move = jnp.zeros((2, 5), jnp.bool_)
     for d in range(4):
-        np_ = _move_player(pos[0], d, alive[0], blocked)
-        moved0 = (np_ != pos[0]).any()
+        np0 = _move_player(pos[0], d, alive[0], blocked)
+        moved0 = (jnp.abs(np0 - pos[0]) > 2 * EPS).any()
         np1 = _move_player(pos[1], d, alive[1], blocked)
-        moved1 = (np1 != pos[1]).any()
-        move = move.at[0, d].set(moved0 & alive[0])
-        move = move.at[1, d].set(moved1 & alive[1])
+        moved1 = (jnp.abs(np1 - pos[1]) > 2 * EPS).any()
+        move = move.at[0, d].set(moved0)
+        move = move.at[1, d].set(moved1)
     move = move.at[:, 4].set(True)                      # IDLE 恒合法
+    move = (move & alive[:, None]) | ~alive[:, None]    # 死亡整行放开
     # 放泡：存活 & 不在墙格 & 脚下无泡 & 在场泡数 < 上限
     cell = pos.astype(jnp.int32)
     cell = jnp.stack([jnp.clip(cell[:, 0], 0, H - 1),
@@ -298,7 +306,8 @@ def legal_mask(state: BombState) -> tuple[jnp.ndarray, jnp.ndarray]:
         ((owner == 1) & (fuse > 0)).sum(),
     ])
     can_bomb = alive & (cur_f <= 0) & ~on_wall & (live < MAX_BOMBS)
-    bomb = jnp.stack([~alive, can_bomb], axis=-1)       # bomb=0 恒合法
+    bomb = jnp.stack([jnp.ones_like(alive),        # bomb=0（不放）恒合法
+                      can_bomb | ~alive], axis=-1)  # 死亡 bomb=1 放开
     return move, bomb
 
 

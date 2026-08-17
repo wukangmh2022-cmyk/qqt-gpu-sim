@@ -53,29 +53,38 @@ def both_perspectives(states):
 
 
 def both_masks(states):
-    """返回 ((2N,5), (2N,2))：双视角 mask 拼接（同 obs 顺序）。"""
-    m0, b0 = jax.vmap(legal_mask)(states)
-    m1, b1 = jax.vmap(legal_mask)(states)
+    """返回 ((2N,5), (2N,2))：与 both_perspectives 的 obs 行序对齐。
+
+    legal_mask 的 vmap 结果是 (N,2,5)/(N,2,2)（每 state 两玩家的 mask）；
+    obs 行序 = [N 个 p0 视角, N 个 p1 视角]，所以 p0 视角帧配玩家 0 的
+    mask、p1 视角帧配玩家 1 的 —— 按玩家拆开拼接，不是整块 concat。
+    """
+    m, b = jax.vmap(legal_mask)(states)          # (N,2,5), (N,2,2)
+    m0, m1 = m[:, 0], m[:, 1]
+    b0, b1 = b[:, 0], b[:, 1]
     return (jnp.concatenate([m0, m1]), jnp.concatenate([b0, b1]))
 
 
 # ---------------- rollout ----------------
 
 
-def collect_rollout(params, arch, states, key, num_steps):
+def collect_rollout(params, arch, states, key, num_steps, no_mask=False):
     """自对弈：同一网络打两边。states (N, ...)。返回 (new_states, batch)。
 
     step 在终局后**就地重置**（对齐正式版 auto_reset），所以胜负判定用
     step 前的 alive 快照（重置后 alive 恒全 True，无法区分谁死）。
     batch 含每 tick 的 (move_mask, bomb_mask)——PPO loss 用它屏蔽非法动作。
+    no_mask=True：mask 全放开（性能 A/B 用，行为=无 mask 旧版）。
     """
     n = states.pos.shape[0]
+    ones_m = jnp.ones((2 * n, N_MOVES), jnp.bool_)
+    ones_b = jnp.ones((2 * n, N_BOMB), jnp.bool_)
 
     def one_step(carry, _):
         states, key = carry
         key, k0, k1, kstep = jrandom.split(key, 4)
         obs = both_perspectives(states)               # (2N, C, H, W)
-        masks = both_masks(states)
+        masks = (ones_m, ones_b) if no_mask else both_masks(states)
         acts, lps, vals = sample_actions(params, arch, obs, masks, key)
         a0, a1 = acts[:n], acts[n:]
         env_acts = jnp.stack([a0, a1], axis=1)        # (N, 2, 2)
@@ -293,7 +302,8 @@ def build_one_iter(params, opt, opt_state, states, key, args):
     steps = args.num_steps
 
     def one_iter(params, opt_state, states, key):
-        states, batch = collect_rollout(params, args.arch, states, key, steps)
+        states, batch = collect_rollout(params, args.arch, states, key, steps,
+                                        getattr(args, "no_mask", False))
         obs, acts, lps, vals, rew, done, masks = batch
         # bootstrap：rollout 尾部状态价值
         fobs = both_perspectives(states)
@@ -346,6 +356,8 @@ def main():
                     help="总帧数上限（超出按文件 stride 均匀抽稀）")
     ap.add_argument("--distill-then-ppo", action="store_true",
                     help="蒸馏后继续自对弈 PPO 微调（不传则蒸馏完即停）")
+    ap.add_argument("--no-mask", action="store_true",
+                    help="性能 A/B：mask 全放开（行为=无 mask 旧版）")
     args = ap.parse_args()
     if args.hidden is None:
         args.hidden = 768 if args.arch == "mlp4" else 256

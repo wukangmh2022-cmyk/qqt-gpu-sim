@@ -10,7 +10,7 @@
 source ~/jax_env.sh
 cd ~/qqt-gpu-sim
 echo "=== 0. wall+mask 逻辑验证 ==="
-~/miniconda3/bin/python verify_wall_mask.py 2>&1 | tail -4
+~/miniconda3/bin/python verify_wall_mask.py 2>&1 | tail -30
 echo "=== 1. mlp bf16 2层768 (150万, mb=8192, epochs=1) 带 wall+mask ==="
 ~/miniconda3/bin/python -m jax_bomb.jax_train --arch mlp_bf16 --hidden 768 --num-envs 4096 --num-steps 256 --minibatch 8192 --epochs 1 --iters 3 2>&1 | tail -5
 echo "=== 2. mlp bf16 2层256 (37万, mb=8192, epochs=1) 带 wall+mask ==="
