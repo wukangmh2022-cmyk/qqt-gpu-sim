@@ -149,8 +149,15 @@ class SimConfig:
     # 全是 brick，所以"有墙 = 可炸"对网络是隐式可学的。
     map_mode: str = "open"
     corridor_width: int = 5     # corridor 模式中间可通行列数（13 宽 → 左右各 4 列 brick）
-    top_wall_rows: int = 4      # corridor 模式**顶部不可炸墙**行数（行 0..top_wall_rows-1
-                                # 全部永久墙）。出生点自动下移到空旷区（剩余行）中心
+    top_wall_rows: int = 4      # corridor 模式**顶/底障碍行总数**：顶部 top 行 + 底部
+                                # (top_wall_rows-top) 行全部永久墙（不可炸），
+                                # top 每局随机 ∈ [0, top_wall_rows]（random_wall_rows=True 时）。
+                                # 出生点自动下移到空旷区（剩余行）中心
+    random_wall_rows: bool = True  # corridor 顶/底障碍行随机：每局 top∈U[0,top_wall_rows]、
+                                   # bottom = top_wall_rows-top（总障碍行数恒 = top_wall_rows）。
+                                   # False = 固定顶部 top_wall_rows 行（旧行为）。
+    open_obstacle_max: int = 0  # open 关随机**单障碍**（永久墙）数量上限：每局 0~N 个
+                                # 随机散布（避开出生点四邻），0 = 不添加（纯空场）。
 
     # --- 成长系统（corridor 用）：**宝箱拾取**驱动 ---
     # 砖被炸掉后原地变成**宝箱**（crate），玩家走到宝箱格时掷 growth_crate_prob
