@@ -68,6 +68,16 @@
         <h3>📊 状态</h3>
         <div id="status">加载模型中…</div>
       </section>
+
+      <section>
+        <h3>📼 录像</h3>
+        <div class="rec-row">
+          <button id="save-replay" type="button">💾 保存本局录像</button>
+          <button id="save-webp" type="button">🎞️ 保存 WebP 动图</button>
+        </div>
+        <div class="meta">WebP 动图 = 最近 12 秒精彩片段</div>
+        <div id="rec-msg" class="meta"></div>
+      </section>
     </aside>
   </div>
 
@@ -78,6 +88,8 @@
   </div>
 </div>
 
+<script src="vendor/webp-anim/webp-wasm.js"></script>
+<script src="vendor/webp-anim/anim.global.js"></script>
 <script src="sim.js"></script>
 <script src="main.js"></script>
 </body>

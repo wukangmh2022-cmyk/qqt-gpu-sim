@@ -34,7 +34,8 @@
         elBgm = $('bgm'), elApplyModel = $('apply-model'), elCurModel = $('cur-model'),
         elEnemyAi = $('enemy-ai'), elP0Ai = $('p0-ai'), elP0AiWrap = $('p0-ai-wrap'),
         elRestart = $('restart'), elStatus = $('status'), elBanner = $('banner'),
-        elLoading = $('loading'), elLoadingText = $('loading-text');
+        elLoading = $('loading'), elLoadingText = $('loading-text'),
+        elSaveReplay = $('save-replay'), elSaveWebp = $('save-webp'), elRecMsg = $('rec-msg');
 
   // ------------------------------------------------------------ 状态
   let sim = null, modelList = [], res = null;
@@ -49,6 +50,14 @@
   let dangerCache = null;           // tick 级危险图缓存（logicTick 每 step 重建）
   let lastTickT = 0;
   let gameSeed = 1;
+  // 录像：JSON 结构化重放（seed + 每 tick 动作 + 周期快照）+ WebP 动图（滚动窗口）。
+  // 动图管线：滚动窗口按 30fps 存像素级精确的缩采样帧（ImageData）→ 保存时
+  // 交给 libwebp WebPAnimEncoder 做帧间差分合成（vendor/webp-anim/，
+  // 静止背景增量帧 ≈ 免费，体积不再随帧数线性增长）。
+  const CLIP_WINDOW_MS = 12000, CLIP_FRAME_MS = 1000 / 30, CLIP_SCALE = 0.6;
+  let clipFrames = [];          // 滚动帧缓冲 [{ t, img: ImageData }]
+  let lastClipCap = 0;
+  let replay = null;          // { meta, actions: [[m0,b0,m1,b1], ...], snapshots: [...] }
   const face = [MOVE_DOWN, MOVE_DOWN];
   const human = { dirStack: [], latch: new Set(), move: MOVE_IDLE, pendingBomb: false };
   const hunter = new Q.HunterAI();   // 规则 AI（纯进攻寻路），可当敌/我方
@@ -529,6 +538,22 @@
     joyMove = null;                    // 摇杆归位（移动端）
     explosion = null; explosionTrig = null; resultShown = false;
     dangerCache = null;             // 开局清掉旧危险图缓存
+    replay = {
+      meta: {
+        mode: elMode.value === 'corridor' ? 'corridor' : 'open',
+        seed: gameSeed,
+        scene: elScene.value,
+        skin: elSkin.value,
+        spectate: elSpectate.checked,
+        p0: elSpectate.checked ? p0Sel : 'human',
+        p1: enemySel,
+        cfg: Object.assign({}, CFG),   // CFG 快照：重放/分析时不依赖当前版本常量
+      },
+      actions: [],
+      snapshots: [],
+    };
+    clipFrames = [];
+    lastClipCap = 0;
     prevPos.set(sim.pos); curPos.set(sim.pos);
     face[0] = MOVE_DOWN; face[1] = MOVE_DOWN;
     lastTickT = performance.now();
@@ -632,6 +657,79 @@
     if (bgmOn) startBgm(); else stopBgm();
   });
 
+  // ------------------------------------------------------------ 录像保存
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+  function timeStamp() {
+    const d = new Date(), p = (x) => String(x).padStart(2, '0');
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  }
+  function recMsg(html) {
+    elRecMsg.innerHTML = html;
+    clearTimeout(recMsg._t);
+    recMsg._t = setTimeout(() => { elRecMsg.innerHTML = ''; }, 10000);
+  }
+
+  elSaveReplay.addEventListener('click', () => {
+    if (!replay || !replay.actions.length) { recMsg('还没有本局录像 —— 先开始一局再保存'); return; }
+    const doc = {
+      format: 'qqt-replay',
+      version: 1,
+      meta: Object.assign({}, replay.meta, {
+        savedAt: new Date().toISOString(),
+        done: sim ? sim.done : false,
+        result: sim && sim.done ? sim.winner : null,   // 保存时刻的终局（0/1/null）
+        finalT: sim ? sim.t : 0,
+      }),
+      ticks: replay.actions.length,
+      actions: replay.actions,
+      snapshots: replay.snapshots,
+    };
+    const blob = new Blob([JSON.stringify(doc, null, 1)], { type: 'application/json' });
+    downloadBlob(blob, `replay_${doc.meta.mode}_s${doc.meta.seed}_${timeStamp()}.json`);
+    recMsg(`录像已保存：${doc.ticks} tick，${(blob.size / 1024).toFixed(0)}KB`);
+  });
+
+  elSaveWebp.addEventListener('click', () => {
+    if (!replay || !replay.actions.length) { recMsg('还没有可录的画面 —— 先开始一局再保存'); return; }
+    const now = performance.now();
+    const frames = clipFrames.filter((f) => now - f.t <= CLIP_WINDOW_MS + 250)
+      .sort((a, b) => a.t - b.t);
+    if (frames.length < 2) { recMsg('画面不足，等几秒再点'); return; }
+    recMsg(`WebP 编码中…（${frames.length} 帧，帧间差分压缩）`);
+    setTimeout(async () => {
+      try {
+        const anim = window.WebPAnim;
+        if (!anim) throw new Error('动画编码器未加载（vendor/webp-anim/）');
+        await Promise.race([
+          anim.ready,
+          new Promise((_, rej) => setTimeout(() => rej(new Error('WebP wasm 加载超时')), 15000)),
+        ]);
+        // 帧 → libwebp WebPAnimEncoder：像素级一致的输入，做帧间差分
+        // （关键帧 + 增量帧），静止背景增量帧极小。
+        const f0 = frames[0].img;
+        const rgbaFrames = frames.map((f) => ({
+          data: f.img.data, duration: Math.round(CLIP_FRAME_MS),
+          config: { quality: 85, lossless: 0 },
+        }));
+        const webp = await anim.encodeAnimation(f0.width, f0.height, true, rgbaFrames);
+        if (!webp) throw new Error('编码失败（wasm 返回 null）');
+        const blob = new Blob([webp], { type: 'image/webp' });
+        downloadBlob(blob, `clip_${replay.meta.mode}_s${replay.meta.seed}_${timeStamp()}.webp`);
+        recMsg(`WebP 已保存：${frames.length} 帧，${(blob.size / 1024).toFixed(0)}KB（差分压缩）`);
+      } catch (e) {
+        recMsg(`WebP 编码失败：${e.message}`);
+        console.error(e);
+      }
+    }, 30);
+  });
+
   // ------------------------------------------------------------ 10Hz 逻辑节拍
   function logicTick() {
     if (!running || !sim || sim.done) return;
@@ -646,6 +744,18 @@
     // 拾取判定：人类玩家脚下 step 前有宝箱 → step 后没有 = 吃到
     const hc = Math.floor(sim.pos[1]), hr = Math.floor(sim.pos[0]);
     const hadCrate = !spectate && sim.alive[0] && sim.crate[hr * W + hc] === 1;
+    // 录像：记录本 tick 实际喂给 step 的动作 + 每 20 tick 一个状态快照
+    if (replay) {
+      replay.actions.push([a0[0], a0[1], a1[0], a1[1]]);
+      if (replay.actions.length % 20 === 1) {
+        const bombs = [];
+        for (let i = 0; i < N; i++) {
+          if (sim.fuse[i] > 0) bombs.push([i, sim.fuse[i], sim.owner[i], sim.bombBlast[i]]);
+        }
+        replay.snapshots.push({ t: sim.t, pos: Array.from(sim.pos), hp: sim.hp.slice(),
+                                alive: sim.alive.slice(), bombs });
+      }
+    }
     prevPos.set(sim.pos);
     const info = sim.step([a0, a1]);
     curPos.set(sim.pos);
@@ -942,6 +1052,19 @@
     }
     prevFrame = now;
     render(now);
+    // 动图滚动窗口：按 30fps 把画面缩采样进环形缓冲，保存时取最近 12 秒。
+    // 直接存原始像素（getImageData）：中间任何有损编码都会让静止背景
+    // 每帧重量化出不同噪声 → 帧间差分失效（体积暴涨回关键帧量级）。
+    // 像素级一致 → AnimEncoder 增量帧极小，12 秒 30fps ≈ 几百 KB。
+    if (now - lastClipCap >= CLIP_FRAME_MS) {
+      lastClipCap = now;
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(canvas.width * CLIP_SCALE));
+      c.height = Math.max(1, Math.round(canvas.height * CLIP_SCALE));
+      c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
+      clipFrames.push({ t: now, img: c.getContext('2d').getImageData(0, 0, c.width, c.height) });
+      while (clipFrames.length > 2 && now - clipFrames[0].t > CLIP_WINDOW_MS) clipFrames.shift();
+    }
     requestAnimationFrame(loop);
   }
 
