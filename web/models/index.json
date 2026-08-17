@@ -1,6 +1,20 @@
 {
  "models": [
   {
+   "name": "duel_latest_13.67B",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 13666615296,
+   "elo": 2898.8,
+   "source": "duel_latest_13.67B.pt",
+   "generated_at": "2026-08-17 12:34 UTC"
+  },
+  {
    "name": "duel_nobc_11b_live",
    "arch": "mlp",
    "obs_shape": [
