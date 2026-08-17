@@ -153,7 +153,9 @@ def main() -> None:
           + ("[swap-sides: student=P1, 对手=P0 官方姿势]" if args.swap_sides
              else "[student=P0, 对手=P1]")
           + " ===")
-    for name, pol in opps.items():
+    for i, (name, pol) in enumerate(opps.items()):
+        sim.gen.manual_seed(1000 + i)      # 各对手独立随机序列，防互相污染
+        sim.reset_all()
         t0 = time.time()
         if args.swap_sides:
             w, d, l = duel(sim, pol, student, args.episodes)   # pol0=对手, pol1=student

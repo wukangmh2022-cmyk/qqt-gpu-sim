@@ -82,7 +82,9 @@ def main() -> None:
         opps[kind] = (lambda k=kind: lambda o, m, b: make_bot(sim, k).act(o, m, b, 1))()
 
     print("=== 固定靶（P0 不动）vs 对手（P1）===")
-    for name, pol in opps.items():
+    for i, (name, pol) in enumerate(opps.items()):
+        sim.gen.manual_seed(1000 + i)      # 各对手独立随机序列，防互相污染
+        sim.reset_all()
         w0, dr, w1 = duel(sim, fixed, pol, args.episodes)
         print(f"固定靶 vs {name:<20}: 靶胜 {w0:.1%} / 平 {dr:.1%} / 对手胜 {w1:.1%}  "
               f"({args.episodes}局)")
