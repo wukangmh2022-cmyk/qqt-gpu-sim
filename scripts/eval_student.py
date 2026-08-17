@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import torch
 
-from deploy.collect_distill import make_cfg, load_net, obs7_batch
+from deploy.collect_distill import make_cfg, load_net, obs7_batch, _swap_player_channels
 from sim.bots import make_bot
 from sim.factory import make_sim
 
@@ -80,6 +80,9 @@ def main() -> None:
     ap.add_argument("--map-mode", default="distill",
                     choices=["distill", "open", "corridor"],
                     help="distill=收集同款（纯50%+变换50%）；open 纯空场；corridor 70% 混合")
+    ap.add_argument("--swap-sides", action="store_true",
+                    help="student 当 player1、对手当 player0：双方都用自己最熟的 "
+                         "P0 视角姿势（对手 pid=0 官方姿势，student 用 obs7 的 P1 视角）")
     args = ap.parse_args()
 
     device = args.device
@@ -114,27 +117,49 @@ def main() -> None:
             return torch.stack([am, ab], dim=-1)
         return pol
 
-    student = make_student(0)
+    student = make_student(1 if args.swap_sides else 0)
 
-    # 对手（player1）
+    # 对手（默认 player1）。torch 网络当 P1 时用 collect 同款姿势：通道互换 + pid=1
+    # （实测 4 种姿势：swap+pid1=95.8% 正确，裸 pid1=43.8% 错位 —— 2026-08-17）。
+    # --swap-sides 时对手当 player0：用官方 pid=0 姿势（不 swap）。
     opps = {}
     if args.teacher and os.path.exists(args.teacher):
         teacher = load_net(args.teacher, device)
         tname = os.path.splitext(os.path.basename(args.teacher))[0]
-        opps[f"teacher({tname})"] = (lambda t=teacher: lambda o, m, b: t.act(o, m, b, 1)[0])()
+        if args.swap_sides:
+            opps[f"teacher({tname})"] = (
+                lambda t=teacher: lambda o, m, b: t.act(o, m, b, 0)[0])()
+        else:
+            opps[f"teacher({tname})"] = (
+                lambda t=teacher: lambda o, m, b: t.act(
+                    _swap_player_channels(o), m, b, 1)[0])()
     for kind in ("astar", "greedy", "random"):
-        opps[kind] = (lambda k=kind: lambda o, m, b: make_bot(sim, k).act(o, m, b, 1))()
+        if args.swap_sides:
+            opps[kind] = (lambda k=kind: lambda o, m, b: make_bot(sim, k).act(o, m, b, 0))()
+        else:
+            opps[kind] = (lambda k=kind: lambda o, m, b: make_bot(sim, k).act(o, m, b, 1))()
     for nm in ("duel_cnn", "duel_5x3"):
         fpath = f"ckpt/{nm}.pt"
         if os.path.exists(fpath):
             net = load_net(fpath, device)
-            opps[nm] = (lambda t=net: lambda o, m, b: t.act(o, m, b, 1)[0])()
+            if args.swap_sides:
+                opps[nm] = (lambda t=net: lambda o, m, b: t.act(o, m, b, 0)[0])()
+            else:
+                opps[nm] = (
+                    lambda t=net: lambda o, m, b: t.act(
+                        _swap_player_channels(o), m, b, 1)[0])()
 
-    print("=== student(蒸馏) vs 对手 ===")
+    print("=== student(蒸馏) vs 对手 "
+          + ("[swap-sides: student=P1, 对手=P0 官方姿势]" if args.swap_sides
+             else "[student=P0, 对手=P1]")
+          + " ===")
     for name, pol in opps.items():
         t0 = time.time()
-        w, d, l = duel(sim, student, pol, args.episodes)
-        print(f"student vs {name:<14}: win {w:.1%} / draw {d:.1%} / loss {l:.1%}  "
+        if args.swap_sides:
+            w, d, l = duel(sim, pol, student, args.episodes)   # pol0=对手, pol1=student
+        else:
+            w, d, l = duel(sim, student, pol, args.episodes)
+        print(f"student vs {name:<14}: win {l:.1%} / draw {d:.1%} / loss {w:.1%}  "
               f"({args.episodes}局, {time.time()-t0:.0f}s)", flush=True)
 
 
