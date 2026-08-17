@@ -120,7 +120,8 @@ def main() -> None:
     opps = {}
     if args.teacher and os.path.exists(args.teacher):
         teacher = load_net(args.teacher, device)
-        opps["teacher(8b)"] = (lambda t=teacher: lambda o, m, b: t.act(o, m, b, 1)[0])()
+        tname = os.path.splitext(os.path.basename(args.teacher))[0]
+        opps[f"teacher({tname})"] = (lambda t=teacher: lambda o, m, b: t.act(o, m, b, 1)[0])()
     for kind in ("astar", "greedy", "random"):
         opps[kind] = (lambda k=kind: lambda o, m, b: make_bot(sim, k).act(o, m, b, 1))()
     for nm in ("duel_cnn", "duel_5x3"):
