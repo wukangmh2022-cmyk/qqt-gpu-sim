@@ -165,8 +165,11 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
                 pg2 = -ad * jnp.clip(ratio, 1 - clip_eps, 1 + clip_eps)
                 pol = jnp.maximum(pg1, pg2).mean()
                 val_l = jnp.mean((v - rt) ** 2)
-                ent = (-(jnp.exp(lsm) * lsm).sum(-1).mean()
-                       - (jnp.exp(lsb) * lsb).sum(-1).mean())
+                # 熵：非法动作 p=exp(-inf)=0，0*(-inf)=NaN —— 用 p>0 门控
+                pm = jnp.exp(lsm)
+                pb = jnp.exp(lsb)
+                ent = (-(pm * jnp.where(pm > 0, lsm, 0.0)).sum(-1).mean()
+                       - (pb * jnp.where(pb > 0, lsb, 0.0)).sum(-1).mean())
                 return pol + vf_coef * val_l - ent_coef * ent
 
             grads = jax.grad(loss_fn)(params)
@@ -250,8 +253,10 @@ def build_distill_update(params, opt, opt_state, arch, batch, ent_coef):
             # p_t 只在合法动作上归一，student log_softmax 也只在合法上 —— 一致。
             ce_m = -(p_t[:, :5] * lsm).sum(-1).mean()
             ce_b = -(p_t[:, 5:] * lsb).sum(-1).mean()
-            ent = (-(jnp.exp(lsm) * lsm).sum(-1).mean()
-                   - (jnp.exp(lsb) * lsb).sum(-1).mean())
+            pm = jnp.exp(lsm)
+            pb = jnp.exp(lsb)
+            ent = (-(pm * jnp.where(pm > 0, lsm, 0.0)).sum(-1).mean()
+                   - (pb * jnp.where(pb > 0, lsb, 0.0)).sum(-1).mean())
             return ce_m + ce_b - ent_coef * ent
 
         grads = jax.grad(loss_fn)(params)
