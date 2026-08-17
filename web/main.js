@@ -57,6 +57,7 @@
   const CLIP_WINDOW_MS = 12000, CLIP_FRAME_MS = 1000 / 30, CLIP_SCALE = 0.6;
   let clipFrames = [];          // 滚动帧缓冲 [{ t, img: ImageData }]
   let lastClipCap = 0;
+  let gameEndT = 0;             // 终局时刻（performance.now）：终局后冻结画面不进录像
   let replay = null;          // { meta, actions: [[m0,b0,m1,b1], ...], snapshots: [...] }
   const face = [MOVE_DOWN, MOVE_DOWN];
   const human = { dirStack: [], latch: new Set(), move: MOVE_IDLE, pendingBomb: false };
@@ -554,6 +555,7 @@
     };
     clipFrames = [];
     lastClipCap = 0;
+    gameEndT = 0;
     prevPos.set(sim.pos); curPos.set(sim.pos);
     face[0] = MOVE_DOWN; face[1] = MOVE_DOWN;
     lastTickT = performance.now();
@@ -699,7 +701,9 @@
   elSaveWebp.addEventListener('click', () => {
     if (!replay || !replay.actions.length) { recMsg('还没有可录的画面 —— 先开始一局再保存'); return; }
     const now = performance.now();
-    const frames = clipFrames.filter((f) => now - f.t <= CLIP_WINDOW_MS + 250)
+    // 终局后保存：只保留游戏结束前的帧（冻结结果画面不进屋，避免"结尾静止=慢放"）
+    const frames = clipFrames.filter((f) =>
+        now - f.t <= CLIP_WINDOW_MS + 250 && (!gameEndT || f.t <= gameEndT))
       .sort((a, b) => a.t - b.t);
     if (frames.length < 2) { recMsg('画面不足，等几秒再点'); return; }
     recMsg(`WebP 编码中…（${frames.length} 帧，帧间差分压缩）`);
@@ -713,11 +717,16 @@
         ]);
         // 帧 → libwebp WebPAnimEncoder：像素级一致的输入，做帧间差分
         // （关键帧 + 增量帧），静止背景增量帧极小。
+        // 每帧时长用真实采集间隔（保证播放 = 直播 1:1，不受 rAF 抖动影响），
+        // 首帧用 30fps 标称值。
         const f0 = frames[0].img;
-        const rgbaFrames = frames.map((f) => ({
-          data: f.img.data, duration: Math.round(CLIP_FRAME_MS),
-          config: { quality: 85, lossless: 0 },
-        }));
+        let prevT = null;
+        const rgbaFrames = frames.map((f) => {
+          const d = prevT === null ? Math.round(CLIP_FRAME_MS)
+            : Math.max(20, Math.min(500, Math.round(f.t - prevT)));
+          prevT = f.t;
+          return { data: f.img.data, duration: d, config: { quality: 85, lossless: 0 } };
+        });
         const webp = await anim.encodeAnimation(f0.width, f0.height, true, rgbaFrames);
         if (!webp) throw new Error('编码失败（wasm 返回 null）');
         const blob = new Blob([webp], { type: 'image/webp' });
@@ -781,6 +790,7 @@
     if (info.died[0]) playSnd('die');
     if (sim.done && !resultShown) {
       resultShown = true;
+      gameEndT = performance.now();   // 冻结画面从此刻起不进动图窗口
       const w = sim.winner;
       const msg = w === null ? '平局' : (w === 0 ? '🎉 你赢了！' : '🤖 敌人赢了');
       elBanner.innerHTML = `${msg}<span class="tip">按 R 或点「重新开局」再来一局</span>`;
@@ -1056,13 +1066,17 @@
     // 直接存原始像素（getImageData）：中间任何有损编码都会让静止背景
     // 每帧重量化出不同噪声 → 帧间差分失效（体积暴涨回关键帧量级）。
     // 像素级一致 → AnimEncoder 增量帧极小，12 秒 30fps ≈ 几百 KB。
+    // 终局后（running=false / sim.done）不再采集：冻结的结果画面会占满
+    // 保存窗口后半段，看起来像慢放。
     if (now - lastClipCap >= CLIP_FRAME_MS) {
       lastClipCap = now;
-      const c = document.createElement('canvas');
-      c.width = Math.max(1, Math.round(canvas.width * CLIP_SCALE));
-      c.height = Math.max(1, Math.round(canvas.height * CLIP_SCALE));
-      c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
-      clipFrames.push({ t: now, img: c.getContext('2d').getImageData(0, 0, c.width, c.height) });
+      if (running && sim && !sim.done) {
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(canvas.width * CLIP_SCALE));
+        c.height = Math.max(1, Math.round(canvas.height * CLIP_SCALE));
+        c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
+        clipFrames.push({ t: now, img: c.getContext('2d').getImageData(0, 0, c.width, c.height) });
+      }
       while (clipFrames.length > 2 && now - clipFrames[0].t > CLIP_WINDOW_MS) clipFrames.shift();
     }
     requestAnimationFrame(loop);
