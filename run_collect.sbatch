@@ -7,11 +7,11 @@
 #SBATCH -o collect_%j.log
 #SBATCH -J qqt-collect
 # 离线蒸馏全量收集（torch 环境）：纯空场 50% + copy 变换 50%，满级无宝箱，
-# 双视角 obs7/logits/masks。teacher = duel_nobc_8b_live（最强 ckpt）。
+# 双视角 obs7/logits/masks。teacher = duel_nobc_11b_live（最强：115亿步）。
 source ~/das_torch/env.sh
 cd ~/qqt-gpu-sim
 python deploy/collect_distill.py \
-  --teacher ckpt/duel_nobc_8b_live.pt \
+  --teacher ckpt/duel_nobc_11b_live.pt \
   --out distill_data \
   --ticks 600 \
   --num-envs 2048 \

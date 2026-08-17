@@ -380,6 +380,9 @@ def main():
                     help="初始权重 pickle（蒸馏出的 student / 续跑）")
     ap.add_argument("--save", default=None,
                     help="训练结束时保存 params 的路径")
+    ap.add_argument("--save-every", type=int, default=0,
+                    help="每 N 迭代存一次中间 ckpt（0=不存）。文件名 = "
+                         "--save 去掉扩展名 + _it{N}，供中途评估/续跑")
     args = ap.parse_args()
     if args.hidden is None:
         args.hidden = 768 if args.arch == "mlp4" else 256
@@ -433,6 +436,9 @@ def main():
         jax.block_until_ready(params)
         dt = time.time() - t1
         sps = 2 * n * steps / dt
+        if args.save and args.save_every and it and it % args.save_every == 0:
+            mid = f"{os.path.splitext(args.save)[0]}_it{it}.pt"
+            save_params(params, mid)
         print(f"[iter {it}] {dt:.2f}s  sps={sps:,.0f}", flush=True)
     tot = 2 * n * steps * args.iters / (time.time() - t0)
     print(f"FINAL end-to-end sps = {tot:,.0f} "

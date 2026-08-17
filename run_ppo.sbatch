@@ -7,7 +7,8 @@
 #SBATCH -o ppo_%j.log
 #SBATCH -J qqt-ppo
 # 正式自对弈 PPO：warm-start 自 ckpt/student.pt（蒸馏产物），2层768 bf16，
-# wall+legal_mask+chain_cap=8。结束保存 ckpt/final.pt。
+# wall+legal_mask+chain_cap=8。每 2500 迭代（~28min）存中间 ckpt 供评估，
+# 结束保存 ckpt/final.pt。
 source ~/jax_env.sh
 cd ~/qqt-gpu-sim
 ~/miniconda3/bin/python -m jax_bomb.jax_train \
@@ -16,5 +17,6 @@ cd ~/qqt-gpu-sim
   --num-envs 4096 --num-steps 256 \
   --minibatch 8192 --epochs 1 \
   --iters 15000 --lr 3e-4 \
+  --save-every 2500 \
   --save ckpt/final.pt \
   2>&1 | tee ppo_train.log
