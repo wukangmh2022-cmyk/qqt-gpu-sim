@@ -14,6 +14,8 @@
 用法：
   .venv/bin/python verify_torch_jax_parity.py [--ticks 200]
 """
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -29,19 +31,19 @@ if PROJ not in sys.path:
 _side = None
 if "--side" in sys.argv:
     _side = sys.argv[sys.argv.index("--side") + 1]
-if _side in (None, "both", "torch"):
+if _side in (None, "both", "torch") and "--compare" not in sys.argv:
     import torch
     from sim.config import SimConfig
     from sim.torch_sim import BatchedSim
 
 # jax 只在 --side jax/both 时才 import（本地 .venv 无 jax）
-if _side in (None, "both", "jax"):
+if _side in (None, "both", "jax") and "--compare" not in sys.argv:
     sys.path.insert(0, os.path.join(PROJ, "jax_bomb"))
     import jax
     import jax.numpy as jnp
     from jax_bomb.jax_env import (BLAST, FUSE, H, W, MAX_STEPS, MAX_BOMBS,
-                                  MAX_HP, INVULN, BombState, make_obs,
-                                  step as jax_step)
+                                  MAX_HP, INVULN, BombState, legal_mask as
+                                  jax_legal, make_obs, step as jax_step)
 else:
     BLAST = 7
     FUSE = 30
@@ -51,17 +53,26 @@ else:
     MAX_HP = 5
     INVULN = 30
 
-# 与 collect_distill.py 相同的对齐配置
-CFG = SimConfig(height=H, width=W, n_players=2, map_mode="open",
+# 与 collect_distill.py 相同的对齐配置（纯空场 50% + 变换 50%，全图满级无宝箱）
+CFG = SimConfig(height=H, width=W, n_players=2, map_mode="corridor",
+                pure_open_fraction=0.5, open_fraction=0.25, ring_fraction=0.0,
+                open_obstacle_max=5, random_wall_rows=True, wall_density=0.45,
+                open_crate_cross=False, growth_crate_prob=0.0,
+                growth_bombs_start=10, growth_blast_start=BLAST,
+                growth_speed_start=1.0,
+                open_growth_bombs=10, open_growth_blast=BLAST,
+                open_growth_speed=1.0,
                 speed=7.56, blast=BLAST, max_steps=MAX_STEPS,
-                invuln_ticks=INVULN, max_hp=MAX_HP, max_bombs=MAX_BOMBS)
+                invuln_ticks=INVULN, max_hp=MAX_HP, max_bombs=MAX_BOMBS) \
+    if _side in (None, "both", "torch") and "--compare" not in sys.argv \
+    else None
 
 
-def build_torch_state(sim: BatchedSim, pos, fuse, owner, bomb_blast,
+def build_torch_state(sim: BatchedSim, pos, fuse, owner, bomb_blast, wall,
                       alive, hp, invuln, t):
     """把固定状态灌进 torch sim（参考 parity_ref.py 的做法）。"""
     n = 1
-    sim.wall[:] = False
+    sim.wall[:] = torch.tensor(wall, dtype=torch.bool).unsqueeze(0)
     sim.brick[:] = False
     sim.crate[:] = False
     sim.pos[:] = torch.tensor(pos, dtype=torch.float32).unsqueeze(0)
@@ -72,18 +83,19 @@ def build_torch_state(sim: BatchedSim, pos, fuse, owner, bomb_blast,
     sim.hp[:] = torch.tensor(hp, dtype=torch.uint8).unsqueeze(0)
     sim.invuln[:] = torch.tensor(invuln, dtype=torch.long).unsqueeze(0)
     sim.t[:] = torch.tensor([t], dtype=torch.long)
-    # 成长属性：满级固定（open 纯空场无成长）
+    # 成长属性：满级固定（对齐 jax 固定满级）
     sim.bombs_cap[:] = MAX_BOMBS
     sim.blast_cap[:] = BLAST
     sim.spd_g[:] = 1.0
 
 
-def build_jax_state(pos, fuse, owner, bomb_blast, alive, hp, invuln, t):
+def build_jax_state(pos, fuse, owner, bomb_blast, wall, alive, hp, invuln, t):
     return BombState(
         pos=jnp.array(pos, jnp.float32),
         fuse=jnp.array(fuse, jnp.int32),
         owner=jnp.array(owner, jnp.int32),
         bomb_blast=jnp.array(bomb_blast, jnp.int32),
+        wall=jnp.array(wall, jnp.bool_),
         alive=jnp.array(alive, jnp.bool_),
         hp=jnp.array(hp, jnp.int32),
         invuln=jnp.array(invuln, jnp.int32),
@@ -119,7 +131,7 @@ def torch_obs7(sim: BatchedSim, pid: int) -> np.ndarray:
     fuse_norm = fuse / float(FUSE)
     obs[1] = np.where(owner == me, fuse_norm, 0.0).astype(np.float32)
     obs[3] = np.where(owner == opp, fuse_norm, 0.0).astype(np.float32)
-    obs[4] = 0.0
+    obs[4] = (sim.wall[0] | sim.brick[0]).float().cpu().numpy()
     bombed = fuse > 0
     b = bomb_blast
     bl = np.where(bombed, np.where(b > 0, b, float(BLAST)), 0.0) / float(BLAST)
@@ -129,7 +141,7 @@ def torch_obs7(sim: BatchedSim, pid: int) -> np.ndarray:
 
 
 def make_initial_state():
-    """构造一个内容丰富（含泡/引信/不同威力/受伤/无敌）的初始状态。"""
+    """构造一个内容丰富（含泡/引信/不同威力/受伤/无敌/墙）的初始状态。"""
     fuse = np.zeros((H, W), np.int32)
     owner = np.full((H, W), -1, np.int32)
     bomb_blast = np.zeros((H, W), np.int32)
@@ -142,7 +154,51 @@ def make_initial_state():
     alive = np.array([True, True])
     hp = np.array([5, 3], np.int32)          # 玩家1 已受伤
     invuln = np.array([0, 10], np.int32)     # 玩家1 无敌期
-    return fuse, owner, bomb_blast, pos, alive, hp, invuln
+    # 一堵墙（(4,8) 在玩家0 右侧两格）：验证墙 blocked + 爆炸挡火 + mask
+    wall = np.zeros((H, W), np.bool_)
+    wall[4, 8] = True
+    wall[3, 4] = True
+    wall[6, 6] = True
+    return fuse, owner, bomb_blast, pos, wall, alive, hp, invuln
+
+
+def compare_traces(a_path: str, b_path: str) -> None:
+    """逐 tick 比较 --side torch 与 --side jax 导出的两条 JSONL 轨迹。
+
+    两侧是独立采样序列（相同 seed 下动作序列相同，但终局 tick 可能因数值
+    差异错开），因此按**公共前缀**对齐比较；长度不同只提示，不算失败。
+    """
+    import json as _json
+    la = [_json.loads(l) for l in open(a_path)]
+    lb = [_json.loads(l) for l in open(b_path)]
+    n = min(len(la), len(lb))
+    fails = 0
+    for tick in range(n):
+        ra, rb = la[tick], lb[tick]
+        for k in ("pos", "fuse", "owner", "bomb_blast", "alive", "hp",
+                  "invuln", "t"):
+            va, vb = np.array(ra[k]), np.array(rb[k])
+            if not (np.array_equal(va, vb) if k != "pos"
+                    else np.allclose(va, vb, atol=1e-5)):
+                fails += 1
+                print(f"[FAIL] tick={tick} {k}:\n  torch={va}\n  jax  ={vb}")
+        if ra["done"] != rb["done"]:
+            fails += 1
+            print(f"[FAIL] tick={tick} done: torch={ra['done']} jax={rb['done']}")
+        for pid in (0, 1):
+            oa = np.array(ra[f"obs7_{pid}"])
+            ob = np.array(rb[f"obs7_{pid}"])
+            if not np.allclose(oa, ob, atol=1e-4):
+                fails += 1
+                md = np.abs(oa - ob).max()
+                idx = np.unravel_index(np.abs(oa - ob).argmax(), oa.shape)
+                print(f"[FAIL] tick={tick} pid={pid} obs7 maxdiff={md:.6f} "
+                      f"@ch{idx[0]}({idx[1]},{idx[2]})")
+    if fails == 0:
+        print(f"轨迹一致 ✔（公共前缀 {n} tick；len torch={len(la)} jax={len(lb)}）")
+    else:
+        print(f"{fails} 处不一致 ✘（公共前缀 {n} tick；len torch={len(la)} "
+              f"jax={len(lb)}）")
 
 
 def main():
@@ -152,18 +208,23 @@ def main():
     ap.add_argument("--side", choices=["torch", "jax", "both"], default="both",
                     help="torch/jax 单独跑并导出轨迹；both = 本机同时跑（需两环境）")
     ap.add_argument("--out", default="/tmp/parity_trace.jsonl")
+    ap.add_argument("--compare", nargs=2, metavar=("A", "B"),
+                    help="比较两条已导出轨迹（torch 侧 vs jax 侧）")
     args = ap.parse_args()
 
+    if args.compare:
+        return compare_traces(*args.compare)
     if args.side == "both":
         return run_both(args)
 
-    fuse, owner, bomb_blast, pos, alive, hp, invuln = make_initial_state()
+    fuse, owner, bomb_blast, pos, wall, alive, hp, invuln = make_initial_state()
     rng = np.random.default_rng(args.seed)
     acts = [rng.integers([0, 0], [5, 2], size=(2, 2)) for _ in range(args.ticks)]
 
     if args.side == "torch":
         sim = BatchedSim(CFG, 1, device="cpu", seed=args.seed)
-        build_torch_state(sim, pos, fuse, owner, bomb_blast, alive, hp, invuln, 0)
+        build_torch_state(sim, pos, fuse, owner, bomb_blast, wall, alive, hp,
+                          invuln, 0)
         rows = []
         for tick in range(args.ticks):
             a_t = torch.tensor(acts[tick], dtype=torch.long).unsqueeze(0)
@@ -181,7 +242,8 @@ def main():
             if done_any:
                 break
     else:  # jax
-        js = build_jax_state(pos, fuse, owner, bomb_blast, alive, hp, invuln, 0)
+        js = build_jax_state(pos, fuse, owner, bomb_blast, wall, alive, hp,
+                             invuln, 0)
         rows = []
         for tick in range(args.ticks):
             js, done_j = jax_step(js, jnp.array(acts[tick], jnp.int32))
@@ -210,9 +272,11 @@ def main():
 def run_both(args):
     """本机同时跑两侧（需 torch+jax 同环境），逐 tick 比较。"""
     sim = BatchedSim(CFG, 1, device="cpu", seed=args.seed)
-    fuse, owner, bomb_blast, pos, alive, hp, invuln = make_initial_state()
-    build_torch_state(sim, pos, fuse, owner, bomb_blast, alive, hp, invuln, 0)
-    js = build_jax_state(pos, fuse, owner, bomb_blast, alive, hp, invuln, 0)
+    fuse, owner, bomb_blast, pos, wall, alive, hp, invuln = make_initial_state()
+    build_torch_state(sim, pos, fuse, owner, bomb_blast, wall, alive, hp,
+                      invuln, 0)
+    js = build_jax_state(pos, fuse, owner, bomb_blast, wall, alive, hp,
+                         invuln, 0)
     rng = np.random.default_rng(args.seed)
     fails = 0
     for tick in range(args.ticks):
@@ -226,6 +290,7 @@ def run_both(args):
             ("fuse", js.fuse, sim.fuse[0], 0),
             ("owner", js.owner, sim.owner[0], 0),
             ("bomb_blast", js.bomb_blast, sim.bomb_blast[0], 0),
+            ("wall", js.wall, sim.wall[0], 0),
             ("alive", js.alive, sim.alive[0], 0),
             ("hp", js.hp, sim.hp[0], 0),
             ("invuln", js.invuln, sim.invuln[0], 0),
@@ -239,6 +304,19 @@ def run_both(args):
             if not ok:
                 fails += 1
                 print(f"[FAIL] tick={tick} 状态 {name}:\n  jax  ={jn}\n  torch={tn}")
+        # legal_mask 对拍：move (P,5) / bomb (P,2)，方向语义与 IDLE/bomb=0 恒合法
+        mm_j, bm_j = jax_legal(js)
+        mm_t, bm_t = sim.legal_mask()
+        for name, jv, tv in (("move_mask", mm_j, mm_t[0]),
+                             ("bomb_mask", bm_j, bm_t[0])):
+            jn = np.asarray(jax.device_get(jv))
+            tn = tv.cpu().numpy()
+            if not np.array_equal(jn, tn):
+                fails += 1
+                diff = np.argwhere(jn != tn)
+                print(f"[FAIL] tick={tick} {name} 差异 {len(diff)} 处，"
+                      f"首个 {diff[0].tolist()}：jax={jn[diff[0][0]]} "
+                      f"torch={tn[diff[0][0]]}")
         if done_t != bool(done_j):
             fails += 1
             print(f"[FAIL] tick={tick} done: torch={done_t} jax={done_j}")
@@ -256,7 +334,7 @@ def run_both(args):
             print(f"[info] tick={tick} 终局，停止", flush=True)
             break
     if fails == 0:
-        print(f"全部一致 ✔ ({args.ticks} tick，含连锁/伤害/死亡/obs7 双视角)")
+        print(f"全部一致 ✔ ({args.ticks} tick，含墙/连锁/伤害/死亡/mask/obs7 双视角)")
     else:
         print(f"{fails} 处不一致 ✘")
 

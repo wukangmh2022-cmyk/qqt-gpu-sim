@@ -27,7 +27,8 @@ os.environ.setdefault("AUTOFUSE_FLAGS", "--enable_autofuse=true")
 
 from .blast import danger_map, rays, resolve_explosions
 from .config import DIRS, SimConfig
-from .mapgen import make_bricks, make_ring_bricks, make_ring_walls, make_walls
+from .mapgen import (make_bricks, make_open_obstacles, make_ring_bricks,
+                     make_ring_walls, make_walls)
 from .move import center_cell, move_players
 
 # triton 手写融合 kernel（DCU 100k 目标）：move_players 90× 加速，逐位一致。
@@ -163,11 +164,13 @@ class BatchedSim:
 
     # ---------------- 场地生成 / 重置 ----------------
 
-    def _make_walls(self, count: int) -> torch.Tensor:
-        return make_walls(self.cfg, count, self.gen, self.device)
+    def _make_walls(self, count: int, top_rows=None) -> torch.Tensor:
+        return make_walls(self.cfg, count, self.gen, self.device,
+                          top_rows=top_rows)
 
-    def _make_bricks(self, count: int) -> torch.Tensor:
-        return make_bricks(self.cfg, count, self.gen, self.device)
+    def _make_bricks(self, count: int, top_rows=None) -> torch.Tensor:
+        return make_bricks(self.cfg, count, self.gen, self.device,
+                           top_rows=top_rows)
 
     def reset_all(self) -> None:
         self.reset_(torch.ones((self.num_envs,), dtype=torch.bool, device=self.device))
@@ -195,9 +198,10 @@ class BatchedSim:
         if self.cfg.map_mode != "corridor":
             # 纯 open 训练（或空场测试）：固定能力无成长。
             # 对手（pid 1）初始属性按 _opp_boost（训练难度）。
-            # open 场景**强制纯空场**（用户定 2026-08-16：删掉 wall_density
-            # 随机立柱，训练/试玩统一空场 + MLP 对战）。
-            self.wall[idx] = False
+            # open 场景可加**随机单障碍**（open_obstacle_max>0，永久墙立柱，
+            # 纯练"绕障"）；=0 还原纯空场（旧行为）。
+            self.wall[idx] = make_open_obstacles(self.cfg, count, self.gen,
+                                                 self.device)
             self.brick[idx] = False
             b0 = torch.full((count,), self.cfg.max_bombs, dtype=torch.float,
                             device=self.device)
@@ -243,40 +247,49 @@ class BatchedSim:
             #   corridor 关：顶部永久墙 + 左右 brick + 宝箱成长，出生点贴脸。
             # 观测无地图类型标记，网络靠状态差异自然学会适配。
             r = torch.rand(count, generator=self.gen)
-            is_open = r < self.cfg.open_fraction
-            is_ring = ~is_open & (r < self.cfg.open_fraction + self.cfg.ring_fraction)
+            pf = self.cfg.pure_open_fraction
+            is_pure = r < pf
+            is_open = ~is_pure & (r < pf + self.cfg.open_fraction)
+            is_ring = ~(is_pure | is_open) & (
+                r < pf + self.cfg.open_fraction + self.cfg.ring_fraction)
+            pure_idx = idx[is_pure]
             open_idx = idx[is_open]
             ring_idx = idx[is_ring]
-            corr_idx = idx[~(is_open | is_ring)]
+            corr_idx = idx[~(is_pure | is_open | is_ring)]
 
-            if open_idx.numel():
-                # open 关**强制纯空场**（用户定 2026-08-16：删随机立柱，
-                # 空场 + MLP 对战，不随 wall_density 变）。
-                self.wall[open_idx] = False
-                self.brick[open_idx] = False
-                no = int(open_idx.numel())
+            open_type_idx = idx[is_pure | is_open]
+            if open_type_idx.numel():
+                # open 关（带障碍，open_obstacle_max 随机立柱）与**纯空场关**
+                # （pure_open_fraction，任何障碍都强制归零 —— 原版）共用同一套
+                # 属性/出生点；区别只在墙：先统一铺障碍，再把纯空场子集清零。
+                no = int(open_type_idx.numel())
+                wall_all = make_open_obstacles(
+                    self.cfg, no, self.gen, self.device)
+                wall_all[is_pure[is_pure | is_open]] = False   # 纯空场子集清空
+                self.wall[open_type_idx] = wall_all
+                self.brick[open_type_idx] = False
                 b0 = torch.full((no,), float(self.cfg.open_growth_bombs),
                                 dtype=torch.float, device=self.device)
                 z0 = torch.full((no,), float(self.cfg.open_growth_blast),
                                 dtype=torch.float, device=self.device)
                 s0 = torch.full((no,), float(self.cfg.open_growth_speed),
                                 dtype=torch.float, device=self.device)
-                self.bombs_cap[open_idx, 0] = self.cfg.open_growth_bombs
-                self.blast_cap[open_idx, 0] = self.cfg.open_growth_blast
-                self.spd_g[open_idx, 0] = self.cfg.open_growth_speed
-                ob, oz, os = self._opp_start(open_idx, b0, z0, s0)
-                self.bombs_cap[open_idx, 1] = ob
-                self.blast_cap[open_idx, 1] = oz
-                self.spd_g[open_idx, 1] = os
-                self.crate_prob[open_idx] = 1.0        # open 宝箱 100% 有东西（踩到必升）
-                self._is_open[open_idx] = True         # 标记：掉血惩罚 + 宝箱回收生效
-                self._map_kind[open_idx] = 1           # open
-                self._lo_bombs[open_idx, 0] = self.cfg.open_growth_bombs
-                self._lo_blast[open_idx, 0] = self.cfg.open_growth_blast
-                self._lo_spd[open_idx, 0] = self.cfg.open_growth_speed
-                self._lo_bombs[open_idx, 1] = ob
-                self._lo_blast[open_idx, 1] = oz
-                self._lo_spd[open_idx, 1] = os
+                self.bombs_cap[open_type_idx, 0] = self.cfg.open_growth_bombs
+                self.blast_cap[open_type_idx, 0] = self.cfg.open_growth_blast
+                self.spd_g[open_type_idx, 0] = self.cfg.open_growth_speed
+                ob, oz, os = self._opp_start(open_type_idx, b0, z0, s0)
+                self.bombs_cap[open_type_idx, 1] = ob
+                self.blast_cap[open_type_idx, 1] = oz
+                self.spd_g[open_type_idx, 1] = os
+                self.crate_prob[open_type_idx] = 1.0   # open 宝箱 100% 有东西（踩到必升）
+                self._is_open[open_type_idx] = True    # 标记：掉血惩罚 + 宝箱回收生效
+                self._map_kind[open_type_idx] = 1      # open
+                self._lo_bombs[open_type_idx, 0] = self.cfg.open_growth_bombs
+                self._lo_blast[open_type_idx, 0] = self.cfg.open_growth_blast
+                self._lo_spd[open_type_idx, 0] = self.cfg.open_growth_speed
+                self._lo_bombs[open_type_idx, 1] = ob
+                self._lo_blast[open_type_idx, 1] = oz
+                self._lo_spd[open_type_idx, 1] = os
                 # 中心十字开局池在 **crate 清零之后**统一撒（见下方
                 # _place_open_cross_crates 调用 —— 这里撒会被 self.crate[idx]=False 清掉）。
             if ring_idx.numel():
@@ -310,9 +323,15 @@ class BatchedSim:
                 self._lo_blast[ring_idx, 1] = oz
                 self._lo_spd[ring_idx, 1] = os
             if corr_idx.numel():
-                self.wall[corr_idx] = self._make_walls(int(corr_idx.numel()))
-                self.brick[corr_idx] = self._make_bricks(int(corr_idx.numel()))
                 nc = int(corr_idx.numel())
+                # 随机顶/底墙行：top 每局独立掷一次，make_walls/make_bricks 共用
+                # （brick 不铺进墙行）。random_wall_rows=False 时传 None 走固定顶行。
+                tr = None
+                if self.cfg.random_wall_rows:
+                    tr = torch.randint(0, self.cfg.top_wall_rows + 1, (nc,),
+                                       generator=self.gen)
+                self.wall[corr_idx] = self._make_walls(nc, tr)
+                self.brick[corr_idx] = self._make_bricks(nc, tr)
                 b0 = torch.full((nc,), float(self.cfg.growth_bombs_start),
                                 dtype=torch.float, device=self.device)
                 z0 = torch.full((nc,), float(self.cfg.growth_blast_start),
@@ -337,10 +356,10 @@ class BatchedSim:
 
             all_pos = torch.zeros(count, self.cfg.n_players, 2,
                                   dtype=torch.float32, device=self.device)
-            if open_idx.numel():
+            if open_type_idx.numel():
                 open_spawn = self._open_spawns()
-                all_pos[is_open] = open_spawn.unsqueeze(0).expand(
-                    int(open_idx.numel()), -1, -1)
+                all_pos[is_pure | is_open] = open_spawn.unsqueeze(0).expand(
+                    int(open_type_idx.numel()), -1, -1)
             if ring_idx.numel():
                 ring_spawn = self._ring_spawns()
                 all_pos[is_ring] = ring_spawn.unsqueeze(0).expand(
@@ -349,8 +368,8 @@ class BatchedSim:
                 corr_spawn = torch.tensor(
                     self.cfg.spawn_pos(), dtype=torch.float32,
                     device=self.device)
-                all_pos[~ (is_open | is_ring)] = corr_spawn.unsqueeze(0).expand(
-                    int(corr_idx.numel()), -1, -1)
+                all_pos[~(is_pure | is_open | is_ring)] = corr_spawn.unsqueeze(
+                    0).expand(int(corr_idx.numel()), -1, -1)
             self.pos[idx] = all_pos
             # 位置对称化（混合地图）：约一半 env 交换 P0/P1 出生点（消除"模型恒打
             # 物理左侧"偏置）。属性按 pid 绑定，与出生侧无关 —— 位置与属性解耦。
@@ -728,7 +747,7 @@ class BatchedSim:
                                   early_exit=False, blast_max_hint=_mb,
                                   chain_cap=cfg.chain_cap_rounds)
             backends = ["npu"]
-            if self._triton_ok():
+            if self._triton_ok(self.device):
                 backends.append("inductor")
             f = None
             for backend in backends:
@@ -743,9 +762,16 @@ class BatchedSim:
         return f(fuse, wall, blast_map, brick)
 
     @staticmethod
-    def _triton_ok() -> bool:
-        """triton 可导入才尝试 inductor（CUDA/DCU 上 inductor 必需 triton，
-        缺 triton 时 torch.compile 编译期不报错、首次调用才炸）。"""
+    def _triton_ok(device: str = "cuda") -> bool:
+        """triton 可用 + 设备是 cuda（DCU 兼容层也叫 cuda）才试 inductor。
+
+        不能只按 triton 能否 import 判断：Mac 本地 torch 自带 triton，
+        CPU/MPS 设备上 inductor 编译 danger_map 这类复杂图会卡死几分钟
+        （2026-08-16 实测 observe 30s+ 不返回）。只有 cuda/DCU 上 inductor
+        才有 triton 加速价值。
+        """
+        if not str(device).startswith("cuda"):
+            return False
         if getattr(BatchedSim._triton_ok, "_v", None) is None:
             try:
                 import triton  # noqa: F401
@@ -755,12 +781,13 @@ class BatchedSim:
         return BatchedSim._triton_ok._v
 
     @staticmethod
-    def _compile_cascade(fn):
+    def _compile_cascade(fn, device: str = "cuda"):
         """npu → inductor → eager 级联编译（与 _danger_c 同一策略，供
-        resolve/legal 等纯张量段复用）。triton 不可用时跳过 inductor。
+        resolve/legal 等纯张量段复用）。非 cuda 设备（本地 CPU/MPS）跳过
+        inductor（编译会卡死），直接 eager。
         """
         backends = ["npu"]
-        if BatchedSim._triton_ok():
+        if BatchedSim._triton_ok(device):
             backends.append("inductor")
         for backend in backends:
             try:
@@ -800,7 +827,7 @@ class BatchedSim:
                                           cfg.max_chain, brick,
                                           early_exit=False, blast_max_hint=_h,
                                           chain_cap=rcap)
-            f = self._compile_cascade(_r)
+            f = self._compile_cascade(_r, self.device)
             self._res_cached = f
         return f(fuse, owner, wall, blast_map, brick)
 
@@ -812,7 +839,7 @@ class BatchedSim:
             def _l(wall, fuse, owner, pos, alive, brick, bombs_cap):
                 return legal_mask(cfg, wall, fuse, owner, pos, alive, brick,
                                   bombs_cap)
-            f = self._compile_cascade(_l)
+            f = self._compile_cascade(_l, self.device)
             self._legal_cached = f
         return f(wall, fuse, owner, pos, alive, brick, bombs_cap)
 

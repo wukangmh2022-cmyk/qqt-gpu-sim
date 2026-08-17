@@ -13,23 +13,38 @@ from .config import DIRS, SimConfig
 
 
 def make_walls(
-    cfg: SimConfig, count: int, gen: torch.Generator, device: torch.device
+    cfg: SimConfig, count: int, gen: torch.Generator, device: torch.device,
+    top_rows: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """返回 (count, H, W) bool。wall_density=0 时是纯空场。
 
-    corridor 模式：**顶部 top_wall_rows 行全部永久墙**（不可炸），与
+    corridor 模式：**顶/底共 top_wall_rows 行全部永久墙**（不可炸），与
     wall_density 无关（即使 density=0 也有顶墙）。
+    - random_wall_rows=True（默认）：每局顶部 top∈U[0, top_wall_rows] 行、
+      底部 (top_wall_rows-top) 行永久墙 —— 总障碍行数恒 = top_wall_rows，
+      障碍"随机挪一挪"。top_rows 由调用方一次性掷出（与 make_bricks 共用
+      同一份，保证 brick 不铺进墙行），None 时内部自掷。
+    - random_wall_rows=False：固定顶部 top_wall_rows 行（旧行为）。
     非零 density 时按经典炸弹人的"奇数行奇数列立柱"图案随机保留柱子，
     并强制清空出生点及其四邻，避免开局就被闷死。
     """
     h, w = cfg.height, cfg.width
     if cfg.map_mode == "corridor":
-        # 顶部 top_wall_rows 行全部永久墙 —— 出生点在空旷区下方，
-        # 顶墙把场地顶住，火也不会烧到地图外。与 density 无关。
-        # corridor 的障碍在 brick（可炸）里加连续段（见 make_bricks），
-        # 不做散点立柱。
-        wall = torch.zeros((count, h, w), dtype=torch.bool, device=device)
-        wall[:, : cfg.top_wall_rows, :] = True
+        if cfg.random_wall_rows:
+            if top_rows is None:
+                top_rows = torch.randint(0, cfg.top_wall_rows + 1, (count,),
+                                         generator=gen)
+            top = top_rows
+            bot = cfg.top_wall_rows - top
+            ar = torch.arange(h).view(1, -1)
+            rows = ar.expand(count, h)
+            wall = ((rows < top.unsqueeze(1))          # 顶部 top 行
+                    | (rows >= (h - bot).unsqueeze(1))).unsqueeze(2)   # 底部 bot 行
+            # expand 是广播视图（末维 stride=0），后续逐格清空会写穿整行 —— clone 物化
+            wall = wall.expand(count, h, w).clone()
+        else:
+            wall = torch.zeros((count, h, w), dtype=torch.bool, device=device)
+            wall[:, : cfg.top_wall_rows, :] = True
     elif cfg.wall_density <= 0:
         return torch.zeros((count, h, w), dtype=torch.bool, device=device)
     else:
@@ -47,12 +62,46 @@ def make_walls(
     return wall.to(device)
 
 
-def make_bricks(
+def make_open_obstacles(
     cfg: SimConfig, count: int, gen: torch.Generator, device: torch.device
+) -> torch.Tensor:
+    """open 关随机**单障碍**（永久墙，不可炸）：每局 0~open_obstacle_max 个
+    单格障碍随机散布（不放回抽样，避免同格重复），避开出生点及其四邻。
+
+    用**永久墙**而非 brick：不触发宝箱/成长交互（open 关无砖），纯练
+    "绕障"（非法动作掩码直接屏蔽障碍格）。open_obstacle_max=0 = 旧纯空场。
+    """
+    h, w = cfg.height, cfg.width
+    wall = torch.zeros((count, h, w), dtype=torch.bool)
+    nmax = cfg.open_obstacle_max
+    if nmax <= 0 or count == 0:
+        return wall.to(device)
+    cells = h * w
+    n = torch.randint(0, nmax + 1, (count,), generator=gen)          # 每局个数 0..N
+    perm = torch.rand((count, cells), generator=gen).argsort(dim=1)  # 不放回随机格
+    flat = perm[:, :nmax]                                            # (count, N)
+    valid = torch.arange(nmax).unsqueeze(0) < n.unsqueeze(1)         # (count, N)
+    rows = (flat // w).clamp(0, h - 1)
+    cols = (flat % w).clamp(0, w - 1)
+    envs = torch.arange(count).unsqueeze(1).expand(count, nmax)
+    wall[envs[valid], rows[valid], cols[valid]] = True
+    # 清出生点及其四邻（open 出生点固定，见 spawn_pos）
+    for row, col in cfg.spawn_cells():
+        wall[:, row, col] = False
+        for drow, dcol in DIRS:
+            nr, nc = row + int(drow), col + int(dcol)
+            if 0 <= nr < h and 0 <= nc < w:
+                wall[:, nr, nc] = False
+    return wall.to(device)
+
+
+def make_bricks(
+    cfg: SimConfig, count: int, gen: torch.Generator, device: torch.device,
+    top_rows: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """返回 (count, H, W) bool 的**可炸墙**（brick）。与 make_walls 分开。
 
-    - open 模式：无 brick（纯空场）。
+    - open 模式：无 brick（纯空场；单障碍走 make_open_obstacles 的**永久墙**）。
     - corridor 模式：中间 corridor_width 列可通行，左右两侧**整列** brick。
       开局出生点及四邻清空，保证不被墙闷死。
       wall_density>0 时在**可通行区边缘**加**连续性强的横/纵 brick 段**
@@ -60,6 +109,8 @@ def make_bricks(
       - 垂直段：贴左右 brick 内侧的边缘列（c0/c0+1/c1-2/c1-1），连续 2-4 格高；
       - 水平段：贴顶部永久墙下方 2 行，连续 2-4 格宽。
       数量由 wall_density 控制（克制递增 0→0.25→0.45），每局随机位置。
+      random_wall_rows=True 时顶行数每局随机（top_rows 与 make_walls 同源）：
+      brick 不铺进顶墙行，垂直段从各自顶墙行下开始、水平段贴各自顶墙下方。
       段生成后统一清出生点四邻，避免开局被连续段闷住。
     可炸墙被火焰覆盖即摧毁（见 blast.py / torch_sim），挡火但会被烧掉。
     """
@@ -67,15 +118,25 @@ def make_bricks(
     if cfg.map_mode != "corridor":
         return torch.zeros((count, h, w), dtype=torch.bool, device=device)
 
+    if cfg.random_wall_rows and top_rows is None:
+        top_rows = torch.randint(0, cfg.top_wall_rows + 1, (count,), generator=gen)
+    top = top_rows if cfg.random_wall_rows else None
+
     c0 = (w - cfg.corridor_width) // 2          # 可通行区左边界列
     c1 = c0 + cfg.corridor_width                # 可通行区右边界列（开区间）
     rows = torch.arange(h).view(-1, 1)
     cols = torch.arange(w).view(1, -1)
     side = (cols < c0) | (cols >= c1)           # 左右两侧 brick
-    # 顶部 top_wall_rows 行已经是永久墙（make_walls），不再铺 brick
-    in_top = rows < cfg.top_wall_rows
-    brick = side & ~in_top
-    out = brick.expand(count, h, w).clone()
+    if top is None:
+        # 固定顶墙行（旧行为）：顶部 top_wall_rows 行已经是永久墙，不再铺 brick
+        in_top = rows < cfg.top_wall_rows
+        brick = side & ~in_top
+        out = brick.expand(count, h, w).clone()
+    else:
+        # 随机顶行：每 env 的顶墙行（行 < top_i）不铺 brick
+        in_top = rows.view(1, -1).expand(count, h) < top.unsqueeze(1)   # (count, h)
+        brick = side.unsqueeze(0) & ~in_top.unsqueeze(2)
+        out = brick.expand(count, h, w).clone()
 
     if cfg.wall_density > 0:
         # ---- 垂直连续段：可通行区边缘列（贴左右 brick 内侧），2-4 格高 ----
@@ -85,8 +146,15 @@ def make_bricks(
         edge_cols = edge_cols[edge_cols < c1]
         ncols = edge_cols.numel()
         if ncols > 0:
-            starts = (torch.rand((count, ncols), generator=gen)
-                      * (h - cfg.top_wall_rows - 4) + cfg.top_wall_rows).long()
+            if top is None:
+                starts = (torch.rand((count, ncols), generator=gen)
+                          * (h - cfg.top_wall_rows - 4) + cfg.top_wall_rows).long()
+            else:
+                # 每 env 从自己顶墙行下开始、避开底部墙行
+                bot = cfg.top_wall_rows - top
+                span = h - bot.unsqueeze(1) - 4 - top.unsqueeze(1)
+                starts = (torch.rand((count, ncols), generator=gen)
+                          * span.clamp(min=1) + top.unsqueeze(1)).long()
             lens = 2 + (torch.rand((count, ncols), generator=gen) * 3).long()
             act = torch.rand((count, ncols), generator=gen) < cfg.wall_density
             rows_v = (torch.arange(h).view(1, 1, -1).expand(count, ncols, h))
@@ -96,8 +164,7 @@ def make_bricks(
             for ci in range(ncols):
                 out[:, :, int(edge_cols[ci])] |= seg[:, ci]
         # ---- 水平连续段：顶墙下方 2 行，2-4 格宽 ----
-        band_rows = min(2, h - cfg.top_wall_rows)
-        if band_rows > 0 and (c1 - c0) > 4:
+        if (c1 - c0) > 4:
             hstarts = (torch.rand((count,), generator=gen)
                        * (c1 - c0 - 4) + c0).long()
             hlens = 2 + (torch.rand((count,), generator=gen) * 3).long()
@@ -106,8 +173,15 @@ def make_bricks(
             hseg = (hact.unsqueeze(-1)
                     & (cols_h >= hstarts.unsqueeze(-1))
                     & (cols_h < (hstarts + hlens).unsqueeze(-1)))
-            for r in range(cfg.top_wall_rows, cfg.top_wall_rows + band_rows):
-                out[:, r, c0:c1] |= hseg
+            if top is None:
+                band_rows = min(2, h - cfg.top_wall_rows)
+                for r in range(cfg.top_wall_rows, cfg.top_wall_rows + band_rows):
+                    out[:, r, c0:c1] |= hseg
+            else:
+                # 每 env 贴自己顶墙下方 2 行（h-top_i ≥ 9，恒有 2 行可放）
+                hr = top.unsqueeze(1) + torch.arange(2).unsqueeze(0)   # (count, 2)
+                envs = torch.arange(count).unsqueeze(1).expand(count, 2)
+                out[envs, hr, c0:c1] |= hseg.unsqueeze(1).expand(count, 2, c1 - c0)
 
     # 清出生点四邻：左右 brick 在出生点行可能正好贴着，且新增边缘连续段
     # 可能挡住出生点 —— 统一清空避免开局被闷死（清掉的 1-2 格不影响主结构）。

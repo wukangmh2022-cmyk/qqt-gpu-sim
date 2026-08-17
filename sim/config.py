@@ -237,6 +237,12 @@ class SimConfig:
     # 宝箱爆率 = ring_crate_prob（默认 100%，环带砖有限，练"炸墙→吃→变强"）。
     # 三图混合时按 open_fraction / ring_fraction / 余量=corridor 随机分配。
     ring_fraction: float = 0.0        # 每局环岛关占比（0 = 不启用）
+    # 纯空场关占比（**先于** open_fraction 切分）：先抽 pure_open_fraction 的
+    # env 做**纯空场**（无墙无砖无宝箱，open_obstacle_max 也强制归零 —— 原版），
+    # 剩余里再按 open_fraction/ring_fraction 切 open(带障碍)/ring/corridor(变换)。
+    # 蒸馏数据收集用 0.5：原版纯空场 50% + 变换 50%（变换内部再切两个地图）。
+    # =0 时行为与旧版逐位一致（不切分）。
+    pure_open_fraction: float = 0.0
     ring_center_h: int = 7            # 中间山体高度（13×13 → 山体 7×7，环带 3 宽）
     ring_center_w: int = 7            # 中间山体宽度
     ring_brick_density: float = 0.4   # 环带可炸墙密度（0.4 = 四成格子有 brick）
@@ -469,6 +475,11 @@ class SimConfig:
                     raise ValueError("ring_brick_density 必须在 (0, 1]")
             if not 0.0 <= self.open_fraction + self.ring_fraction <= 1.0:
                 raise ValueError("open_fraction + ring_fraction 必须 ≤ 1（余量为 corridor）")
+            if not 0.0 <= self.pure_open_fraction <= 1.0:
+                raise ValueError("pure_open_fraction 必须在 [0,1]")
+            if not self.pure_open_fraction + self.open_fraction + self.ring_fraction <= 1.0:
+                raise ValueError(
+                    "pure_open_fraction + open_fraction + ring_fraction 必须 ≤ 1")
         if not 0.0 < self.radius < 0.5:
             # 半宽 ≥ 0.5 意味着碰撞盒能同时压到三行，2x2 的邻格检查就不够了
             raise ValueError("radius 必须在 (0, 0.5) 开区间内")

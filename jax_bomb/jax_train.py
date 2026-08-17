@@ -2,14 +2,19 @@
 
 Structure mirrors Average Joe (rollout via lax.scan, 2N batch, scan-based
 minibatch PPO) but single-device and dependency-light (optax only).
+--distill-data 提供离线蒸馏阶段：teacher（torch collect_distill 收集的
+obs7/logits/masks）KL 蒸馏，可接 --distill-then-ppo 继续自对弈 PPO。
 """
 
 import argparse
+import glob
+import os
 import time
 
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+import numpy as np
 import optax
 
 from .jax_env import (H, W, MAX_STEPS, N_BOMB, N_MOVES, N_OBS_CH,
@@ -168,6 +173,114 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
     return params, opt_state
 
 
+# ---------------- 离线蒸馏（--distill-data） ----------------
+
+NEG = jnp.finfo(jnp.float32).min   # 非法动作 logits 占位（与 torch masked_dist 同语义）
+
+
+def load_distill_data(pattern: str, max_frames: int):
+    """加载 collect_distill 的 npz（每文件 obs7 (T,2,7,13,13) uint8×255 /
+    logits (T,2,7) fp32 / move_mask (T,2,5) / bomb_mask (T,2,2)）。
+
+    展平成帧（env×view → F）：每局面 2 视角各 1 帧、各自 logits/masks。
+    超过 max_frames 时按文件 stride 均匀抽稀（保住混合地图构成比例）。
+    返回 (obs_u8 (F,7,H,W) uint8 host, teacher_probs (F,7) fp32 host,
+          move_mask (F,5), bomb_mask (F,2))。
+    """
+    paths = sorted(glob.glob(pattern))
+    if not paths:
+        raise SystemExit(f"--distill-data {pattern} 无文件")
+    total = 0
+    parts = []
+    for p in paths:
+        d = np.load(p)
+        o = d["obs7"]                      # (T,2,7,H,W)
+        lg = d["logits"]                   # (T,2,7)
+        mm = d["move_mask"]                # (T,2,5)
+        bm = d["bomb_mask"]                # (T,2,2)
+        F = o.shape[0] * o.shape[1]
+        total += F
+        parts.append((o, lg, mm, bm))
+    print(f"distill: {len(paths)} 文件共 {total:,} 帧，上限 {max_frames:,}", flush=True)
+    if total > max_frames:
+        keep = max_frames / total
+        for i, (o, lg, mm, bm) in enumerate(parts):
+            stride = max(1, int(1.0 / keep))
+            s = o.reshape(-1, *o.shape[2:])[::stride]
+            parts[i] = (s, lg.reshape(-1, lg.shape[-1])[::stride],
+                        mm.reshape(-1, mm.shape[-1])[::stride],
+                        bm.reshape(-1, bm.shape[-1])[::stride])
+    obs = np.concatenate([p[0] for p in parts]).astype(np.uint8)
+    lg = np.concatenate([p[1] for p in parts]).astype(np.float32)
+    mm = np.concatenate([p[2] for p in parts]).astype(np.bool_)
+    bm = np.concatenate([p[3] for p in parts]).astype(np.bool_)
+    # teacher 概率目标：logits 已 mask（非法 = -inf/finfo.min）→ softmax 只在合法上归一
+    lg = np.where(lg <= -1e30, -np.inf, lg).astype(np.float32)
+    ex = np.exp(lg - lg.max(-1, keepdims=True))
+    p_t = (ex / ex.sum(-1, keepdims=True)).astype(np.float32)
+    F = obs.shape[0]
+    print(f"distill: 实际 {F:,} 帧 obs={obs.shape} probs={p_t.shape} "
+          f"(≈{obs.nbytes/1e6:.0f}MB host)", flush=True)
+    return obs, p_t, mm, bm
+
+
+def build_distill_update(params, opt, opt_state, arch, batch, ent_coef):
+    """离线蒸馏 one update（jitted）：从数据采样一批帧 → mask 后 logits →
+    KL(student || teacher)（teacher 概率做目标）+ 熵奖励。返回 jitted fn。"""
+
+    @jax.jit
+    def upd(params, opt_state, obs, p_t, mm, bm, key):
+        def loss_fn(p):
+            mv, bmv, _v = net_forward(p, arch, obs)
+            mv = jnp.where(mm, mv, jnp.full_like(mv, NEG))
+            bmv = jnp.where(bm, bmv, jnp.full_like(bmv, NEG))
+            lsm = jax.nn.log_softmax(mv)
+            lsb = jax.nn.log_softmax(bmv)
+            # KL = sum p_t(log p_t - log p_s)；H(teacher) 对参数恒量，最小化 CE 即可。
+            # p_t 只在合法动作上归一，student log_softmax 也只在合法上 —— 一致。
+            ce_m = -(p_t[:, :5] * lsm).sum(-1).mean()
+            ce_b = -(p_t[:, 5:] * lsb).sum(-1).mean()
+            ent = (-(jnp.exp(lsm) * lsm).sum(-1).mean()
+                   - (jnp.exp(lsb) * lsb).sum(-1).mean())
+            return ce_m + ce_b - ent_coef * ent
+
+        grads = jax.grad(loss_fn)(params)
+        updates, opt_state = opt.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        return params, opt_state
+
+    return upd
+
+
+def run_distill(params, opt, opt_state, args, key):
+    """离线蒸馏阶段：--distill-iters 轮，每轮采样 --distill-batch 帧做一次
+    KL 更新（host→device 分批搬，数据可远大于显存）。返回 (params, opt_state)。"""
+    obs_u8, p_t, mm, bm = load_distill_data(args.distill_data,
+                                            args.distill_max_frames)
+    F = obs_u8.shape[0]
+    upd = build_distill_update(params, opt, opt_state, args.arch,
+                               args.distill_batch, args.ent_coef)
+    rng = np.random.default_rng(0)
+    t0 = time.time()
+    for it in range(args.distill_iters):
+        idx = rng.integers(0, F, args.distill_batch)
+        o = jnp.asarray(obs_u8[idx]).astype(jnp.float32) / 255.0
+        pt = jnp.asarray(p_t[idx])
+        m = jnp.asarray(mm[idx])
+        b = jnp.asarray(bm[idx])
+        key, k = jrandom.split(key)
+        t1 = time.time()
+        params, opt_state = upd(params, opt_state, o, pt, m, b, k)
+        jax.block_until_ready(params)
+        dt = time.time() - t1
+        if it % 10 == 0 or it == args.distill_iters - 1:
+            print(f"[distill {it}] {dt*1000:.0f}ms/批 "
+                  f"({args.distill_batch*1000/max(dt,1e-6):,.0f} 帧/s)", flush=True)
+    print(f"distill 完成：{args.distill_iters} 轮 × {args.distill_batch:,} 帧，"
+          f"{(time.time()-t0)/60:.1f} min", flush=True)
+    return params, opt_state
+
+
 # ---------------- one_iter（可复用，probe 直接测训练主循环） ----------------
 
 
@@ -223,6 +336,16 @@ def main():
     ap.add_argument("--clip-eps", type=float, default=0.2)
     ap.add_argument("--vf-coef", type=float, default=0.5)
     ap.add_argument("--ent-coef", type=float, default=0.01)
+    # ---- 离线蒸馏（--distill-data 提供则先跑蒸馏，再可选接 PPO）----
+    ap.add_argument("--distill-data", default=None,
+                    help="collect_distill 的 npz（支持 glob）。给定时先跑蒸馏")
+    ap.add_argument("--distill-iters", type=int, default=200)
+    ap.add_argument("--distill-batch", type=int, default=8192,
+                    help="每轮采样的帧数（host→device 分批搬，可远小于总帧数）")
+    ap.add_argument("--distill-max-frames", type=int, default=2_000_000,
+                    help="总帧数上限（超出按文件 stride 均匀抽稀）")
+    ap.add_argument("--distill-then-ppo", action="store_true",
+                    help="蒸馏后继续自对弈 PPO 微调（不传则蒸馏完即停）")
     args = ap.parse_args()
     if args.hidden is None:
         args.hidden = 768 if args.arch == "mlp4" else 256
@@ -243,6 +366,14 @@ def main():
 
     opt = optax.adam(args.lr)
     opt_state = opt.init(params)
+
+    # 离线蒸馏阶段（先于 PPO）：KL 到 teacher 分布，warm-start student。
+    if args.distill_data:
+        params, opt_state = run_distill(params, opt, opt_state, args, key)
+        if not args.distill_then_ppo:
+            print("蒸馏阶段结束（未接 PPO，退出）", flush=True)
+            return
+        print("接自对弈 PPO 微调：", flush=True)
 
     one_iter_j = build_one_iter(params, opt, opt_state, states, key, args)
 
