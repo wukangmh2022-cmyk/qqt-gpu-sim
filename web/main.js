@@ -58,6 +58,7 @@
   let clipFrames = [];          // 滚动帧缓冲 [{ t, img: ImageData }]
   let lastClipCap = 0;
   let gameEndT = 0;             // 终局时刻（performance.now）：终局后冻结画面不进录像
+  let clipC = null, clipCtx = null;   // 复用缩采样 canvas（避免每次采集新建的开销）
   let replay = null;          // { meta, actions: [[m0,b0,m1,b1], ...], snapshots: [...] }
   const face = [MOVE_DOWN, MOVE_DOWN];
   const human = { dirStack: [], latch: new Set(), move: MOVE_IDLE, pendingBomb: false };
@@ -1068,14 +1069,19 @@
     // 像素级一致 → AnimEncoder 增量帧极小，12 秒 30fps ≈ 几百 KB。
     // 终局后（running=false / sim.done）不再采集：冻结的结果画面会占满
     // 保存窗口后半段，看起来像慢放。
+    // 缩采样 canvas 全局复用（每次 createElement+getContext 有 ~ms 级开销，
+    // 在 30fps 主循环里会拖慢 rAF → 采集帧率掉到 20fps）。
     if (now - lastClipCap >= CLIP_FRAME_MS) {
       lastClipCap = now;
       if (running && sim && !sim.done) {
-        const c = document.createElement('canvas');
-        c.width = Math.max(1, Math.round(canvas.width * CLIP_SCALE));
-        c.height = Math.max(1, Math.round(canvas.height * CLIP_SCALE));
-        c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
-        clipFrames.push({ t: now, img: c.getContext('2d').getImageData(0, 0, c.width, c.height) });
+        if (!clipC) {
+          clipC = document.createElement('canvas');
+          clipC.width = Math.max(1, Math.round(canvas.width * CLIP_SCALE));
+          clipC.height = Math.max(1, Math.round(canvas.height * CLIP_SCALE));
+          clipCtx = clipC.getContext('2d');
+        }
+        clipCtx.drawImage(canvas, 0, 0, clipC.width, clipC.height);
+        clipFrames.push({ t: now, img: clipCtx.getImageData(0, 0, clipC.width, clipC.height) });
       }
       while (clipFrames.length > 2 && now - clipFrames[0].t > CLIP_WINDOW_MS) clipFrames.shift();
     }
