@@ -51,11 +51,12 @@
   let lastTickT = 0;
   let gameSeed = 1;
   // 录像：JSON 结构化重放（seed + 每 tick 动作 + 周期快照）+ WebP 动图（滚动窗口）。
-  // 动图管线：滚动窗口按 30fps 存像素级精确的缩采样帧（ImageData）→ 保存时
+  // 动图管线：滚动窗口按 20fps 存像素级精确的缩采样帧（ImageData）→ 保存时
   // 逐帧 native 编码成静态 WebP → vendor/webp_mux.js 合成**全关键帧**动画容器。
   // 不用增量帧：macOS QuickLook 对增量链 O(N²) 重解会越播越慢（实机 245 帧
   // 解码 100s）；全关键帧每帧独立解码 ~10ms，任意播放器实时流畅。
-  const CLIP_WINDOW_MS = 12000, CLIP_FRAME_MS = 1000 / 30, CLIP_SCALE = 0.6;
+  // 20fps：动画仍流畅，体积比 30fps 省 1/3（全关键帧体积 ∝ 帧数）。
+  const CLIP_WINDOW_MS = 12000, CLIP_FRAME_MS = 1000 / 20, CLIP_SCALE = 0.6;
   let clipFrames = [];          // 滚动帧缓冲 [{ t, img: ImageData }]
   let lastClipCap = 0;
   let gameEndT = 0;             // 终局时刻（performance.now）：终局后冻结画面不进录像
@@ -718,7 +719,7 @@
         // （O(N²)），越播越慢（245 帧实测整片解码 100s）；全关键帧每帧独立
         // 解码 ~10ms，任何播放器实时流畅。
         // 每帧时长用真实采集间隔（保证播放 = 直播 1:1，不受 rAF 抖动影响），
-        // 首帧用 30fps 标称值。
+        // 首帧用 20fps 标称值。
         const parts = [];
         let prevT = null;
         // 全不透明 → VP8X flags=0x02（libwebp 惯例，QuickLook 通用）；偷看首帧
@@ -1071,10 +1072,10 @@
     }
     prevFrame = now;
     render(now);
-    // 动图滚动窗口：按 30fps 把画面缩采样进环形缓冲，保存时取最近 12 秒。
+    // 动图滚动窗口：按 20fps 把画面缩采样进环形缓冲，保存时取最近 12 秒。
     // 直接存原始像素（getImageData）：中间任何有损编码都会让静止背景
     // 每帧重量化出不同噪声 → 帧间差分失效（体积暴涨回关键帧量级）。
-    // 像素级一致 → AnimEncoder 增量帧极小，12 秒 30fps ≈ 几百 KB。
+    // 像素级一致 → 合成时无重编码损失，12 秒 20fps ≈ 240 帧。
     // 终局后（running=false / sim.done）不再采集：冻结的结果画面会占满
     // 保存窗口后半段，看起来像慢放。
     // 缩采样 canvas 全局复用（每次 createElement+getContext 有 ~ms 级开销，
