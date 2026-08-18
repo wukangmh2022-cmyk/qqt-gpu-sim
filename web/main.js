@@ -705,8 +705,12 @@
   }
   function recMsg(html) {
     elRecMsg.innerHTML = html;
+    elRecMsg.classList.add('active');
     clearTimeout(recMsg._t);
-    recMsg._t = setTimeout(() => { elRecMsg.innerHTML = ''; }, 10000);
+    recMsg._t = setTimeout(() => {
+      elRecMsg.innerHTML = '';
+      elRecMsg.classList.remove('active');
+    }, 10000);
   }
 
   elSaveReplay.addEventListener('click', () => {
@@ -748,8 +752,9 @@
     const gif = window.Gifenc;
     if (!gif) { recMsg('GIF 编码器未加载（vendor/gifenc.global.js）'); return; }
     const sub = frames.filter((_, i) => i % GIF_SUB_FRAME === 0);
-    recMsg(`GIF 编码中…（${frames.length} 帧 → 10fps ${GIF_COLORS} 色全局调色板）`);
+    recMsg(`GIF 编码中…（${frames.length} 帧 → 10fps ${GIF_COLORS} 色全局调色板，约几秒请稍候）`);
     setTimeout(() => {
+      const t0 = performance.now();
       try {
         const f0 = sub[0].img;
         const gW = Math.max(1, Math.round(f0.width * GIF_SCALE));
@@ -794,7 +799,7 @@
         enc.finish();
         const blob = new Blob([enc.bytes()], { type: 'image/gif' });
         downloadBlob(blob, `clip_${replay.meta.mode}_s${replay.meta.seed}_${timeStamp()}.gif`);
-        recMsg(`GIF 已保存：${scaled.length} 帧，${(blob.size / 1024).toFixed(0)}KB（${GIF_COLORS} 色全局调色板，可内嵌 README）`);
+        recMsg(`GIF 已保存：${scaled.length} 帧，${(blob.size / 1024).toFixed(0)}KB，耗时 ${((performance.now() - t0) / 1000).toFixed(1)}s（${GIF_COLORS} 色全局调色板，可内嵌 README）`);
       } catch (e) {
         recMsg(`GIF 编码失败：${e.message}`);
         console.error(e);

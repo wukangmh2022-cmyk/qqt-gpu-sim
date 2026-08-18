@@ -93,6 +93,11 @@ button:hover { filter: brightness(1.1); }
 .rec-row { display: flex; gap: 8px; }
 .rec-row button { width: auto; margin-top: 0; flex: 1 1 0; }
 #rec-msg { min-height: 16px; font-size: 11.5px; color: var(--dim); line-height: 1.6; margin-top: 6px; }
+#rec-msg.active { /* 保存提示高亮：编码中/完成时醒目可读 */
+  background: rgba(245, 166, 35, 0.13); border: 1px solid rgba(245, 166, 35, 0.5);
+  color: var(--fg); font-weight: 600; font-size: 12.5px;
+  padding: 6px 10px; border-radius: 6px;
+}
 section.meta { font-size: 11.5px; color: var(--dim); line-height: 1.6; }
 section.meta code { background: #262c39; padding: 1px 4px; border-radius: 4px; }
 
