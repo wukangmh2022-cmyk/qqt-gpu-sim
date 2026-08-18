@@ -52,10 +52,10 @@
   let gameSeed = 1;
   // 录像：JSON 结构化重放（seed + 每 tick 动作 + 周期快照）+ WebP 动图（滚动窗口）。
   // 动图管线：滚动窗口按 20fps 存像素级精确的缩采样帧（ImageData）→ 保存时
-  // 逐帧 native 编码成静态 WebP → vendor/webp_mux.js 合成**全关键帧**动画容器。
-  // 不用增量帧：macOS QuickLook 对增量链 O(N²) 重解会越播越慢（实机 245 帧
-  // 解码 100s）；全关键帧每帧独立解码 ~10ms，任意播放器实时流畅。
-  // 20fps：动画仍流畅，体积比 30fps 省 1/3（全关键帧体积 ∝ 帧数）。
+  // 交给 libwebp WebPAnimEncoder 做帧间差分合成（vendor/webp-anim/）。
+  // 差分 vs 全关键帧：贴图细节场景完整关键帧 ~44KB/帧（12s≈10MB），差分帧
+  // 只编变化区域 ~1/3 体积。QuickLook/Preview 的 WebP 动画播放慢是 macOS
+  // 系统播放器问题（Chrome/Safari 播放 1:1 正常），与帧结构无关。
   const CLIP_WINDOW_MS = 12000, CLIP_FRAME_MS = 1000 / 20, CLIP_SCALE = 0.6;
   let clipFrames = [];          // 滚动帧缓冲 [{ t, img: ImageData }]
   let lastClipCap = 0;
@@ -709,39 +709,33 @@
         now - f.t <= CLIP_WINDOW_MS + 250 && (!gameEndT || f.t <= gameEndT))
       .sort((a, b) => a.t - b.t);
     if (frames.length < 2) { recMsg('画面不足，等几秒再点'); return; }
-    recMsg(`WebP 编码中…（${frames.length} 帧）`);
+    recMsg(`WebP 编码中…（${frames.length} 帧，帧间差分压缩）`);
     setTimeout(async () => {
       try {
-        const mux = window.QQTWebpMux;
-        if (!mux || !mux.muxWebpAnimation) throw new Error('WebP 合成器未加载（vendor/webp_mux.js）');
-        // 全关键帧合成：每帧 = 一个完整静态 WebP（native 编码，快且画质好）。
-        // 不能用增量帧 —— macOS QuickLook/ImageIO 对增量链每帧从第 0 帧重解
-        // （O(N²)），越播越慢（245 帧实测整片解码 100s）；全关键帧每帧独立
-        // 解码 ~10ms，任何播放器实时流畅。
-        // 每帧时长用真实采集间隔（保证播放 = 直播 1:1，不受 rAF 抖动影响），
-        // 首帧用 20fps 标称值。
-        const parts = [];
+        const anim = window.WebPAnim;
+        if (!anim) throw new Error('动画编码器未加载（vendor/webp-anim/）');
+        await Promise.race([
+          anim.ready,
+          new Promise((_, rej) => setTimeout(() => rej(new Error('WebP wasm 加载超时')), 15000)),
+        ]);
+        // 帧 → libwebp WebPAnimEncoder 帧间差分合成：静止背景增量帧极小。
+        // 全关键帧会因贴图细节每帧 ~44KB（12s≈10MB），差分只有 ~1/3。
+        // QuickLook/Preview 的 WebP 动画播放是系统播放器问题（Chrome/Safari
+        // 播放正常），与帧结构无关，差分方案不影响浏览器播放。
+        // 每帧时长用真实采集间隔（保证播放 = 直播 1:1），首帧用 20fps 标称值。
+        const f0 = frames[0].img;
         let prevT = null;
-        // 全不透明 → VP8X flags=0x02（libwebp 惯例，QuickLook 通用）；偷看首帧
-        // alpha 通道：出现 <255 才按透明处理（游戏画面恒不透明，通常走 0x02）
-        let hasAlpha = false;
-        for (let i = 0; i < frames[0].img.data.length; i += 4) {
-          if (frames[0].img.data[i + 3] < 255) { hasAlpha = true; break; }
-        }
-        for (const f of frames) {
-          const durMs = prevT === null ? Math.round(CLIP_FRAME_MS)
+        const rgbaFrames = frames.map((f) => {
+          const d = prevT === null ? Math.round(CLIP_FRAME_MS)
             : Math.max(20, Math.min(500, Math.round(f.t - prevT)));
           prevT = f.t;
-          clipCtx.putImageData(f.img, 0, 0);
-          const blob = await new Promise((res) => clipC.toBlob(res, 'image/webp', 0.85));
-          if (!blob || blob.type !== 'image/webp') throw new Error('浏览器不支持 canvas WebP 编码');
-          const still = new Uint8Array(await blob.arrayBuffer());
-          parts.push(Object.assign(mux.extractVp8(still), { durMs }));
-        }
-        const webp = mux.muxWebpAnimation(parts, clipC.width, clipC.height, 0, hasAlpha);
+          return { data: f.img.data, duration: d, config: { quality: 85, lossless: 0 } };
+        });
+        const webp = await anim.encodeAnimation(f0.width, f0.height, true, rgbaFrames);
+        if (!webp) throw new Error('编码失败（wasm 返回 null）');
         const blob = new Blob([webp], { type: 'image/webp' });
         downloadBlob(blob, `clip_${replay.meta.mode}_s${replay.meta.seed}_${timeStamp()}.webp`);
-        recMsg(`WebP 已保存：${frames.length} 帧，${(blob.size / 1024).toFixed(0)}KB`);
+        recMsg(`WebP 已保存：${frames.length} 帧，${(blob.size / 1024).toFixed(0)}KB（差分压缩）`);
       } catch (e) {
         recMsg(`WebP 编码失败：${e.message}`);
         console.error(e);
@@ -1075,7 +1069,7 @@
     // 动图滚动窗口：按 20fps 把画面缩采样进环形缓冲，保存时取最近 12 秒。
     // 直接存原始像素（getImageData）：中间任何有损编码都会让静止背景
     // 每帧重量化出不同噪声 → 帧间差分失效（体积暴涨回关键帧量级）。
-    // 像素级一致 → 合成时无重编码损失，12 秒 20fps ≈ 240 帧。
+    // 像素级一致 → AnimEncoder 增量帧极小。
     // 终局后（running=false / sim.done）不再采集：冻结的结果画面会占满
     // 保存窗口后半段，看起来像慢放。
     // 缩采样 canvas 全局复用（每次 createElement+getContext 有 ~ms 级开销，
