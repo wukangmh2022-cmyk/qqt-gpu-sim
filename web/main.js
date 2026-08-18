@@ -35,7 +35,8 @@
         elEnemyAi = $('enemy-ai'), elP0Ai = $('p0-ai'), elP0AiWrap = $('p0-ai-wrap'),
         elRestart = $('restart'), elStatus = $('status'), elBanner = $('banner'),
         elLoading = $('loading'), elLoadingText = $('loading-text'),
-        elSaveReplay = $('save-replay'), elSaveWebp = $('save-webp'), elRecMsg = $('rec-msg');
+        elSaveReplay = $('save-replay'), elSaveWebp = $('save-webp'),
+        elSaveVideo = $('save-video'), elRecMsg = $('rec-msg');
 
   // ------------------------------------------------------------ 状态
   let sim = null, modelList = [], res = null;
@@ -61,6 +62,33 @@
   let lastClipCap = 0;
   let gameEndT = 0;             // 终局时刻（performance.now）：终局后冻结画面不进录像
   let clipC = null, clipCtx = null;   // 复用缩采样 canvas（避免每次采集新建的开销）
+  // 视频录制：canvas.captureStream + MediaRecorder（VP9/VP8/H.264，浏览器内置
+  // 视频编码器）。WebP 动图对高动态画面效率低（等效码率 ~6.9Mbps），视频编码
+  // 同样内容 ~1MB/12s。环形缓冲只留最近 ~13s，点保存时合并导出。
+  let mediaRec = null, mediaMime = '', mediaChunks = [];
+  function startVideoRecorder() {
+    try {
+      if (!canvas.captureStream || !window.MediaRecorder) return;
+      const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8',
+        'video/webm', 'video/mp4'].find((t) => MediaRecorder.isTypeSupported(t));
+      if (!mime) return;
+      const stream = canvas.captureStream(20);
+      mediaRec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 800000 });
+      mediaMime = mime;
+      mediaChunks = [];
+      mediaRec.ondataavailable = (e) => {
+        if (e.data && e.data.size) mediaChunks.push({ t: performance.now(), blob: e.data });
+        const nowT = performance.now();
+        while (mediaChunks.length > 2 && nowT - mediaChunks[0].t > CLIP_WINDOW_MS + 1500) {
+          mediaChunks.shift();
+        }
+      };
+      mediaRec.start(250);
+    } catch (e) {
+      mediaRec = null;
+      console.warn('视频录制不可用:', e);
+    }
+  }
   let replay = null;          // { meta, actions: [[m0,b0,m1,b1], ...], snapshots: [...] }
   const face = [MOVE_DOWN, MOVE_DOWN];
   const human = { dirStack: [], latch: new Set(), move: MOVE_IDLE, pendingBomb: false };
@@ -743,6 +771,32 @@
     }, 30);
   });
 
+  elSaveVideo.addEventListener('click', async () => {
+    if (!mediaRec || mediaRec.state !== 'recording') {
+      recMsg('视频录制不可用（浏览器不支持 MediaRecorder）');
+      return;
+    }
+    if (!replay || !replay.actions.length) { recMsg('还没有可录的画面 —— 先开始一局再保存'); return; }
+    recMsg('视频导出中…');
+    try {
+      mediaRec.requestData();                      // 冲刷未落盘的数据
+      await new Promise((r) => setTimeout(r, 80));
+      const now = performance.now();
+      // 与 WebP 一致：只取最近 12s + 终局前（冻结结算画面不入片）
+      const chunks = mediaChunks.filter((c) =>
+        now - c.t <= CLIP_WINDOW_MS + 250 && (!gameEndT || c.t <= gameEndT));
+      const bytes = chunks.reduce((s, c) => s + c.blob.size, 0);
+      if (!chunks.length || bytes < 8192) { recMsg('视频数据不足，等几秒再点'); return; }
+      const blob = new Blob(chunks.map((c) => c.blob), { type: mediaMime });
+      const ext = mediaMime.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+      downloadBlob(blob, `clip_${replay.meta.mode}_s${replay.meta.seed}_${timeStamp()}.${ext}`);
+      recMsg(`视频已保存：${(blob.size / 1024).toFixed(0)}KB（${ext}，最近 ${(CLIP_WINDOW_MS / 1000).toFixed(0)}s）`);
+    } catch (e) {
+      recMsg(`视频导出失败：${e.message}`);
+      console.error(e);
+    }
+  });
+
   // ------------------------------------------------------------ 10Hz 逻辑节拍
   function logicTick() {
     if (!running || !sim || sim.done) return;
@@ -1112,6 +1166,7 @@
     // 模型（开局）与素材（渲染）互不依赖，并行加载
     await Promise.all([loadModelList(), loadAssets()]);
     await new Promise((r) => setTimeout(r, 150));   // 进度条缓动走完最后一段再切
+    startVideoRecorder();     // 视频环形缓冲（VP9/VP8，常驻录制最近 12s）
     showWelcome();            // 先出欢迎窗口，等玩家按空格开局
     elLoading.classList.add('hidden');
     requestAnimationFrame(loop);
