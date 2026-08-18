@@ -165,11 +165,13 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // 敌人 AI 下拉已有选项（模型列表 + 规则 Hunter）
   const aiCount = els['enemy-ai'].children.length;
-  if (aiCount !== 8) {
-    console.error(`FAIL: 敌人 AI 下拉应 8 个候选（7 模型 + 规则 Hunter），实际 ${aiCount}`);
+  const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'web', 'models', 'index.json'), 'utf8'));
+  const expectAi = (idx.models ? idx.models.length : idx.length) + 1;   // 模型数 + 规则 Hunter
+  if (aiCount !== expectAi) {
+    console.error(`FAIL: 敌人 AI 下拉应 ${expectAi} 个候选（${expectAi - 1} 模型 + 规则 Hunter），实际 ${aiCount}`);
     process.exit(1);
   }
-  console.log(`敌人 AI 下拉: ${aiCount} 个候选（7 模型 + 规则 Hunter）✔`);
+  console.log(`敌人 AI 下拉: ${aiCount} 个候选（${expectAi - 1} 模型 + 规则 Hunter）✔`);
 
   // 点击「应用」重载当前选中敌人 AI（默认 = 最强模型），不炸
   const click = (id) => (els[id].listeners['click'] || []).forEach((fn) => fn());

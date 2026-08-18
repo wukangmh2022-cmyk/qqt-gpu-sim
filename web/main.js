@@ -35,7 +35,7 @@
         elEnemyAi = $('enemy-ai'), elP0Ai = $('p0-ai'), elP0AiWrap = $('p0-ai-wrap'),
         elRestart = $('restart'), elStatus = $('status'), elBanner = $('banner'),
         elLoading = $('loading'), elLoadingText = $('loading-text'),
-        elSaveReplay = $('save-replay'), elSaveWebp = $('save-webp'),
+        elSaveReplay = $('save-replay'), elSaveGif = $('save-gif'),
         elSaveVideo = $('save-video'), elRecMsg = $('rec-msg');
 
   // ------------------------------------------------------------ 状态
@@ -729,7 +729,15 @@
     recMsg(`录像已保存：${doc.ticks} tick，${(blob.size / 1024).toFixed(0)}KB`);
   });
 
-  elSaveWebp.addEventListener('click', () => {
+  // GIF 导出参数：GIF 对贴图噪点画面天生低效（原尺寸 256 色 12s ≈ 17MB），
+  // README 内嵌用降采样 + 10fps + 128 色全局调色板 ≈ 3MB。
+  // 全局调色板贯穿全片，避免逐帧调色板导致的颜色闪烁。
+  const GIF_SUB_FRAME = 2;   // 20fps 采集 → 10fps 导出
+  const GIF_SCALE = 0.6;     // 相对采集画布的额外降采样（0.6×0.6 ≈ 0.36 游戏画面）
+  const GIF_COLORS = 128;    // 128 色 PSNR ~30dB，256 色只多 ~17% 体积
+  const gifScratch = {};
+
+  elSaveGif.addEventListener('click', () => {
     if (!replay || !replay.actions.length) { recMsg('还没有可录的画面 —— 先开始一局再保存'); return; }
     const now = performance.now();
     // 终局后保存：只保留游戏结束前的帧（冻结结果画面不进屋，避免"结尾静止=慢放"）
@@ -737,35 +745,58 @@
         now - f.t <= CLIP_WINDOW_MS + 250 && (!gameEndT || f.t <= gameEndT))
       .sort((a, b) => a.t - b.t);
     if (frames.length < 2) { recMsg('画面不足，等几秒再点'); return; }
-    recMsg(`WebP 编码中…（${frames.length} 帧，帧间差分压缩）`);
-    setTimeout(async () => {
+    const gif = window.Gifenc;
+    if (!gif) { recMsg('GIF 编码器未加载（vendor/gifenc.global.js）'); return; }
+    const sub = frames.filter((_, i) => i % GIF_SUB_FRAME === 0);
+    recMsg(`GIF 编码中…（${frames.length} 帧 → 10fps ${GIF_COLORS} 色全局调色板）`);
+    setTimeout(() => {
       try {
-        const anim = window.WebPAnim;
-        if (!anim) throw new Error('动画编码器未加载（vendor/webp-anim/）');
-        await Promise.race([
-          anim.ready,
-          new Promise((_, rej) => setTimeout(() => rej(new Error('WebP wasm 加载超时')), 15000)),
-        ]);
-        // 帧 → libwebp WebPAnimEncoder 帧间差分合成：静止背景增量帧极小。
-        // 全关键帧会因贴图细节每帧 ~44KB（12s≈10MB），差分只有 ~1/3。
-        // QuickLook/Preview 的 WebP 动画播放是系统播放器问题（Chrome/Safari
-        // 播放正常），与帧结构无关，差分方案不影响浏览器播放。
-        // 每帧时长用真实采集间隔（保证播放 = 直播 1:1），首帧用 20fps 标称值。
-        const f0 = frames[0].img;
-        let prevT = null;
-        const rgbaFrames = frames.map((f) => {
-          const d = prevT === null ? Math.round(CLIP_FRAME_MS)
-            : Math.max(20, Math.min(500, Math.round(f.t - prevT)));
-          prevT = f.t;
-          return { data: f.img.data, duration: d, config: { quality: 85, lossless: 0 } };
+        const f0 = sub[0].img;
+        const gW = Math.max(1, Math.round(f0.width * GIF_SCALE));
+        const gH = Math.max(1, Math.round(f0.height * GIF_SCALE));
+        if (!gifScratch.src) {   // 1:1 中转画布（putImageData 不缩放）
+          gifScratch.src = document.createElement('canvas');
+          gifScratch.src.width = f0.width; gifScratch.src.height = f0.height;
+          gifScratch.srcCtx = gifScratch.src.getContext('2d');
+        }
+        if (!gifScratch.dst || gifScratch.dst.width !== gW) {  // 缩放目标画布
+          gifScratch.dst = document.createElement('canvas');
+          gifScratch.dst.width = gW; gifScratch.dst.height = gH;
+          gifScratch.dstCtx = gifScratch.dst.getContext('2d', { willReadFrequently: true });
+        }
+        // 1) 逐帧降采样（双线性，drawImage 缩放 + getImageData 读回）
+        const scaled = sub.map((f) => {
+          gifScratch.srcCtx.putImageData(f.img, 0, 0);
+          gifScratch.dstCtx.drawImage(gifScratch.src, 0, 0, gW, gH);
+          return gifScratch.dstCtx.getImageData(0, 0, gW, gH).data;
         });
-        const webp = await anim.encodeAnimation(f0.width, f0.height, true, rgbaFrames);
-        if (!webp) throw new Error('编码失败（wasm 返回 null）');
-        const blob = new Blob([webp], { type: 'image/webp' });
-        downloadBlob(blob, `clip_${replay.meta.mode}_s${replay.meta.seed}_${timeStamp()}.webp`);
-        recMsg(`WebP 已保存：${frames.length} 帧，${(blob.size / 1024).toFixed(0)}KB（差分压缩）`);
+        // 2) 全局调色板：隔像素隔帧采样 → 量化一版贯穿全片
+        const stepPx = 8, stepF = 2;
+        const sample = new Uint8Array(Math.ceil(scaled.length / stepF) * Math.ceil((gW * gH) / stepPx) * 4);
+        let si = 0;
+        for (let fi = 0; fi < scaled.length; fi += stepF) {
+          const d = scaled[fi];
+          for (let i = 0; i < d.length; i += stepPx * 4) {
+            sample[si++] = d[i]; sample[si++] = d[i + 1]; sample[si++] = d[i + 2]; sample[si++] = d[i + 3];
+          }
+        }
+        const palette = gif.quantize(sample.subarray(0, si), GIF_COLORS);
+        // 3) 逐帧映射 + 写入（delay 毫秒 → gifenc 内部转厘秒；10fps ≈ 100ms/帧）
+        const enc = gif.GIFEncoder();
+        let prevT = null;
+        for (let i = 0; i < scaled.length; i++) {
+          const idx = gif.applyPalette(scaled[i], palette);
+          const durMs = prevT === null ? Math.round(CLIP_FRAME_MS * GIF_SUB_FRAME)
+            : Math.max(20, Math.min(1000, Math.round(sub[i].t - prevT)));
+          prevT = sub[i].t;
+          enc.writeFrame(idx, gW, gH, { palette, delay: durMs });
+        }
+        enc.finish();
+        const blob = new Blob([enc.bytes()], { type: 'image/gif' });
+        downloadBlob(blob, `clip_${replay.meta.mode}_s${replay.meta.seed}_${timeStamp()}.gif`);
+        recMsg(`GIF 已保存：${scaled.length} 帧，${(blob.size / 1024).toFixed(0)}KB（${GIF_COLORS} 色全局调色板，可内嵌 README）`);
       } catch (e) {
-        recMsg(`WebP 编码失败：${e.message}`);
+        recMsg(`GIF 编码失败：${e.message}`);
         console.error(e);
       }
     }, 30);
