@@ -13,7 +13,7 @@
 
 (() => {
   const Q = window.QQT;
-  const { Sim, MLPModel, CNNModel, TransformerModel, ORTTransformerModel, CFG, DIRS, MOVE_IDLE, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_UP } = Q;
+  const { Sim, MLPModel, CNNModel, TransformerModel, ORTTransformerModel, CFG, DIRS, EPS, MOVE_IDLE, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_UP } = Q;
 
   const H = Q.H, W = Q.W, N = Q.N;
   const CELL = 60;                 // 与 play/duel.py 一致：素材原生 40px/格 × 1.5
