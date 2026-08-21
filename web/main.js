@@ -386,7 +386,8 @@
       res.audio = new AudioContext();
       res.snd = {};
       const names = { place: '放炮.wav', boom: '爆炸.wav', pickup: '吃道具音效.wav',
-                      hurt: '生命损失音效.wav', die: '角色消失音效.wav' };
+                      hurt: '生命损失音效.wav', die: '角色消失音效.wav',
+                    pushbox: '推箱.wav' };
       for (const [k, f] of Object.entries(names)) {
         const buf = await (await fetch('assets/snd/' + f)).arrayBuffer();
         res.snd[k] = await res.audio.decodeAudioData(buf);
@@ -782,6 +783,7 @@
             box.cells = targetCells;
             box.o = targetCells[0];
             sim.pushT[box.o] = 0;
+            playSnd('pushbox', 0.6);   // 推箱音效
           }
         } else {
           sim.pushT[box.o] = 0;   // 推不动 → 重置
