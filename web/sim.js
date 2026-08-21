@@ -17,7 +17,8 @@
   'use strict';
 
   // ---------------------------------------------------------------- 常量
-  const H = 13, W = 13, N = H * W;
+  // 全部地图(含空场景)统一 15×13（QQ堂竞技标准尺寸，241 张原版图）
+  const H = 13, W = 15, N = H * W;
   const N_PLAYERS = 2;
   const MOVE_UP = 0, MOVE_DOWN = 1, MOVE_LEFT = 2, MOVE_RIGHT = 3, MOVE_IDLE = 4;
   const N_MOVES = 5, N_BOMB = 2;
@@ -28,14 +29,14 @@
   // duel.py 的配置（map_mode=corridor + open_fraction=1.0 即 open 关；
   // corridor 关用 growth_*_start 起步 + 顶墙/侧砖）。
   const CFG = {
-    tickHz: 10, speed: 3.0, radius: 0.3, maxSteps: 1800,
+    tickHz: 10, speed: 3.0, radius: 0.45, maxSteps: 1800,   // 碰撞半径 0.45 (盒 54x54px)
     fuse: 30, blast: 2, maxBombs: 10, maxChain: 16,
     maxHp: 5, invulnTicks: 30,
     stepLen: 3.0 / 10,                 // 0.3 格/tick
     // 成长（corridor 起步）
-    growthBombsStart: 2, growthBlastStart: 2, growthSpeedStart: 1.6,
+    growthBombsStart: 2, growthBlastStart: 2, growthSpeedStart: 1.3,
     growthBombsMax: 10, growthBlastMax: 7,
-    growthSpeedMax: 2.1, growthSpeedStep: 0.15,
+    growthSpeedMax: 2.1, growthSpeedStep: 0.8 / 7,   // 7档: (2.1-1.3)/7 ≈ 0.1143
     // open 关起步 = 上限 80%（与训练一致）
     openGrowthBombs: Math.ceil(10 * 0.8),        // 8
     openGrowthBlast: Math.ceil(7 * 0.8),         // 6
@@ -77,13 +78,17 @@
 
   // ---------------------------------------------------------------- 碰撞
   // 单格不可通行：越界、或被固体挡住且碰撞盒当前没压在这一格上
-  // （“脚下刚放的泡必须能走出去”：压着就放行）。
+  // （“脚下刚放的泡必须能走出去”：压着就放行 —— 这也是 QQ堂“穿炮穿墙”
+  // 的源头：盒子(跨度)压着障碍格就能穿过去，Feature 保留）。
   function impassable(blocked, row, col, y, x, rad, h, w) {
     if (row < 0 || row >= h || col < 0 || col >= w) return true;
     if (!blocked[row * w + col]) return false;
-    const r0 = Math.floor(y - rad), r1 = Math.floor(y + rad);
-    const c0 = Math.floor(x - rad), c1 = Math.floor(x + rad);
-    const inside = row >= r0 && row <= r1 && col >= c0 && col <= c1;
+    // 豁免 = 盒子**身体真正进入**该格(上边界用 ceil, 严格大于):
+    // 底/右边线刚好贴住格边界(如 y+R=3.0 贴着行3)不算压着 → 炸弹/墙照常阻挡,
+    // 否则"角刚好擦到炸弹"会被误判可走, 自动转向永远不触发。
+    const r0 = Math.floor(y - rad), r1 = Math.ceil(y + rad);
+    const c0 = Math.floor(x - rad), c1 = Math.ceil(x + rad);
+    const inside = row >= r0 && row < r1 && col >= c0 && col < c1;
     return !inside;
   }
 
@@ -123,11 +128,22 @@
     }
 
     // mode: 'open'（纯空场 + 中心十字宝箱 + 80% 起步）| 'corridor'（顶墙侧砖 + 2/2/1 起步）
-    reset(mode) {
-      this.mode = mode === 'corridor' ? 'corridor' : 'open';
+    //       | 关卡对象（level: {wall, brick, spawns, initial_stats, crate_rate, ...}）
+    // opts.oldMode: 旧 13x13 模型兼容 —— 地图加载后把第 13/14 列填为不可通行墙,
+    //               encodeObs 按 13 宽输出(与旧版训练环境一致)。
+    reset(mode, opts) {
+      this.oldMode = !!(opts && opts.oldMode);
+      const isLevel = mode !== null && typeof mode === 'object';
+      this.mode = isLevel ? 'level' : (mode === 'corridor' ? 'corridor' : 'open');
+      this.level = isLevel ? mode : null;
+      this._gen = (this._gen || 0) + 1;   // 代际计数：模型每 tick 缓存失效用
       this.wall = new Uint8Array(N);
       this.brick = new Uint8Array(N);
+      this.cover = new Uint8Array(N);      // 房子: 可通行 + 不可炸 + 藏人
+      this.bush = new Uint8Array(N);       // 灌木: 可通行 + 可炸 + 藏人
       this.crate = new Uint8Array(N);
+      this.superCrate = new Uint8Array(N);   // 1=超级宝箱(拾取+4档)
+      this.crateType = new Int8Array(N);    // 宝箱种类: -1=随机(问号), 0/1/2=泡/威/速(炸开时定)
       this.recycle = new Uint8Array(N);
       this.fuse = new Int16Array(N);
       this.owner = new Int8Array(N);
@@ -149,8 +165,15 @@
       this.winner = null;        // 0 / 1 / null（平局或未结束）
       this.lastCovered = null;   // 最近一次爆炸覆盖掩码（渲染用）
       this.lastDied = [false, false];
+      this.spawnCells = null;    // 本局出生点（回收排除用）
+      // 属性上限默认 = CFG 上限（open/corridor；关卡模式在 _loadLevel 覆盖）
+      this.bombsMax = CFG.growthBombsMax;
+      this.blastMax = CFG.growthBlastMax;
+      this.speedMax = CFG.growthSpeedMax;
 
-      if (this.mode === 'corridor') {
+      if (isLevel) {
+        this._loadLevel(mode);
+      } else if (this.mode === 'corridor') {
         // 顶部 topWallRows 行全部永久墙
         for (let r = 0; r < CFG.topWallRows; r++) {
           for (let c = 0; c < W; c++) this.wall[r * W + c] = 1;
@@ -191,6 +214,61 @@
         this.pos[2] = y0; this.pos[3] = x0;
       }
       this.sinceBomb[0] = 0; this.sinceBomb[1] = 0;
+    }
+
+    // 加载一张新地图关卡（web/assets/maps/levels.json 导出的 241 张之一）：
+    //   wall/brick 通行性、出生点随机二选、初始属性按地图配置、炸砖爆率按地图
+    //   crate_rate（= 57/W，保证全图砖清完 ≈300% 单人满属性）、空场景中心十字宝箱。
+    _loadLevel(level) {
+      for (let i = 0; i < N; i++) {
+        this.wall[i] = level.wall[i];
+        this.brick[i] = level.brick[i];
+        if (level.cover) this.cover[i] = level.cover[i];
+        if (level.bush) this.bush[i] = level.bush[i];
+      }
+      // 旧模型兼容: 多出的两列(13,14)填为不可通行墙 → 环境与旧版 13 宽一致
+      if (this.oldMode) {
+        for (let r = 0; r < H; r++) {
+          this.wall[r * W + W - 1] = 1;
+          this.wall[r * W + W - 2] = 1;
+        }
+      }
+      // 初始属性（比武/不足300% → 3/3/1.2；普通 → 2/2/1.2；空场景 → 8/6/1.68）
+      const st = level.initial_stats || { bombs: 2, blast: 2, speed: 1.0 };
+      for (let p = 0; p < 2; p++) {
+        this.bombsCap[p] = st.bombs;
+        this.blastCap[p] = st.blast;
+        this.spdG[p] = st.speed;
+        this.loBombs[p] = st.bombs;
+        this.loBlast[p] = st.blast;
+        this.loSpeed[p] = st.speed;
+      }
+      // 出生点：从地图出生点列表里随机挑两个（打乱后取前二，保证不同开局）
+      const sp = level.spawns.map((s) => [s[0], s[1]]);
+      for (let i = sp.length - 1; i > 0; i--) {
+        const j = Math.floor(this.rng() * (i + 1));
+        const t = sp[i]; sp[i] = sp[j]; sp[j] = t;
+      }
+      const s0 = sp[0], s1 = sp.length > 1 ? sp[1] : sp[0];
+      this.pos[0] = s0[0] + 0.5; this.pos[1] = s0[1] + 0.5;
+      this.pos[2] = s1[0] + 0.5; this.pos[3] = s1[1] + 0.5;
+      this.spawnCells = sp;
+      // 炸砖 → 宝箱的爆率（地图配置；空场景无砖，crate_rate=0 不走炸砖路径）
+      this.crateRate = (level.crate_rate != null && level.crate_rate > 0)
+        ? level.crate_rate : 1.0;
+      // 宝箱中超级占比（超级威力/泡泡/速度 整体 = 普通爆率的 10% -> 1/11）
+      this.superFraction = level.crate_super_fraction || 0;
+      // 属性上限标准化在地图文件里（比武图泡/威上限=7, 空场景速上限=2.2）
+      this.bombsMax = level.bombs_max || CFG.growthBombsMax;
+      this.blastMax = level.blast_max || CFG.growthBlastMax;
+      this.speedMax = level.speed_max || CFG.growthSpeedMax;
+      // 空场景：开局中心十字宝箱直接放地上（踩到必升）
+      if (level.initial_crates && level.initial_crates.length) {
+        for (const [r, c] of level.initial_crates) {
+          this.crate[r * W + c] = 1;
+          this.crateType[r * W + c] = -1;   // 空场景随机宝箱(问号)
+        }
+      }
     }
 
     _placeOpenCrossCrates() {
@@ -269,14 +347,38 @@
         const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
         const dist = CFG.stepLen * this.spdG[p];
         const [dy, dx] = DIRS[mv];
+        // 中心路径硬约束（对齐 JAX _move_player）：中心点扫过的每一格必须
+        // 可通行（起点格脚下豁免）。resolveAxis 的盒覆盖豁免允许盒压着泡格
+        // 擦边移动，但**中心不能进入泡/墙/砖格** —— 防穿炮：放泡后能离开
+        // 泡格，但不能踩回泡格中心，更不能穿过泡格继续走。
+        const startR = Math.max(0, Math.min(H - 1, Math.floor(y)));
+        const startC = Math.max(0, Math.min(W - 1, Math.floor(x)));
+        let ny = y, nx = x;
         if (dy !== 0) {
-          this.pos[p * 2] = resolveAxis(y + dy * dist, dy * dist, x, y, x,
-                                        blocked, CFG.radius, H, W, true);
+          ny = resolveAxis(y + dy * dist, dy * dist, x, y, x,
+                           blocked, CFG.radius, H, W, true);
+          // 中心沿起点列扫过的行段必须全可通行（起点行脚下豁免）
+          const yLo = Math.max(0, Math.min(H - 1, Math.floor(Math.min(y, ny))));
+          const yHi = Math.max(0, Math.min(H - 1, Math.floor(Math.max(y, ny))));
+          for (let r = yLo; r <= yHi; r++) {
+            if (r === startR) continue;
+            if (blocked[r * W + startC]) { ny = y; break; }
+          }
         }
         if (dx !== 0) {
-          this.pos[p * 2 + 1] = resolveAxis(x + dx * dist, dx * dist, y, y, x,
-                                            blocked, CFG.radius, H, W, false);
+          nx = resolveAxis(x + dx * dist, dx * dist, y, ny, x,
+                           blocked, CFG.radius, H, W, false);
+          // 中心沿 ny 行扫过的列段必须全可通行（起点格脚下豁免）
+          const xLo = Math.max(0, Math.min(W - 1, Math.floor(Math.min(x, nx))));
+          const xHi = Math.max(0, Math.min(W - 1, Math.floor(Math.max(x, nx))));
+          const cy0 = Math.max(0, Math.min(H - 1, Math.floor(ny)));
+          for (let c = xLo; c <= xHi; c++) {
+            if (c === startC && cy0 === startR) continue;
+            if (blocked[cy0 * W + c]) { nx = x; break; }
+          }
         }
+        this.pos[p * 2] = ny;
+        this.pos[p * 2 + 1] = nx;
         // 边界夹紧（防穿出地图）
         this.pos[p * 2] = Math.min(Math.max(this.pos[p * 2], CFG.radius), H - CFG.radius);
         this.pos[p * 2 + 1] = Math.min(Math.max(this.pos[p * 2 + 1], CFG.radius), W - CFG.radius);
@@ -285,12 +387,18 @@
       // 4. 爆炸与连锁（sim/blast.py::resolve_explosions 的标量版）
       const { covered, triggered } = this._resolveExplosions(blocked);
       this.lastCovered = covered;
-      // 炸掉的砖 → 宝箱；摧毁砖
+      // 炸掉的砖 → 宝箱（按地图爆率 crate_rate 判定；摧毁砖）
+      // 灌木(bush)：可通行 + **可炸毁** —— 被火焰覆盖即摧毁（不给宝箱）
       for (let i = 0; i < N; i++) {
         if (covered[i] && this.brick[i]) {
-          this.crate[i] = 1;
           this.brick[i] = 0;
+          if (this.rng() < this.crateRate) {
+            this.crate[i] = 1;
+            this.superCrate[i] = this.rng() < this.superFraction ? 1 : 0;
+            this.crateType[i] = Math.floor(this.rng() * 3);   // 吃到啥在炸开时定
+          }
         }
+        if (covered[i] && this.bush[i]) this.bush[i] = 0;
       }
 
       // 5. 伤害判定：移动后的中心格着火 → 扣血（无敌期内不掉血）
@@ -321,15 +429,22 @@
         }
       }
 
-      // 6.5 掉血属性惩罚 + 宝箱回收（hit_attr_penalty）
+      // 6.5 掉血属性惩罚 + 宝箱回收（每项扣 clamp(round(25%×当前值), 1, 2) 档）
       if (CFG.hitAttrPenalty > 0) {
         for (let p = 0; p < 2; p++) {
           const dmg = hpBefore[p] - this.hp[p];
           if (dmg <= 0 || !alive0[p]) continue;
-          const nb = Math.max(this.bombsCap[p] - CFG.hitAttrPenalty, this.loBombs[p]);
-          const nz = Math.max(this.blastCap[p] - CFG.hitAttrPenalty, this.loBlast[p]);
-          const ns = Math.max(this.spdG[p] - CFG.hitAttrPenalty * CFG.growthSpeedStep,
-                              this.loSpeed[p]);
+          // 扣减档数: min 1 档, max 2 档, 中间 = 现在属性的 25%
+          //   泡 = 当前泡上限的 25%; 威 = 当前威力的 25%;
+          //   速 = 当前速度相对起点档数的 25%
+          const lossOf = (cur, start, step) =>
+            Math.min(2, Math.max(1, Math.round(0.25 * (cur - start) / step)));
+          const lb = lossOf(this.bombsCap[p], this.loBombs[p], 1);
+          const lz = lossOf(this.blastCap[p], this.loBlast[p], 1);
+          const ls = lossOf(this.spdG[p], this.loSpeed[p], CFG.growthSpeedStep);
+          const nb = Math.max(this.bombsCap[p] - lb, this.loBombs[p]);
+          const nz = Math.max(this.blastCap[p] - lz, this.loBlast[p]);
+          const ns = Math.max(this.spdG[p] - ls * CFG.growthSpeedStep, this.loSpeed[p]);
           const lost = (this.bombsCap[p] - nb) + (this.blastCap[p] - nz) +
             Math.round((this.spdG[p] - ns) / CFG.growthSpeedStep);
           this.bombsCap[p] = nb; this.blastCap[p] = nz; this.spdG[p] = ns;
@@ -346,10 +461,13 @@
         if (!this.crate[i]) continue;
         this.crate[i] = 0;
         const isRecycle = this.recycle[i] === 1;
+        const isSuper = this.superCrate[i] === 1;   // 超级宝箱 +4 档
+        const fAttr = this.crateType[i];            // 炸开时定好的种类(-1=随机)
         this.recycle[i] = 0;
-        const prob = isRecycle ? CFG.recycleCrateProb
-          : (this.mode === 'open' ? 1.0 : CFG.growthCrateProb);
-        if (this.rng() < prob) this._grow(p);
+        this.superCrate[i] = 0;
+        this.crateType[i] = -1;
+        // 爆率已在"炸砖→生箱"时判定过，踩到必升（种类提前定，见 _grow）
+        if (this.rng() < 1.0) this._grow(p, isSuper, fAttr >= 0 ? fAttr : null);
       }
 
       const nAlive = (this.alive[0] ? 1 : 0) + (this.alive[1] ? 1 : 0);
@@ -363,11 +481,13 @@
       return { placed, covered, triggered, died: this.lastDied.slice() };
     }
 
-    _grow(p) {
-      const attr = Math.floor(this.rng() * 3);   // 0 泡 / 1 威 / 2 速，均匀
-      if (attr === 0) this.bombsCap[p] = Math.min(this.bombsCap[p] + 1, CFG.growthBombsMax);
-      else if (attr === 1) this.blastCap[p] = Math.min(this.blastCap[p] + 1, CFG.growthBlastMax);
-      else this.spdG[p] = Math.min(this.spdG[p] + CFG.growthSpeedStep, CFG.growthSpeedMax);
+    _grow(p, isSuper, attrFixed) {
+      const add = isSuper ? 4 : 1;                 // 超级宝箱 +4 档
+      // 种类：炸开时已定(0/1/2)则用定好的；随机宝箱(问号)踩到才掷
+      const attr = attrFixed != null ? attrFixed : Math.floor(this.rng() * 3);
+      if (attr === 0) this.bombsCap[p] = Math.min(this.bombsCap[p] + add, this.bombsMax);
+      else if (attr === 1) this.blastCap[p] = Math.min(this.blastCap[p] + add, this.blastMax);
+      else this.spdG[p] = Math.min(this.spdG[p] + add * CFG.growthSpeedStep, this.speedMax);
     }
 
     _scatterRecycle(p, lost) {
@@ -388,7 +508,8 @@
 
       const pool = [];
       for (let i = 0; i < N; i++) {
-        if (!this.wall[i] && !this.brick[i] && !excl.has(i)) pool.push(i);
+        // 一次遍历: 可通行 && 非出生区 && **当前无道具**(不落在已有宝箱格上)
+        if (!this.wall[i] && !this.brick[i] && !excl.has(i) && !this.crate[i]) pool.push(i);
       }
       // 不放回抽样
       for (let k = 0; k < Math.min(lost, pool.length); k++) {
@@ -396,6 +517,7 @@
         const tmp = pool[k]; pool[k] = pool[j]; pool[j] = tmp;
         this.crate[pool[k]] = 1;
         this.recycle[pool[k]] = 1;
+        this.crateType[pool[k]] = -1;   // 回收宝箱=随机(问号)
       }
     }
 
@@ -533,11 +655,72 @@
     //   7 宝箱 | 8,9 无敌标记 | 10,11 可用泡/上限 | 12,13 泡上限/上限档
     encodeObs() {
       const C = 14;
-      const o = new Float32Array(C * N);
+      const ow = this.oldMode ? 13 : W;    // 旧 13x13 模型: 观测按 13 宽输出
+      const n = H * ow;
+      const o = new Float32Array(C * n);
       const splat = (ch, p) => {
-        const yx = this.pos[p * 2];
         if (!this.alive[p]) return;
         const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
+        const fy = Math.min(Math.max(y - 0.5, 0), H - 1);
+        const fx = Math.min(Math.max(x - 0.5, 0), ow - 1);
+        const y0 = Math.min(Math.floor(fy), H - 1);
+        const x0 = Math.min(Math.floor(fx), ow - 1);
+        const y1 = Math.min(y0 + 1, H - 1);
+        const x1 = Math.min(x0 + 1, ow - 1);
+        const wy = Math.min(Math.max(fy - y0, 0), 1);
+        const wx = Math.min(Math.max(fx - x0, 0), 1);
+        o[ch * n + y0 * ow + x0] += (1 - wy) * (1 - wx);
+        o[ch * n + y0 * ow + x1] += (1 - wy) * wx;
+        o[ch * n + y1 * ow + x0] += wy * (1 - wx);
+        o[ch * n + y1 * ow + x1] += wy * wx;
+      };
+      splat(0, 0); splat(1, 1);
+      // 全网格(15宽) → 旧网格(13宽) 逐格搬运; 旧列 c<13 与全网格列一致
+      for (let r = 0; r < H; r++) {
+        for (let c = 0; c < ow; c++) {
+          const fi = r * W + c, oi = r * ow + c;
+          if (this.owner[fi] === 0 && this.fuse[fi] > 0) o[2 * n + oi] = this.fuse[fi] / CFG.fuse;
+          if (this.owner[fi] === 1 && this.fuse[fi] > 0) o[3 * n + oi] = this.fuse[fi] / CFG.fuse;
+          if (this.wall[fi] || this.brick[fi]) o[4 * n + oi] = 1;
+          if (this.crate[fi]) o[7 * n + oi] = 1;
+        }
+      }
+      const danger = this.dangerMap();
+      for (let r = 0; r < H; r++) {
+        for (let c = 0; c < ow; c++) {
+          const fi = r * W + c, oi = r * ow + c;
+          o[5 * n + oi] = danger[fi];
+          o[6 * n + oi] = this.t / CFG.maxSteps;
+        }
+      }
+      // 无敌标记 + 可用泡/上限（玩家自己的格）
+      for (let p = 0; p < 2; p++) {
+        if (!this.alive[p]) continue;
+        const [r, c] = this.centerCell(p);
+        const i = r * ow + c;
+        if (this.invuln[p] > 0) o[(8 + p) * n + i] = 1;
+        const cap = Math.max(1, this.bombsCap[p]);
+        const avail = Math.max(0, this.bombsCap[p] - this.liveBombs(p));
+        o[(10 + p) * n + i] = avail / cap;
+        o[(12 + p) * n + i] = this.bombsCap[p] / CFG.growthBombsMax;
+      }
+      return o;
+    }
+
+    // ------------------------------------------------------- JAX 视角观测
+    // jax_bomb/jax_env.py::make_obs 的浏览器移植：玩家 pid 自己的 13 通道视角。
+    // transformer 专用（每玩家一份观测直接喂网络）；MLP/CNN 仍是上面的 14 通道
+    // 共享观测 + 折视角。通道顺序与 make_obs 完全一致：
+    //   ch0 我位置(splat) ch1 我的泡引信  ch2 敌位置(splat) ch3 敌泡引信
+    //   ch4 墙|砖  ch5 危险图  ch6 进度  ch7 宝箱存在  ch8 灌木
+    //   ch9 泡道具(1/4) ch10 威力道具(2/5) ch11 速度道具(3/6) ch12 超级(4/5/6)
+    encodeObsJAX(pid) {
+      const C = 13;
+      const o = new Float32Array(C * N);
+      const opp = 1 - pid;
+      const splat = (ch, p) => {
+        const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
+        if (!this.alive[p]) return;
         const fy = Math.min(Math.max(y - 0.5, 0), H - 1);
         const fx = Math.min(Math.max(x - 0.5, 0), W - 1);
         const y0 = Math.min(Math.floor(fy), H - 1);
@@ -551,32 +734,48 @@
         o[ch * N + y1 * W + x0] += wy * (1 - wx);
         o[ch * N + y1 * W + x1] += wy * wx;
       };
-      splat(0, 0); splat(1, 1);
+      splat(0, pid); splat(2, opp);
       for (let i = 0; i < N; i++) {
-        if (this.owner[i] === 0 && this.fuse[i] > 0) o[2 * N + i] = this.fuse[i] / CFG.fuse;
-        if (this.owner[i] === 1 && this.fuse[i] > 0) o[3 * N + i] = this.fuse[i] / CFG.fuse;
+        if (this.owner[i] === pid && this.fuse[i] > 0) o[1 * N + i] = this.fuse[i] / CFG.fuse;
+        if (this.owner[i] === opp && this.fuse[i] > 0) o[3 * N + i] = this.fuse[i] / CFG.fuse;
         if (this.wall[i] || this.brick[i]) o[4 * N + i] = 1;
-        if (this.crate[i]) o[7 * N + i] = 1;
+        if (this.crate[i] > 0) o[7 * N + i] = 1;
+        if (this.bush[i]) o[8 * N + i] = 1;
+        if (this.crate[i] > 0) {
+          const ct = this.crateType[i], sup = this.superCrate[i] === 1;
+          if (ct === 0) o[9 * N + i] = 1;          // 泡道具（普通 1 / 超级 4）
+          else if (ct === 1) o[10 * N + i] = 1;    // 威力道具（2 / 5）
+          else if (ct === 2) o[11 * N + i] = 1;    // 速度道具（3 / 6）
+          if (sup) o[12 * N + i] = 1;              // 超级档（4/5/6，+4）
+        }
       }
       const danger = this.dangerMap();
       for (let i = 0; i < N; i++) o[5 * N + i] = danger[i];
       const tv = this.t / CFG.maxSteps;
       for (let i = 0; i < N; i++) o[6 * N + i] = tv;
-      // 无敌标记 + 可用泡/上限（玩家自己的格）
-      for (let p = 0; p < 2; p++) {
-        if (!this.alive[p]) continue;
-        const [r, c] = this.centerCell(p);
-        const i = r * W + c;
-        if (this.invuln[p] > 0) o[(8 + p) * N + i] = 1;
-        const cap = Math.max(1, this.bombsCap[p]);
-        const avail = Math.max(0, this.bombsCap[p] - this.liveBombs(p));
-        o[(10 + p) * N + i] = avail / cap;
-        o[(12 + p) * N + i] = this.bombsCap[p] / CFG.growthBombsMax;
-      }
       return o;
     }
 
-    // ------------------------------------------------------- 合法动作掩码
+    // jax_env.global_vec 的浏览器移植：玩家 pid 视角 24 维全局向量
+    // （state token 输入）。buffs/debuffs/items/gametype 训练侧当前全 0
+    // （预留位），Web 端同样给 0，与训练分布一致。
+    encodeStateJAX(pid) {
+      const opp = 1 - pid;
+      const g = new Float64Array(24);
+      g[0] = this.t / CFG.maxSteps;
+      g[1] = this.hp[pid] / CFG.maxHp;
+      g[2] = this.hp[opp] / CFG.maxHp;
+      g[3] = this.bombsCap[pid] / CFG.growthBombsMax;
+      g[4] = this.blastCap[pid] / CFG.growthBlastMax;
+      g[5] = this.spdG[pid] / CFG.growthSpeedMax;
+      g[6] = this.bombsCap[opp] / CFG.growthBombsMax;
+      g[7] = this.blastCap[opp] / CFG.growthBlastMax;
+      g[8] = this.spdG[opp] / CFG.growthSpeedMax;
+      g[9] = this.alive[pid] ? 1 : 0;
+      g[10] = this.alive[opp] ? 1 : 0;
+      return g;   // g[11..23] = 0（预留）
+    }
+
     // 方向掩码：探针 4 方向（按 step_len 试探碰撞消解，动了才算合法）；IDLE 恒合法。
     // 放泡掩码：中心格可放泡（can_place）；bomb=0 恒合法。
     legalMask() {
@@ -593,14 +792,16 @@
         for (let mv = 0; mv < 4; mv++) {
           const [dy, dx] = DIRS[mv];
           let moved = false;
+          // 判定阈值 = 步长 5% (不能只靠 EPS: 贴墙时 stopPos 含 +EPS 会误报可走)
+          const minMove = dist * 0.05;
           if (dy !== 0) {
             const ny = resolveAxis(y + dy * dist, dy * dist, x, y, x,
                                    blocked, CFG.radius, H, W, true);
-            moved = Math.abs(ny - y) > EPS * 2;
+            moved = Math.abs(ny - y) > minMove;
           } else {
             const nx = resolveAxis(x + dx * dist, dx * dist, y, y, x,
                                    blocked, CFG.radius, H, W, false);
-            moved = Math.abs(nx - x) > EPS * 2;
+            moved = Math.abs(nx - x) > minMove;
           }
           mm[p][mv] = moved ? 1 : 0;
         }
@@ -867,6 +1068,450 @@
     }
   }
 
+  // ---------------------------------------------------------------- Transformer 模型
+  // jax_bomb/jax_net.py::init_transformer / transformer_forward 的浏览器移植
+  // （ViT 风格：patch 切块 + state token + pre-norm MHA/FFN + patch-token
+  // 均值池化 + 三头）。与 MLP/CNN 不同：输入是**每玩家视角** obs（13 通道
+  // encodeObsJAX） + 24 维 global_vec（encodeStateJAX），不走共享观测/折视角。
+  // 数值对齐 jax_bomb 训练：LN eps=1e-6，softmax 前 scores 先 round 到 fp32，
+  // q/k/v 按 (T,heads,d) 切分后转置成 (heads,T,d)（不能直接 reshape(heads,T,d)）。
+  class TransformerModel extends MLPModel {
+    constructor(doc) {
+      super(doc);
+      this.embed = doc.meta.embed;
+      this.patch = doc.meta.patch;
+      this.depth = doc.meta.depth;
+      const E = this.embed, P = this.patch;
+      const gp = Math.ceil(this.obsShape[1] / P), nTok = gp * gp, T17 = nTok + 1;
+      this._nTok = nTok; this._T17 = T17;
+      const F = this.T('b0_ff1_w').length / E;      // ff_factor*E
+      // 一次性分配全部中间缓冲（forward 内零分配；GC 是纯 JS 前向的最大
+      // 隐性开销之一）。容量按 2 玩家（观战批处理）分配，单玩家只用前半。
+      this._x = new Float64Array(2 * nTok * E);
+      this._cur = new Float64Array(2 * T17 * E);
+      this._ln1 = new Float64Array(2 * T17 * E);
+      this._ln2 = new Float64Array(2 * T17 * E);
+      this._q = new Float64Array(2 * T17 * E);
+      this._k = new Float64Array(2 * T17 * E);
+      this._v = new Float64Array(2 * T17 * E);
+      this._scores = new Float64Array(2 * 4 * T17 * T17);
+      this._w = new Float64Array(2 * 4 * T17 * T17);
+      this._att = new Float64Array(2 * T17 * E);
+      this._ff = new Float64Array(2 * T17 * F);
+      this._g = new Float64Array(2 * E);
+      this._cSim = null; this._cGen = -1; this._cT = [-1, -1]; this._cA = [null, null];
+      this._inferMs = 0;               // 推理耗时累加器（[prof] 每秒读取后清零）
+      // 矩阵乘权重**预转置**成 (N,K) 布局（Float32）：forward 的 4 路展开
+      // 内层按 j 连续读（纯 JS 标量循环约 2.5× 提速，见 matmul 微基准）。
+      this._tokT = this._transpose(this.T('tok_w'), E);
+      this._qT = []; this._kT = []; this._vT = []; this._prT = [];
+      this._ff1T = []; this._ff2T = [];
+      for (let i = 0; i < this.depth; i++) {
+        const p = String(i);
+        this._qT.push(this._transpose(this.T('b' + p + '_q_w'), E));
+        this._kT.push(this._transpose(this.T('b' + p + '_k_w'), E));
+        this._vT.push(this._transpose(this.T('b' + p + '_v_w'), E));
+        this._prT.push(this._transpose(this.T('b' + p + '_proj_w'), E));
+        this._ff1T.push(this._transpose(this.T('b' + p + '_ff1_w'), E));   // (E,F)→(F,E)
+        this._ff2T.push(this._transpose(this.T('b' + p + '_ff2_w'), F));   // (F,E)→(E,F)
+      }
+    }
+
+    // w 按 (K,N) 行主序 → 返回 (N,K) Float32 转置
+    _transpose(w, K) {
+      const n = w.length / K, t = new Float32Array(w.length);
+      for (let j = 0; j < K; j++) {
+        const src = j * n, dst = j;
+        for (let i = 0; i < n; i++) t[dst + i * K] = w[src + i];
+      }
+      return t;
+    }
+
+    // 4 路展开矩阵乘（无分支专用版，V8 易内联）：out[t*N+e] = sum_j a[t*K+j]*wT[e*K+j] + bias[e]。
+    // 要求 N % 4 == 0（本模型 E=392、F=1568 均满足）；4 个独立局部累加链是 V8
+    // 标量循环最快的形态（微基准 ~2.5× 于朴素三重循环）。
+    _mmB(out, a, wT, bias, M, K, N) {
+      for (let t = 0; t < M; t++) {
+        const arow = t * K, orow = t * N;
+        for (let e = 0; e < N; e += 4) {
+          const w0 = e * K, w1 = w0 + K, w2 = w1 + K, w3 = w2 + K;
+          let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+          for (let j = 0; j < K; j++) {
+            const av = a[arow + j];
+            s0 += av * wT[w0 + j];
+            s1 += av * wT[w1 + j];
+            s2 += av * wT[w2 + j];
+            s3 += av * wT[w3 + j];
+          }
+          out[orow + e] = s0 + bias[e];
+          out[orow + e + 1] = s1 + bias[e + 1];
+          out[orow + e + 2] = s2 + bias[e + 2];
+          out[orow + e + 3] = s3 + bias[e + 3];
+        }
+      }
+    }
+
+    // 同上，但累加到 out（out += a@wT + bias），用于残差连接/FFN 第二段
+    _mmA(out, a, wT, bias, M, K, N) {
+      for (let t = 0; t < M; t++) {
+        const arow = t * K, orow = t * N;
+        for (let e = 0; e < N; e += 4) {
+          const w0 = e * K, w1 = w0 + K, w2 = w1 + K, w3 = w2 + K;
+          let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+          for (let j = 0; j < K; j++) {
+            const av = a[arow + j];
+            s0 += av * wT[w0 + j];
+            s1 += av * wT[w1 + j];
+            s2 += av * wT[w2 + j];
+            s3 += av * wT[w3 + j];
+          }
+          out[orow + e] += s0 + bias[e];
+          out[orow + e + 1] += s1 + bias[e + 1];
+          out[orow + e + 2] += s2 + bias[e + 2];
+          out[orow + e + 3] += s3 + bias[e + 3];
+        }
+      }
+    }
+
+    // obs: Float32Array(C*H*W) 每玩家视角；state: Float64Array(24)
+    // 返回 { move: [5], bomb: [2], value: number }（move/bomb 与 MLP 同签名）
+    forward(obs, state) {
+      const t0 = performance.now();
+      const out = this._run(1, [obs], [state])[0];
+      this._inferMs += performance.now() - t0;   // [prof] 推理耗时累计
+      return out;
+    }
+
+    // 双玩家批处理：一次前向同时出两名玩家的 logits（观战 AI vs AI 用，
+    // 权重只读一遍，比两次单玩家前向省 ~35%）。返回 [{move,bomb,value}×2]。
+    forward2(o0, s0, o1, s1) {
+      return this._run(2, [o0, o1], [s0, s1]);
+    }
+
+    // 数值对齐 jax_bomb 训练：LN eps=1e-6，softmax 前 scores 先 round 到
+    // fp32，q/k/v 按 (T,heads,d) 切分（t*E + h*d + dd 索引，等价
+    // (T,E)→(T,heads,d)，不额外物化转置）。
+    _run(n, obsList, stateList) {
+      const [C, h, w] = this.obsShape;
+      const E = this.embed, P = this.patch, heads = 4;
+      const gp = Math.ceil(h / P), nTok = this._nTok, T17 = this._T17;
+      const d = E / heads;
+      const tokW = this.T('tok_w'), tokB = this.T('tok_b');
+      const pos = this.T('pos');              // (T17, E)
+      const N2 = h * w;
+      const TS = T17 * E, AS = heads * T17 * T17;   // 玩家行距
+      const x = this._x, cur = this._cur, ln1 = this._ln1, ln2 = this._ln2;
+      const q = this._q, k = this._k, v = this._v;
+      const scores = this._scores, wm = this._w, att = this._att,
+            ff = this._ff, g = this._g;
+      const rows = n * T17;                    // LN/线性层按行展开（跨玩家）
+
+      // 1) patch embedding：obs (C,h,w) 补零到 (C, gp*P, gp*P)，按
+      //    (patch行, patch列, 通道, pr, pc) 展平 → tok 线性 + 位置编码。
+      //    x 是复用缓冲且用 += 累加，必须先清零。x 玩家行距 = nTok*E。
+      x.fill(0);
+      for (let p = 0; p < n; p++) {
+        const obs = obsList[p];
+        for (let t = 0; t < nTok; t++) {
+          const tr = (t / gp) | 0, tc = t % gp;
+          const base = p * nTok * E + t * E;
+          for (let ch = 0; ch < C; ch++) {
+            const chOff = ch * P * P * E;
+            const oCh = ch * N2;              // 每通道基址；格索引 = r*W+cc（r/cc 已含 patch 偏移）
+            for (let pr = 0; pr < P; pr++) {
+              const r = tr * P + pr;
+              if (r >= h) break;              // 补零区
+              for (let pc = 0; pc < P; pc++) {
+                const cc = tc * P + pc;
+                if (cc >= w) break;           // 补零区
+                const ov = obs[oCh + r * W + cc];
+                if (ov === 0) continue;
+                const wOff = chOff + (pr * P + pc) * E;
+                for (let e = 0; e < E; e++) x[base + e] += ov * tokW[wOff + e];
+              }
+            }
+          }
+          for (let e = 0; e < E; e++) x[base + e] += tokB[e] + pos[t * E + e];
+        }
+      }
+
+      // 2) state token：global_vec(24) @ state_w + state_b + 自己的位置编码
+      const stateW = this.T('state_w'), stateB = this.T('state_b');
+      for (let p = 0; p < n; p++) {
+        const cb = p * TS, xb = p * nTok * E;
+        for (let t = 0; t < nTok; t++)
+          for (let e = 0; e < E; e++) cur[cb + t * E + e] = x[xb + t * E + e];
+        const state = stateList[p];
+        for (let e = 0; e < E; e++) {
+          let s = stateB[e] + pos[nTok * E + e];
+          for (let j = 0; j < state.length; j++) s += state[j] * stateW[j * E + e];
+          cur[cb + nTok * E + e] = s;
+        }
+      }
+
+      // 3) pre-norm MHA / FFN blocks（LN eps=1e-6，与 jax_net 一致）
+      for (let i = 0; i < this.depth; i++) {
+        const p = String(i);
+        const ln1g = this.T('b' + p + '_ln1_g'), ln1b = this.T('b' + p + '_ln1_b');
+        const qb = this.T('b' + p + '_q_b');
+        const kb = this.T('b' + p + '_k_b');
+        const vb = this.T('b' + p + '_v_b');
+        const prb = this.T('b' + p + '_proj_b');
+        const ln2g = this.T('b' + p + '_ln2_g'), ln2b = this.T('b' + p + '_ln2_b');
+        const f1b = this.T('b' + p + '_ff1_b');
+        const f2b = this.T('b' + p + '_ff2_b');
+
+        // LN1（逐行，跨玩家）
+        for (let t = 0; t < rows; t++) {
+          let m = 0;
+          const row = t * E;
+          for (let e = 0; e < E; e++) m += cur[row + e];
+          m /= E;
+          let vv = 0;
+          for (let e = 0; e < E; e++) { const dd = cur[row + e] - m; vv += dd * dd; }
+          const inv = 1 / Math.sqrt(vv / E + 1e-6);
+          for (let e = 0; e < E; e++)
+            ln1[row + e] = (cur[row + e] - m) * inv * ln1g[e] + ln1b[e];
+        }
+        // q/k/v：(rows,E) @ (E,E)，转置权重 + 4 路展开（bias 尾加，对齐 JAX）
+        this._mmB(q, ln1, this._qT[i], qb, rows, E, E);
+        this._mmB(k, ln1, this._kT[i], kb, rows, E, E);
+        this._mmB(v, ln1, this._vT[i], vb, rows, E, E);
+        // scores = einsum("htd,hTd->htT") / sqrt(d) —— attention 只在玩家
+        // 自己的 17 个 token 内（跨玩家不混合）
+        for (let p = 0; p < n; p++) {
+          const qo = p * TS, so = p * AS;
+          for (let h = 0; h < heads; h++) {
+            for (let t = 0; t < T17; t++) {
+              const sBase = so + h * T17 * T17 + t * T17;
+              const qt = qo + t * E + h * d;
+              for (let T2 = 0; T2 < T17; T2++) {
+                let s = 0;
+                const kt = qo + T2 * E + h * d;
+                for (let dd = 0; dd < d; dd++) s += q[qt + dd] * k[kt + dd];
+                scores[sBase + T2] = s / Math.sqrt(d);
+              }
+            }
+          }
+        }
+        // softmax：scores 先 round 到 fp32（训练 softmax 在 fp32 算，bf16 下更稳）
+        for (let p = 0; p < n; p++) {
+          const so = p * AS;
+          for (let h = 0; h < heads; h++) {
+            for (let t = 0; t < T17; t++) {
+              const base = so + h * T17 * T17 + t * T17;
+              let mx = -Infinity;
+              for (let T2 = 0; T2 < T17; T2++) {
+                const f = Math.fround(scores[base + T2]);
+                if (f > mx) mx = f;
+              }
+              let sum = 0;
+              for (let T2 = 0; T2 < T17; T2++) {
+                const pp = Math.exp(Math.fround(scores[base + T2]) - mx);
+                wm[base + T2] = pp; sum += pp;
+              }
+              for (let T2 = 0; T2 < T17; T2++) wm[base + T2] /= sum;
+            }
+          }
+        }
+        // att = einsum("htT,hTd->htd")，输出直接写 (T,heads,d) 展平
+        for (let p = 0; p < n; p++) {
+          const qo = p * TS, so = p * AS;
+          for (let t = 0; t < T17; t++) {
+            const at = qo + t * E;
+            for (let h = 0; h < heads; h++) {
+              const wBase = so + h * T17 * T17 + t * T17;
+              for (let dd = 0; dd < d; dd++) {
+                let s = 0;
+                const ai = at + h * d + dd;
+                for (let T2 = 0; T2 < T17; T2++)
+                  s += wm[wBase + T2] * v[qo + T2 * E + h * d + dd];
+                att[ai] = s;
+              }
+            }
+          }
+        }
+        // x = x + att @ proj + proj_b（累加到 cur）
+        this._mmA(cur, att, this._prT[i], prb, rows, E, E);
+        // LN2 + ReLU FFN：relu(ln2 @ ff1 + f1b) @ ff2 + f2b
+        for (let t = 0; t < rows; t++) {
+          let m = 0;
+          const row = t * E;
+          for (let e = 0; e < E; e++) m += cur[row + e];
+          m /= E;
+          let vv = 0;
+          for (let e = 0; e < E; e++) { const dd = cur[row + e] - m; vv += dd * dd; }
+          const inv = 1 / Math.sqrt(vv / E + 1e-6);
+          for (let e = 0; e < E; e++)
+            ln2[row + e] = (cur[row + e] - m) * inv * ln2g[e] + ln2b[e];
+        }
+        const F = this._ff1T[i].length / E;     // ff1: (E, F)，F = ff_factor*E
+        this._mmB(ff, ln2, this._ff1T[i], f1b, rows, E, F);
+        for (let j = 0; j < ff.length; j++) if (ff[j] < 0) ff[j] = 0;   // ReLU
+        this._mmA(cur, ff, this._ff2T[i], f2b, rows, F, E);
+      }
+
+      // 4) patch-token 均值池化 → 三头（每玩家）
+      const hmw = this.T('head_wm_w'), hmb = this.T('head_wm_b');   // (E, 5)
+      const hbw = this.T('head_wb_w'), hbb = this.T('head_wb_b');   // (E, 2)
+      const hvw = this.T('head_wv_w'), hvb = this.T('head_wv_b');   // (E, 1)
+      const outs = [];
+      for (let p = 0; p < n; p++) {
+        const base = p * TS;
+        for (let e = 0; e < E; e++) {
+          let s = 0;
+          for (let t = 0; t < nTok; t++) s += cur[base + t * E + e];
+          g[e] = s / nTok;
+        }
+        const move = new Float64Array(5), bomb = new Float64Array(2);
+        for (let j = 0; j < E; j++) {
+          const gj = g[j], j5 = j * 5, j2 = j * 2;
+          for (let o = 0; o < 5; o++) move[o] += gj * hmw[j5 + o];
+          for (let o = 0; o < 2; o++) bomb[o] += gj * hbw[j2 + o];
+        }
+        for (let o = 0; o < 5; o++) move[o] += hmb[o];
+        for (let o = 0; o < 2; o++) bomb[o] += hbb[o];
+        let value = hvb[0];
+        for (let j = 0; j < E; j++) value += g[j] * hvw[j];
+        outs.push({ move, bomb, value });
+      }
+      return outs;
+    }
+
+    // AI 决策：每玩家自己的视角，不需要通道互换。按 (sim, pid, tick) 缓存：
+    // 同一 tick 重复询问同一玩家不再重复推理；不同玩家各算各的（人机对局
+    // 只算 pid=1，不白跑 pid=0）。inferEvery>1 时每隔 N tick 才推理一次，
+    // 中间 tick 复用上一次的动作（省 CPU 的玩法选项；默认 1 = 每 tick）。
+    act(sim, pid, rng) {
+      const every = this.inferEvery || 1;
+      const need = sim !== this._cSim || sim._gen !== this._cGen ||
+        this._cT[pid] < 0 || (sim.t - this._cT[pid] >= every);
+      if (need) {
+        this._cSim = sim; this._cGen = sim._gen;
+        const { mm, bm } = sim.legalMask();
+        this._cA[pid] = this._decide(sim, pid, mm, bm, rng);
+        this._cT[pid] = sim.t;
+      }
+      return this._cA[pid];
+    }
+
+    _decide(sim, pid, mm, bm, rng) {
+      const logits = this.forward(sim.encodeObsJAX(pid), sim.encodeStateJAX(pid));
+      const aM = this._sampleMasked(logits.move, mm[pid], rng);
+      const aB = this._sampleMasked(logits.bomb, bm[pid], rng);
+      return [aM, aB];
+    }
+
+    // 观战双模型：一次批处理前向出双玩家动作（权重只读一遍，比两次单玩家
+    // 前向省 ~35%）。返回 [a0, a1]，缓存语义与 act 一致（含降频）。
+    bothAct(sim, rng) {
+      const every = this.inferEvery || 1;
+      const need = sim !== this._cSim || sim._gen !== this._cGen ||
+        this._cT[0] < 0 || (sim.t - this._cT[0] >= every);
+      if (need) {
+        this._cSim = sim; this._cGen = sim._gen;
+        const { mm, bm } = sim.legalMask();
+        const [f0, f1] = this.forward2(
+          sim.encodeObsJAX(0), sim.encodeStateJAX(0),
+          sim.encodeObsJAX(1), sim.encodeStateJAX(1));
+        this._cA[0] = [this._sampleMasked(f0.move, mm[0], rng),
+                      this._sampleMasked(f0.bomb, bm[0], rng)];
+        this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
+                      this._sampleMasked(f1.bomb, bm[1], rng)];
+        this._cT[0] = sim.t; this._cT[1] = sim.t;
+      }
+      return this._cA;
+    }
+  }
+
+  // ---------------------------------------------------------------- ORT Transformer 模型
+  // onnxruntime-web 推理（WebGPU EP 优先，WASM 回退；session 由 main.js 创建，
+  // 创建失败时直接用上面的纯 JS TransformerModel 兜底）。与 JS 版同一套
+  // act/bothAct 缓存语义（每 tick、每玩家、含降频），只是 forward 走 session。
+  // session.run 是异步的 → act/bothAct 返回 Promise，游戏 tick 需 await。
+  class ORTTransformerModel extends TransformerModel {
+    constructor(doc, session) {
+      super(doc);
+      this.session = session;
+    }
+
+    async forward(obs, state) {
+      const t0 = performance.now();
+      const out = await this.session.run({
+        obs: new ort.Tensor('float32', obs, [1, this.obsShape[0], this.obsShape[1], this.obsShape[2]]),
+        state: new ort.Tensor('float32', Float32Array.from(state), [1, state.length]),
+      });
+      this._inferMs += performance.now() - t0;   // [prof] 推理耗时累计
+      return { move: out.move.data, bomb: out.bomb.data, value: out.value.data[0] };
+    }
+
+    // 双玩家批处理（观战）：一次 session.run 出两人（batch=2）
+    async forward2(o0, s0, o1, s1) {
+      const t0 = performance.now();
+      const C = this.obsShape[0], h = this.obsShape[1], w = this.obsShape[2];
+      const obs = new Float32Array(2 * C * h * w);
+      obs.set(o0, 0); obs.set(o1, C * h * w);
+      const st = new Float32Array(48);
+      st.set(Float32Array.from(s0), 0); st.set(Float32Array.from(s1), 24);
+      const out = await this.session.run({
+        obs: new ort.Tensor('float32', obs, [2, C, h, w]),
+        state: new ort.Tensor('float32', st, [2, 24]),
+      });
+      this._inferMs += performance.now() - t0;   // [prof] 推理耗时累计
+      const n5 = 5, n2 = 2;
+      const f0 = {
+        move: out.move.data.subarray(0, n5),
+        bomb: out.bomb.data.subarray(0, n2),
+        value: out.value.data[0],
+      };
+      const f1 = {
+        move: out.move.data.subarray(n5, n5 + n5),
+        bomb: out.bomb.data.subarray(n2, n2 + n2),
+        value: out.value.data[1],
+      };
+      return [f0, f1];
+    }
+
+    async act(sim, pid, rng) {
+      const every = this.inferEvery || 1;
+      const need = sim !== this._cSim || sim._gen !== this._cGen ||
+        this._cT[pid] < 0 || (sim.t - this._cT[pid] >= every);
+      if (need) {
+        this._cSim = sim; this._cGen = sim._gen;
+        const { mm, bm } = sim.legalMask();
+        this._cA[pid] = await this._decide(sim, pid, mm, bm, rng);
+        this._cT[pid] = sim.t;
+      }
+      return this._cA[pid];
+    }
+
+    async bothAct(sim, rng) {
+      const every = this.inferEvery || 1;
+      const need = sim !== this._cSim || sim._gen !== this._cGen ||
+        this._cT[0] < 0 || (sim.t - this._cT[0] >= every);
+      if (need) {
+        this._cSim = sim; this._cGen = sim._gen;
+        const { mm, bm } = sim.legalMask();
+        const [f0, f1] = await this.forward2(
+          sim.encodeObsJAX(0), sim.encodeStateJAX(0),
+          sim.encodeObsJAX(1), sim.encodeStateJAX(1));
+        this._cA[0] = [this._sampleMasked(f0.move, mm[0], rng),
+                      this._sampleMasked(f0.bomb, bm[0], rng)];
+        this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
+                      this._sampleMasked(f1.bomb, bm[1], rng)];
+        this._cT[0] = sim.t; this._cT[1] = sim.t;
+      }
+      return this._cA;
+    }
+
+    async _decide(sim, pid, mm, bm, rng) {
+      const logits = await this.forward(sim.encodeObsJAX(pid), sim.encodeStateJAX(pid));
+      const aM = this._sampleMasked(logits.move, mm[pid], rng);
+      const aB = this._sampleMasked(logits.bomb, bm[pid], rng);
+      return [aM, aB];
+    }
+  }
+
   // ---------------------------------------------------------------- 规则 AI
   // sim/bots.py::astar_attack(eat_crates=True) 的标量移植 —— 启动器的「纯进攻
   // 寻路 hunter」：恒 aggressive（逼近+放泡），成长属性 ≥2 项不满 70% 且有
@@ -951,6 +1596,11 @@
       for (let i = 0; i < N; i++) {
         blocked[i] = sim.wall[i] || sim.brick[i] || sim.fuse[i] > 0 ? 1 : 0;
       }
+      // 逼近场用**只挡永久墙**的版本：可炸砖视为可通（炸开即可过）—— 否则对手
+      // 被砖封在舱室里时 V_opp=∞，Hunter 会放弃追击转逃生乱走。真正的移动
+      // 合法性仍排除砖（不能走进砖），破砖交给下方"破砖开路"放泡逻辑。
+      const blockedWalls = new Uint8Array(N);
+      for (let i = 0; i < N; i++) blockedWalls[i] = sim.wall[i] ? 1 : 0;
 
       // 两个基础场：逃生场（安全格为源）+ 逼近场（对手为源）
       const safeSrc = new Uint8Array(N);
@@ -962,7 +1612,7 @@
         const [ro, co] = sim.centerCell(o);
         oppSrc[ro * W + co] = 1;
       }
-      const V_opp = this._dijkstra(oppSrc, danger, blocked);
+      const V_opp = this._dijkstra(oppSrc, danger, blockedWalls);   // 砖可通，逼近场恒有限
 
       // 5 个候选动作的目标格（4 方向 + IDLE = 当前格）
       const cells = new Int32Array(5);
@@ -1108,8 +1758,20 @@
       for (let mv = 0; mv < 5; mv++) {
         if (legal[mv] && dngC[mv] < 0.35 && !thrC[mv]) { canEscape = true; break; }
       }
+      // 破砖开路：面前（4 邻）有可炸砖、且在"忽略砖"逼近场上比脚下更接近
+      // 对手（砖在通往对手的路径上）→ 放泡炸开，而不是绕圈/发呆。
+      let brickBlock = false;
+      if (sim.bombsCap[pid] > 0 && sim.alive[pid]) {
+        const vOwn = V_opp[ownIdx];
+        for (let d = 0; d < 4; d++) {
+          const nr = rIdx + DIRS[d][0], nc = cIdx + DIRS[d][1];
+          if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+          const j = nr * W + nc;
+          if (sim.brick[j] && !sim.wall[j] && V_opp[j] < vOwn) { brickBlock = true; break; }
+        }
+      }
       let bomb = 0;
-      if (bm[pid][1] === 1 && (alignedOpp || nearOpp || chain) &&
+      if (bm[pid][1] === 1 && (alignedOpp || nearOpp || chain || brickBlock) &&
           ownDng < 0.2 && canEscape && sim.alive[pid]) {
         bomb = 1;
       }
@@ -1122,7 +1784,8 @@
     H, W, N, N_PLAYERS, N_MOVES, N_BOMB,
     MOVE_UP, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_IDLE,
     DIRS, EPS, CFG,
-    Sim, MLPModel, CNNModel, HunterAI, mulberry32, resolveAxis, decodeB64,
+    Sim, MLPModel, CNNModel, TransformerModel, ORTTransformerModel, HunterAI,
+    mulberry32, resolveAxis, decodeB64,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = QQT;
   else root.QQT = QQT;

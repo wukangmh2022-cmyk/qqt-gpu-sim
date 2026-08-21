@@ -10,12 +10,12 @@
 <div id="wrap">
   <header>
     <h1>💣 QQT 格斗</h1>
-    <p class="sub">训练侧 PPO 模型（MLP 345K）在浏览器里实时推理 · 原版素材渲染 · 与你对战</p>
+    <p class="sub">241 张原版 QQ堂地图 · 原版元件贴图渲染 · 规则 Hunter AI 对打</p>
   </header>
 
   <div id="layout">
     <div id="stage">
-      <canvas id="game" width="780" height="876"></canvas>
+      <canvas id="game" width="900" height="906"></canvas>
       <div id="loading">
         <div class="box">
           <div class="spinner"></div>
@@ -28,14 +28,8 @@
     <aside id="panel">
       <section>
         <h3>⚙️ 开局设置</h3>
-        <label>地图
-          <select id="mode">
-            <option value="open" selected>空场（中心宝箱 · 8泡/6威/1.68速起步）</option>
-            <option value="corridor">走廊（顶墙侧砖 · 2泡/2威/1.6速起步 踩箱成长）</option>
-          </select>
-        </label>
-        <label>场景（皮肤 + 背景音乐）
-          <select id="scene"></select>
+        <label class="row">
+          <button id="map-btn" type="button">🗺️ 换地图（黑屏菜单选择）</button>
         </label>
         <label>人物皮肤
           <select id="skin"></select>
@@ -55,6 +49,9 @@
         <label class="row">
           <input type="checkbox" id="danger" checked> 显示危险图（D 键切换，默认开）
         </label>
+        <label class="row" title="AI 模型每隔 N tick 才推理一次，中间 tick 复用上次动作（省 CPU 提帧率；默认每 tick 推理）">
+          <input type="checkbox" id="model-lowfreq"> AI 模型推理降频（省 CPU）
+        </label>
         <label class="row">
           <input type="checkbox" id="sound" checked> 音效（M 键切换）
         </label>
@@ -71,6 +68,9 @@
 
       <section>
         <h3>📼 录像</h3>
+        <label class="row">
+          <input type="checkbox" id="rec-clip"> 录制动图（保存 GIF 用；默认关 = 零开销）
+        </label>
         <div class="rec-row">
           <button id="save-replay" type="button">💾 保存本局录像</button>
           <button id="save-gif" type="button">🎞️ 保存 GIF 动图</button>
@@ -89,6 +89,7 @@
   </div>
 </div>
 
+<script src="vendor/ort/ort.all.min.js"></script>
 <script src="vendor/gifenc.global.js"></script>
 <script src="sim.js"></script>
 <script src="main.js"></script>

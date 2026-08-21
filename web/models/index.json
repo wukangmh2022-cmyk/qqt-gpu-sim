@@ -99,6 +99,23 @@
    "generated_at": "2026-08-16 15:11 UTC"
   },
   {
+   "name": "params_it00000500",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 500,
+   "global_step": 4194304000,
+   "source": "params_it00000500.pkl",
+   "generated_at": "2026-08-20 23:10 UTC"
+  },
+  {
    "name": "duel_nobc_4B",
    "arch": "mlp",
    "obs_shape": [
@@ -127,6 +144,57 @@
    "generated_at": "2026-08-16 15:11 UTC"
   },
   {
+   "name": "params_it00000340",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 340,
+   "global_step": 2852126720,
+   "source": "params_it00000340.pkl",
+   "generated_at": "2026-08-20 15:31 UTC"
+  },
+  {
+   "name": "params_it00000238",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 238,
+   "global_step": 1996488704,
+   "source": "params_it00000238.pkl",
+   "generated_at": "2026-08-20 14:06 UTC"
+  },
+  {
+   "name": "params_it00000204",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 204,
+   "global_step": 1711276032,
+   "source": "params_it00000204.pkl",
+   "generated_at": "2026-08-20 13:28 UTC"
+  },
+  {
    "name": "course_1023m",
    "arch": "mlp",
    "obs_shape": [
@@ -141,6 +209,23 @@
    "generated_at": "2026-08-16 15:11 UTC"
   },
   {
+   "name": "params_it00000102",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 102,
+   "global_step": 855638016,
+   "source": "params_it00000102.pkl",
+   "generated_at": "2026-08-20 13:28 UTC"
+  },
+  {
    "name": "cnn_course_latest_min",
    "arch": "cnn",
    "obs_shape": [
@@ -153,6 +238,23 @@
    "elo": 2503.3,
    "source": "cnn_course_latest_min.pt",
    "generated_at": "2026-08-16 15:11 UTC"
+  },
+  {
+   "name": "params_it00000068",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 68,
+   "global_step": 570425344,
+   "source": "params_it00000068.pkl",
+   "generated_at": "2026-08-20 13:28 UTC"
   },
   {
    "name": "cnn_course_min",

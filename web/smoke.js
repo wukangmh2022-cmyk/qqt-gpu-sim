@@ -21,8 +21,8 @@ function checkInvariants(sim, tick) {
   for (let p = 0; p < 2; p++) {
     const y = sim.pos[p * 2], x = sim.pos[p * 2 + 1];
     assert(isFinite(y) && isFinite(x), `tick ${tick} p${p} pos 非有限`);
-    assert(y >= CFG.radius - 1e-9 && y <= 13 - CFG.radius + 1e-9, `tick ${tick} p${p} y 越界: ${y}`);
-    assert(x >= CFG.radius - 1e-9 && x <= 13 - CFG.radius + 1e-9, `tick ${tick} p${p} x 越界: ${x}`);
+    assert(y >= CFG.radius - 1e-9 && y <= QQT.H - CFG.radius + 1e-9, `tick ${tick} p${p} y 越界: ${y}`);
+    assert(x >= CFG.radius - 1e-9 && x <= QQT.W - CFG.radius + 1e-9, `tick ${tick} p${p} x 越界: ${x}`);
     assert(sim.hp[p] >= 0 && sim.hp[p] <= CFG.maxHp, `tick ${tick} p${p} hp 非法`);
     assert(sim.invuln[p] >= 0, `tick ${tick} p${p} invuln 非法`);
     assert(sim.bombsCap[p] >= 0 && sim.blastCap[p] >= 0, `tick ${tick} p${p} 成长非法`);
@@ -120,7 +120,7 @@ function main() {
     sim.step([a0, a1]);
     if (k % 50 === 0) {
       const obs = sim.encodeObs();
-      assert(obs.length === 14 * 169, '观测通道数不对');
+      assert(obs.length === 14 * QQT.N, '观测通道数不对');
       let any = false;
       for (let i = 0; i < obs.length; i++) {
         assert(obs[i] >= 0 && obs[i] <= 1.001, `obs 值越界 @${i}=${obs[i]}`);
