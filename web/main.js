@@ -674,7 +674,6 @@
   //   调大=更容易触发(擦边一点就转), 调小=要更贴边才转; 0=永不转。
   const MIN_OFF = 0.399;
   let turnInput = -1, turnSlide = -1;    // 状态: 上次输入方向 + 承诺滑动方向(-1=无; 0=上合法!)
-  let slideLimit = null;                 // 滑动对齐钳制{axis,min,max}: 滑动不冲出缺口列/行对齐区间
   function autoTurn(pid, move) {
     const stepLen = CFG.stepLen;
     const moved = move >= 4 ? stepLen : probeMoveDist(pid, move);
@@ -706,20 +705,9 @@
       }
     }
     if (turnSlide !== -1) {
-      // 已承诺滑动: 缺口方向**未变**才继续滑(不被部分移动截断)。
-      // 方向翻转 = 已滑过缺口(高速大步幅会跳过对齐区) → 立即停滑,
-      // 否则会一路滑进对面墙里卡死(左滑到右又滑回的鬼畜根源)。
-      if (dir === turnSlide) {
-        // 对齐钳制: 滑动目标 = 缺口列/行的对齐区间 [g+R, g+1-R]
-        if (move === MOVE_UP || move === MOVE_DOWN) {
-          const gc = turnSlide === MOVE_LEFT ? Math.floor(x - R) : Math.floor(x + R);
-          slideLimit = { axis: 'x', min: gc + R, max: gc + 1 - R };
-        } else {
-          const gr = turnSlide === MOVE_UP ? Math.floor(y - R) : Math.floor(y + R);
-          slideLimit = { axis: 'y', min: gr + R, max: gr + 1 - R };
-        }
-        return turnSlide;
-      }
+      // 已承诺滑动: 只要缺口方向仍可行就**继续滑到底**(不被部分移动/pen 截断),
+      // 直到盒子对齐(直接移动完全可走)为止 —— 中途截断会卡在角落
+      if (dir !== -1) return turnSlide;
       turnSlide = -1;
       return move;
     }
@@ -753,13 +741,6 @@
     if (turnSlide !== -1) return turnSlide;                          // 已承诺: 继续滑到底
     if (off >= MIN_OFF) return move;                                 // 偏移不够近0: 不触发
     turnSlide = dir2;
-    if (move === MOVE_UP || move === MOVE_DOWN) {
-      const gc = dir2 === MOVE_LEFT ? Math.floor(x - R) : Math.floor(x + R);
-      slideLimit = { axis: 'x', min: gc + R, max: gc + 1 - R };
-    } else {
-      const gr = dir2 === MOVE_UP ? Math.floor(y - R) : Math.floor(y + R);
-      slideLimit = { axis: 'y', min: gr + R, max: gr + 1 - R };
-    }
     return dir2;
   }
 
@@ -1823,10 +1804,6 @@
         const eff = autoTurn(0, human.move);
         const keepFace = human.move;      // 原始输入方向(自动转向不改行走图朝向)
         frameMove(0, eff, dt);            // 坐标用转向方向滑移
-        if (slideLimit) {                 // 滑动对齐钳制: 不冲出缺口对齐区(防高速过冲振荡)
-          if (slideLimit.axis === 'x') sim.pos[1] = Math.min(Math.max(sim.pos[1], slideLimit.min), slideLimit.max);
-          else sim.pos[0] = Math.min(Math.max(sim.pos[0], slideLimit.min), slideLimit.max);
-        }
         human.move = eff;                 // 动画播放状态按实际移动
         face[0] = keepFace;               // 朝向保持玩家按的方向
       }
@@ -1834,7 +1811,7 @@
     const frameDt = now - prevFrame;          // 真实帧间隔(ms, rAF 时间戳)
     prevFrame = now;
     fpsFrames++;
-    if (human.move === MOVE_IDLE || !sim.alive[0]) { turnSlide = -1; slideLimit = null; }  // 松手/死亡: 取消滑动
+    if (human.move === MOVE_IDLE || !sim.alive[0]) turnSlide = -1;  // 松手/死亡: 取消滑动
     if (now - fpsT0 >= 500) { fpsNow = Math.round(fpsFrames * 1000 / (now - fpsT0)); fpsFrames = 0; fpsT0 = now; }
     // profiling 累计
     prof.frames++;
