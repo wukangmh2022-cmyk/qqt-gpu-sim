@@ -111,7 +111,7 @@
   const hunter = new Q.HunterAI();   // 规则 AI（纯进攻寻路），可当敌/我方
   const HUNTER_VAL = '__hunter__';   // 下拉里规则 AI 的 value 哨兵
   const IDLE_VAL = '__idle__';      // 静止敌人(不动不炸)哨兵
-  const LATEST_VIT = 'params_it00000500';   // 最新 ViT 模型(默认敌人)
+  const LATEST_VIT = 'ViTModel_500';         // 最新 ViT 模型(默认敌人)
 
   // 敌/我方 AI 选择：'__hunter__'（规则）或模型名。模型按需懒加载到缓存。
   // 敌人默认 = 列表第一个（ELO 最高）；观战我方默认 = 同样的最强模型。
@@ -130,15 +130,20 @@
       ? Math.min(4, navigator.hardwareConcurrency || 4) : 1;
     const providers = (typeof navigator !== 'undefined' && navigator.gpu)
       ? ['webgpu', 'wasm'] : ['wasm'];
+    loadPhase = `正在加载 ONNX 推理引擎（${name}）`;
+    requestAnimationFrame(updateProgress);
     const session = await ort.InferenceSession.create(`models/${name}.onnx`, {
       executionProviders: providers,
     });
+    loadPhase = '';
     return new ORTTransformerModel(doc, session);
   }
 
   async function ensureModel(name) {
     let m = modelCache.get(name);
     if (m) return m;
+    loadPhase = `正在加载模型 ${name}`;
+    requestAnimationFrame(updateProgress);
     const resp = await fetch(`models/${name}.json`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const doc = await resp.json();
@@ -181,13 +186,17 @@
   let imgLoaded = 0, imgTotal = 0;
   let modelLoaded = false;
   let progShown = 0;                    // 显示的平滑进度（0~100）
+  let loadPhase = '';                   // 当前加载阶段提示(素材/模型JSON/ONNX…)
   function updateProgress() {
     const imgPct = imgTotal ? (imgLoaded / imgTotal) * 100 : 0;
     const target = modelLoaded ? 100 : imgPct * 0.9;   // 模型占最后 10%
     progShown += (target - progShown) * 0.25;          // 一阶缓动，避免跳变
     if (Math.abs(target - progShown) < 0.5) progShown = target;  // 收敛停止
-    elLoadingText.textContent =
-      `正在加载… ${Math.min(99, Math.round(progShown))}%`;
+    const pct = Math.min(99, Math.round(progShown));
+    // 阶段提示优先: 模型加载中显示"在干什么", 素材阶段显示百分比
+    elLoadingText.textContent = loadPhase
+      ? `${loadPhase}… ${pct}%`
+      : `正在加载… ${pct}%`;
     if (progShown < target) requestAnimationFrame(updateProgress);
   }
   function loadImage(src) {
@@ -255,6 +264,7 @@
 
   // 加载全部素材（失败降级：缺图用色块，保证可玩）
   async function loadAssets() {
+    loadPhase = '正在加载素材';
     // ---- 新地图系统：241 张原版关卡 + 元素属性表（旧 scenes.json 场景砖块废除）----
     const [levelsDoc, elementsDoc] = await Promise.all([
       (await fetch('assets/maps/levels.json?v=' + Date.now())).json(),
@@ -864,6 +874,8 @@
   async function loadModelList() {
     const resp = await fetch('models/index.json');
     modelList = (await resp.json()).models;
+    // 下拉按时间倒序(最新在前): generated_at 缺失的排最后
+    modelList.sort((a, b) => String(b.generated_at || '').localeCompare(String(a.generated_at || '')));
     // 敌人 AI 下拉 + 观战「我方：」下拉：都列全部模型 + 规则 Hunter
     fillAiSelect(elEnemyAi, true);
     fillAiSelect(elP0Ai, true);
@@ -1941,6 +1953,7 @@
     await Promise.all([loadModelList(), loadAssets()]);
     await new Promise((r) => setTimeout(r, 150));   // 进度条缓动走完最后一段再切
     // 视频录制不再常驻：由「录制动图」开关控制（默认关 = 零开销）
+    loadPhase = '';
     showWelcome();            // 先出欢迎窗口，等玩家按空格开局
     elLoading.classList.add('hidden');
     requestAnimationFrame(loop);

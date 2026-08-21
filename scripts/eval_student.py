@@ -36,7 +36,7 @@ def load_student(path: str, device) -> dict:
 @torch.no_grad()
 def student_forward(p: dict, o7: torch.Tensor, pid: int):
     """o7 (N,2,7,13,13) → 取 pid 视角 → 2层768 MLP → (mv,bv)。与 jax mlp_forward 同构。"""
-    x = o7[:, pid].reshape(o7.shape[0], -1)
+    x = o7[:, pid].reshape(o7.shape[0], -1).float()  # sim obs 可能半精度，权重 fp32
     x = torch.relu(x @ p["w1"] + p["b1"])
     x = torch.relu(x @ p["w2"] + p["b2"])
     return x @ p["wm"] + p["bm"], x @ p["wb"] + p["bb"]
@@ -160,8 +160,8 @@ def main() -> None:
         if args.swap_sides:
             w, d, l = duel(sim, pol, student, args.episodes)   # pol0=对手, pol1=student
         else:
-            w, d, l = duel(sim, student, pol, args.episodes)
-        print(f"student vs {name:<14}: win {l:.1%} / draw {d:.1%} / loss {w:.1%}  "
+            w, d, l = duel(sim, student, pol, args.episodes)   # pol0=student, pol1=对手
+        print(f"student vs {name:<14}: s_win {w:.1%} / draw {d:.1%} / opp_win {l:.1%}  "
               f"({args.episodes}局, {time.time()-t0:.0f}s)", flush=True)
 
 

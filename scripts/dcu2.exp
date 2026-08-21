@@ -1,0 +1,13 @@
+#!/usr/bin/expect -f
+# 被 scripts/dcu2.sh 调用。环境变量：HOST PORT PASS CMD
+set timeout 600
+set host $env(HOST)
+set port $env(PORT)
+set pass $env(PASS)
+set cmd $env(CMD)
+spawn ssh -o ConnectTimeout=30 -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -p $port $host $cmd
+expect {
+    "*assword:*" { send "$pass\r"; exp_continue }
+    "Permission denied*" { puts "AUTH FAILED"; exit 1 }
+    eof
+}
