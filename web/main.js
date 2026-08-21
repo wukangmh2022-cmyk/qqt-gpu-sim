@@ -748,8 +748,47 @@
     const dist = CFG.speed * sim.spdG[pid] * Math.min(dt, 0.1);
     if (dist <= 0) return;
     const y = sim.pos[pid * 2], x = sim.pos[pid * 2 + 1];
-    const blocked = blockedGrid();
     const [dy, dx] = DIRS[mv];
+    // 推箱子(人类60Hz): 前缘顶着可推箱 → 累计推动时间, ≥0.3s 后箱子移一格
+    // (与 sim.js step 同逻辑; 先于 blockedGrid 执行, 移走后本帧即可前进)
+    if (sim.pushBoxAt && (dy !== 0 || dx !== 0)) {
+      const R = CFG.radius;
+      const pr = dy !== 0 ? (dy > 0 ? Math.floor(y + R + EPS * 8) : Math.floor(y - R - EPS * 8)) : Math.floor(y);
+      const pc = dx !== 0 ? (dx > 0 ? Math.floor(x + R + EPS * 8) : Math.floor(x - R - EPS * 8)) : Math.floor(x);
+      const pi = pr * W + pc;
+      const bi = pi >= 0 && pi < N ? sim.pushBoxAt[pi] : -1;
+      if (bi >= 0) {
+        const box = sim.pushBoxes[bi];
+        let ok = true;
+        const targetCells = [];
+        for (const cell of box.cells) {
+          const rr = (cell / W) | 0, cc = cell % W;
+          const tr = rr + dy, tc = cc + dx;
+          if (tr < 0 || tr >= H || tc < 0 || tc >= W) { ok = false; break; }
+          const ti = tr * W + tc;
+          if (sim.wall[ti] || sim.brick[ti] || sim.fuse[ti] > 0 || sim.crate[ti] || sim.pushable[ti]) { ok = false; break; }
+          targetCells.push(ti);
+        }
+        if (ok) {
+          sim.pushT[box.o] += dt;
+          if (sim.pushT[box.o] >= 0.3) {
+            for (let k = 0; k < box.cells.length; k++) {
+              const ci = box.cells[k], ti = targetCells[k];
+              sim.brick[ci] = 0; sim.brick[ti] = 1;
+              sim.pushable[ci] = 0; sim.pushable[ti] = 1;
+              sim.pushBoxAt[ci] = -1; sim.pushBoxAt[ti] = bi;
+              sim.pushSprite[ti] = sim.pushSprite[ci]; sim.pushSprite[ci] = -1;
+            }
+            box.cells = targetCells;
+            box.o = targetCells[0];
+            sim.pushT[box.o] = 0;
+          }
+        } else {
+          sim.pushT[box.o] = 0;   // 推不动 → 重置
+        }
+      }
+    }
+    const blocked = blockedGrid();
     // 中心路径硬约束（对齐 sim.js Sim.step / JAX _move_player）：中心扫过的
     // 每一格必须可通行（起点格脚下豁免）。resolveAxis 的盒覆盖豁免允许盒压着
     // 泡格擦边，但中心不能进入泡/墙/砖格 —— 防穿炮（放泡后能离开泡格，
@@ -1408,6 +1447,7 @@
       for (const st of structList) {
         const v = st.pad ? st.eid : sim.level.layers[st.layer][st.r * W + st.c];
         if (!v || v < 0) continue;
+        if (sim.pushable && sim.pushable[st.r * W + st.c]) continue;   // 可推箱由运行时画
         if (st.layer === 1) {
           const i = st.r * W + st.c;
           // 墙/砖/房子/灌木 都在才画；砖与灌木被炸毁后消失
@@ -1447,6 +1487,20 @@
         }]);
       }
       prevCovered = coveredNow;
+    }
+
+    // 可推箱(运行时位置): 被推走后精灵跟随新格(静态 layers 已被跳过)
+    if (sim.pushBoxes) {
+      for (const box of sim.pushBoxes) {
+        if (!box || box.dead || !sim.brick[box.o]) continue;
+        const el = elements[box.eid];
+        if (!el) continue;
+        const img = elemImage(box.eid);
+        if (!img) continue;
+        const r = (box.o / W) | 0, c = box.o % W;
+        items.push([tileZ(r, c), img, Math.round(c * CELL - el.xo * SCALE),
+                    Math.round(r * CELL - el.yo * SCALE)]);
+      }
     }
 
     // 砖被炸毁的中间态 (_die 帧)：短暂显示碎墙 ~0.35s，尾段淡出

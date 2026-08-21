@@ -19,6 +19,7 @@
   // ---------------------------------------------------------------- 常量
   // 全部地图(含空场景)统一 15×13（QQ堂竞技标准尺寸，241 张原版图）
   const H = 13, W = 15, N = H * W;
+  const PUSH_TIME = 0.3;   // 推箱子: 持续推 ≥0.3s 才动一格
   const N_PLAYERS = 2;
   const MOVE_UP = 0, MOVE_DOWN = 1, MOVE_LEFT = 2, MOVE_RIGHT = 3, MOVE_IDLE = 4;
   const N_MOVES = 5, N_BOMB = 2;
@@ -133,6 +134,12 @@
     //               encodeObs 按 13 宽输出(与旧版训练环境一致)。
     reset(mode, opts) {
       this.oldMode = !!(opts && opts.oldMode);
+      // 可推箱运行时状态(所有模式都初始化; 关卡模式在 _loadLevel 填充)
+      this.pushable = new Uint8Array(N);
+      this.pushT = new Float32Array(N);
+      this.pushBoxAt = new Int32Array(N).fill(-1);
+      this.pushSprite = new Int32Array(N).fill(-1);
+      this.pushBoxes = [];
       const isLevel = mode !== null && typeof mode === 'object';
       this.mode = isLevel ? 'level' : (mode === 'corridor' ? 'corridor' : 'open');
       this.level = isLevel ? mode : null;
@@ -232,6 +239,23 @@
           this.wall[r * W + W - 1] = 1;
           this.wall[r * W + W - 2] = 1;
         }
+      }
+      // 可推箱运行时状态: push_boxes [[r,c,w,h]...] → 足迹格/推动计时/精灵
+      const pb = level.push_boxes || [];
+      for (const [r, c, bw, bh] of pb) {
+        const o = r * W + c;
+        const cells = [];
+        for (let dr = 0; dr < bh; dr++) {
+          for (let dc = 0; dc < bw; dc++) cells.push((r + dr) * W + (c + dc));
+        }
+        const bi = this.pushBoxes.length;
+        for (const cell of cells) {
+          this.pushable[cell] = 1;
+          this.pushBoxAt[cell] = bi;
+        }
+        this.pushSprite[o] = level.layers && level.layers[1] ? Math.abs(level.layers[1][o]) : 0;
+        this.pushBoxes.push({ o, cells, eid: this.pushSprite[o] || 0, dead: false });
+        this.pushT[o] = 0;
       }
       // 初始属性（比武/不足300% → 3/3/1.2；普通 → 2/2/1.2；空场景 → 8/6/1.68）
       const st = level.initial_stats || { bombs: 2, blast: 2, speed: 1.0 };
@@ -347,6 +371,44 @@
         const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
         const dist = CFG.stepLen * this.spdG[p];
         const [dy, dx] = DIRS[mv];
+        // 推箱子: 前缘顶着可推箱 → 累计推动时间(每tick 0.1s), ≥PUSH_TIME 后箱子移一格
+        if (dy !== 0 || dx !== 0) {
+          const pr = dy !== 0 ? (dy > 0 ? Math.floor(y + CFG.radius + EPS * 8) : Math.floor(y - CFG.radius - EPS * 8)) : Math.floor(y);
+          const pc = dx !== 0 ? (dx > 0 ? Math.floor(x + CFG.radius + EPS * 8) : Math.floor(x - CFG.radius - EPS * 8)) : Math.floor(x);
+          const pi = pr * W + pc;
+          const bi = pi >= 0 && pi < N ? this.pushBoxAt[pi] : -1;
+          if (bi >= 0) {
+            const box = this.pushBoxes[bi];
+            let ok = true;
+            const targetCells = [];
+            for (const cell of box.cells) {
+              const rr = (cell / W) | 0, cc = cell % W;
+              const tr = rr + dy, tc = cc + dx;
+              if (tr < 0 || tr >= H || tc < 0 || tc >= W) { ok = false; break; }
+              const ti = tr * W + tc;
+              // 目标格必须全空: 无墙/砖/泡/道具(宝箱)/其他箱子
+              if (this.wall[ti] || this.brick[ti] || this.fuse[ti] > 0 || this.crate[ti] || this.pushable[ti]) { ok = false; break; }
+              targetCells.push(ti);
+            }
+            if (ok) {
+              this.pushT[box.o] += 0.1;
+              if (this.pushT[box.o] >= PUSH_TIME) {
+                for (let k = 0; k < box.cells.length; k++) {
+                  const ci = box.cells[k], ti = targetCells[k];
+                  this.brick[ci] = 0; this.brick[ti] = 1;
+                  this.pushable[ci] = 0; this.pushable[ti] = 1;
+                  this.pushBoxAt[ci] = -1; this.pushBoxAt[ti] = bi;
+                  this.pushSprite[ti] = this.pushSprite[ci]; this.pushSprite[ci] = -1;
+                }
+                box.cells = targetCells;
+                box.o = targetCells[0];
+                this.pushT[box.o] = 0;
+              }
+            } else {
+              this.pushT[box.o] = 0;   // 推不动(目标被挡) → 重置计时
+            }
+          }
+        }
         // 中心路径硬约束（对齐 JAX _move_player）：中心点扫过的每一格必须
         // 可通行（起点格脚下豁免）。resolveAxis 的盒覆盖豁免允许盒压着泡格
         // 擦边移动，但**中心不能进入泡/墙/砖格** —— 防穿炮：放泡后能离开
@@ -392,6 +454,17 @@
       for (let i = 0; i < N; i++) {
         if (covered[i] && this.brick[i]) {
           this.brick[i] = 0;
+          // 被炸的可推箱: 整箱移除(足迹清空)
+          const biX = this.pushBoxAt[i];
+          if (biX >= 0 && !this.pushBoxes[biX].dead) {
+            const bx = this.pushBoxes[biX];
+            bx.dead = true;
+            for (const cell of bx.cells) {
+              this.pushable[cell] = 0;
+              this.pushBoxAt[cell] = -1;
+              this.pushSprite[cell] = -1;
+            }
+          }
           if (this.rng() < this.crateRate) {
             this.crate[i] = 1;
             this.superCrate[i] = this.rng() < this.superFraction ? 1 : 0;
