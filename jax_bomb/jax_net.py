@@ -13,6 +13,12 @@ from jax import random
 
 from .jax_env import N_BOMB, N_MOVES
 
+# ---------------- HL-Gauss Categorical Value Head Constants ----------------
+NUM_VALUE_BINS = 128
+V_MIN = -1.0
+V_MAX = 1.0
+BIN_CENTERS = jnp.linspace(V_MIN, V_MAX, NUM_VALUE_BINS)
+
 
 # ---------------- MLP ----------------
 
@@ -30,7 +36,7 @@ def init_mlp(key, c, h, w, hidden=256):
     w2, b2 = _linear_init(k2, hidden, hidden)
     wm, bm = _linear_init(k3, hidden, N_MOVES, scale=0.01)
     wb, bb = _linear_init(k4, hidden, N_BOMB, scale=0.01)
-    wv, bv = _linear_init(k5, hidden, 1)
+    wv, bv = _linear_init(k5, hidden, NUM_VALUE_BINS)
     return {"w1": w1, "b1": b1, "w2": w2, "b2": b2,
             "wm": wm, "bm": bm, "wb": wb, "bb": bb, "wv": wv, "bv": bv}
 
@@ -41,8 +47,9 @@ def mlp_forward(params, obs):
     x = jax.nn.relu(x @ params["w2"] + params["b2"])
     mv = x @ params["wm"] + params["bm"]
     bm = x @ params["wb"] + params["bb"]
-    v = (x @ params["wv"] + params["bv"]).squeeze(-1)
-    return mv, bm, v
+    v_logits = x @ params["wv"] + params["bv"]
+    v_scalar = jnp.sum(jax.nn.softmax(v_logits, axis=-1) * BIN_CENTERS, axis=-1)
+    return mv, bm, v_scalar, v_logits
 
 
 def mlp_bf16_forward(params, obs):
@@ -56,8 +63,9 @@ def mlp_bf16_forward(params, obs):
     x = x.astype(jnp.float32)
     mv = x @ params["wm"] + params["bm"]
     bm = x @ params["wb"] + params["bb"]
-    v = (x @ params["wv"] + params["bv"]).squeeze(-1)
-    return mv, bm, v
+    v_logits = x @ params["wv"] + params["bv"]
+    v_scalar = jnp.sum(jax.nn.softmax(v_logits, axis=-1) * BIN_CENTERS, axis=-1)
+    return mv, bm, v_scalar, v_logits
 
 
 # ---------------- MLP-4（正式版结构：4 层 + LayerNorm，hidden=768） ----------------
@@ -84,7 +92,7 @@ def init_mlp4(key, c, h, w, hidden=768):
         p[f"ln{i + 1}_b"] = jnp.zeros((hidden,))
     wm, bm = _linear_init(k[n_layers], hidden, N_MOVES, scale=0.01)
     wb, bb = _linear_init(k[n_layers + 1], hidden, N_BOMB, scale=0.01)
-    wv, bv = _linear_init(k[n_layers + 2], hidden, 1)
+    wv, bv = _linear_init(k[n_layers + 2], hidden, NUM_VALUE_BINS)
     p.update({"wm": wm, "bm": bm, "wb": wb, "bb": bb, "wv": wv, "bv": bv})
     return p
 
@@ -102,8 +110,9 @@ def mlp4_forward(params, obs):
     x = x.astype(jnp.float32)
     mv = x @ params["wm"] + params["bm"]
     bm = x @ params["wb"] + params["bb"]
-    v = (x @ params["wv"] + params["bv"]).squeeze(-1)
-    return mv, bm, v
+    v_logits = x @ params["wv"] + params["bv"]
+    v_scalar = jnp.sum(jax.nn.softmax(v_logits, axis=-1) * BIN_CENTERS, axis=-1)
+    return mv, bm, v_scalar, v_logits
 
 
 # ---------------- CNN ----------------
@@ -122,7 +131,7 @@ def init_cnn(key, c, h, w, ch1=32, ch2=64, hidden=256):
     w3, b3 = _linear_init(k3, ch2, hidden)   # GAP 后接小 MLP（不 flatten）
     wm, bm = _linear_init(k4, hidden, N_MOVES, scale=0.01)
     wb, bb = _linear_init(k5, hidden, N_BOMB, scale=0.01)
-    wv, bv = _linear_init(k6, hidden, 1)
+    wv, bv = _linear_init(k6, hidden, NUM_VALUE_BINS)
     return {"w1": w1, "b1": b1, "w2": w2, "b2": b2, "w3": w3, "b3": b3,
             "wm": wm, "bm": bm, "wb": wb, "bb": bb, "wv": wv, "bv": bv}
 
@@ -146,11 +155,12 @@ def cnn_forward(params, obs):
     x = jax.nn.relu(x @ params["w3"] + params["b3"])
     mv = x @ params["wm"] + params["bm"]
     bm = x @ params["wb"] + params["bb"]
-    v = (x @ params["wv"] + params["bv"]).squeeze(-1)
-    return mv, bm, v
+    v_logits = x @ params["wv"] + params["bv"]
+    v_scalar = jnp.sum(jax.nn.softmax(v_logits, axis=-1) * BIN_CENTERS, axis=-1)
+    return mv, bm, v_scalar, v_logits
 
 
-# ---------------- Transformer (ViT-ish, patch=1) ----------------
+# ---------------- Transformer (ViT-ish, patch=3) ----------------
 
 
 def _attn(q, k, v, mask=None):
@@ -166,8 +176,8 @@ def _attn(q, k, v, mask=None):
     return jnp.einsum("...htT,...hTd->...htd", w, v)
 
 
-def init_transformer(key, c, h, w, embed=192, depth=4, heads=4, ff_factor=4,
-                     patch=1, state_dim=24):
+def init_transformer(key, c, h, w, embed=392, depth=4, heads=4, ff_factor=4,
+                     patch=3, state_dim=24):
     """ViT 风格。patch>1 时按 patch 切块（Average Joe patchify 机制）：
     token 数 = (h//patch)²，attention 计算量 ∝ token²，patch 2/3 对 13×13
     地图把 attention 降 10-100 倍（参数在 ffn，几乎不变）。
@@ -206,7 +216,7 @@ def init_transformer(key, c, h, w, embed=192, depth=4, heads=4, ff_factor=4,
     p["heads"] = {}
     p["heads"]["wm"] = _linear_init(km, embed, N_MOVES, scale=0.01)
     p["heads"]["wb"] = _linear_init(kb, embed, N_BOMB, scale=0.01)
-    p["heads"]["wv"] = _linear_init(kv, embed, 1)
+    p["heads"]["wv"] = _linear_init(kv, embed, NUM_VALUE_BINS)
     # 全局状态向量 → state token（论文式双序列第二路）
     p["state_w"], p["state_b"] = _linear_init(keys[i], state_dim, embed)
     return p
@@ -281,8 +291,9 @@ def transformer_forward(params, obs, state=None):
     g = x[:, :n_tok].mean(1).astype(jnp.float32)   # 池化只用 patch tokens
     mv = g @ params["heads"]["wm"][0] + params["heads"]["wm"][1]
     bm = g @ params["heads"]["wb"][0] + params["heads"]["wb"][1]
-    v = (g @ params["heads"]["wv"][0] + params["heads"]["wv"][1]).squeeze(-1)
-    return mv, bm, v
+    v_logits = g @ params["heads"]["wv"][0] + params["heads"]["wv"][1]
+    v_scalar = jnp.sum(jax.nn.softmax(v_logits, axis=-1) * BIN_CENTERS, axis=-1)
+    return mv, bm, v_scalar, v_logits
 
 
 # ---------------- MLP-Mixer（保留 patch 感受野，无 attention） ----------------
@@ -324,7 +335,7 @@ def init_mlp_mixer(key, c, h, w, embed=256, depth=8, patch=2, ff_factor=4,
     p["heads"] = {}
     p["heads"]["wm"] = _linear_init(km, embed, N_MOVES, scale=0.01)
     p["heads"]["wb"] = _linear_init(kb, embed, N_BOMB, scale=0.01)
-    p["heads"]["wv"] = _linear_init(kv, embed, 1)
+    p["heads"]["wv"] = _linear_init(kv, embed, NUM_VALUE_BINS)
     return p
 
 
@@ -368,8 +379,9 @@ def mlp_mixer_forward(params, obs):
     g = x.mean(1).astype(jnp.float32)                      # 全局池化 (N, E)
     mv = g @ params["heads"]["wm"][0] + params["heads"]["wm"][1]
     bm = g @ params["heads"]["wb"][0] + params["heads"]["wb"][1]
-    v = (g @ params["heads"]["wv"][0] + params["heads"]["wv"][1]).squeeze(-1)
-    return mv, bm, v
+    v_logits = g @ params["heads"]["wv"][0] + params["heads"]["wv"][1]
+    v_scalar = jnp.sum(jax.nn.softmax(v_logits, axis=-1) * BIN_CENTERS, axis=-1)
+    return mv, bm, v_scalar, v_logits
 
 
 # ---------------- dispatch ----------------

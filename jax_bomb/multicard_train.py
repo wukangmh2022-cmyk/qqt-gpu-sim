@@ -148,9 +148,9 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--arch", default="transformer")
-    ap.add_argument("--embed", type=int, default=512)
-    ap.add_argument("--depth", type=int, default=2)
-    ap.add_argument("--patch", type=int, default=4)
+    ap.add_argument("--embed", type=int, default=392)
+    ap.add_argument("--depth", type=int, default=4)
+    ap.add_argument("--patch", type=int, default=3)
     ap.add_argument("--heads", type=int, default=4)
     ap.add_argument("--ff-factor", type=float, default=4)
     ap.add_argument("--num-envs", type=int, default=4096)
@@ -160,11 +160,15 @@ def main():
     ap.add_argument("--iters", type=int, default=3)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--gamma", type=float, default=0.99)
+    ap.add_argument("--gamma", type=float, default=1.0)
     ap.add_argument("--lam", type=float, default=0.95)
     ap.add_argument("--clip-eps", type=float, default=0.2)
     ap.add_argument("--vf-coef", type=float, default=0.5)
     ap.add_argument("--ent-coef", type=float, default=0.01)
+    ap.add_argument("--adv-top-frac", type=float, default=0.25,
+                    help="Top-Advantage Filtering 比例 (保留前 25%% |A_t|)")
+    ap.add_argument("--ema-decay", type=float, default=0.999,
+                    help="参数 EMA 指数移动平均衰减系数")
     ap.add_argument("--no-mask", action="store_true")
     ap.add_argument("--obs-quant", action="store_true")
     ap.add_argument("--checkpoint", action="store_true")
@@ -249,9 +253,13 @@ def main():
                          "源模型的固定退火进度；不改变 checkpoint iteration、Adam、"
                          "环境或 RNG 的恢复语义。")
     ap.add_argument("--curriculum-json", default=None,
-                    help="Spawn-Distance 课程文件（scripts/analyze_maps.py "
-                         "--curriculum 生成）：按全局步比例切换图集 Stage1→4，"
-                         "S1=Pommerman 式小房间起点，逐步放宽到全图")
+                    help="Spawn-Distance 课程文件：按阶段自动切换图集与出生点距离 Stage1→4")
+    ap.add_argument("--curriculum-winrate-gate", type=float, default=0.65,
+                    help="课程自动晋级胜率门禁（默认 0.65：对战本阶段初始基准胜率 >= 65%% 时自动晋级）")
+    ap.add_argument("--curriculum-eval-every", type=int, default=50,
+                    help="课程对战评估间隔（迭代数，默认 50：每 50 轮评估一次 vs 阶段基线胜率）")
+    ap.add_argument("--curriculum-min-iters", type=int, default=50,
+                    help="每个课程阶段最小训练迭代数（默认 50：防止阶段跳变过快）")
     args = ap.parse_args()
     if args.reward_anneal_step_offset < 0:
         raise SystemExit("--reward-anneal-step-offset must be non-negative")
@@ -302,11 +310,15 @@ def main():
         from jax_bomb import levels as _levels
 
         def _set_stage(si: int):
-            """课程：把 active 图集切到 stage si（图 id 均分权重）。"""
+            """课程：把 active 图集切到 stage si，并设置该阶段的出生点最大距离限制。"""
             ids = curriculum['stages'][si]
             w = 1.0 / len(ids)
+            # 空间几何距离：Stage 1 贴脸(<=4) → Stage 2 近距破障(<=6) → Stage 3 中距迷宫(<=10) → Stage 4 全图无限制(0)
+            stage_dists = [4, 6, 10, 0]
+            max_d = stage_dists[si] if si < len(stage_dists) else 0
             _levels.set_active(levels_path,
-                               weights=','.join(f"{i}={w:.8f}" for i in ids))
+                               weights=','.join(f"{i}={w:.8f}" for i in ids),
+                               max_spawn_dist=max_d)
 
         if args.curriculum_json:
             with open(args.curriculum_json, encoding="utf-8") as f:
@@ -371,8 +383,6 @@ def main():
             p = load_ckpt(ck)
             cfg_old = p["cfg"]
             if "envs_per" in cfg_old:
-                # 新版 cfg：按"每副本负载"校验 —— 机器数变化（掉线降级重启）
-                # 时 per-replica 负载不变即允许接续，n_total 只警告
                 want = {"arch": args.arch, "embed": args.embed,
                         "depth": args.depth, "patch": args.patch,
                         "heads": args.heads, "ff_factor": args.ff_factor,
@@ -399,7 +409,6 @@ def main():
                           f"允许接续。--num-envs/--minibatch 请按新卡数重设）",
                           flush=True)
             else:
-                # 旧版 cfg（无 envs_per）：沿用旧校验
                 want = {"arch": args.arch, "embed": args.embed,
                         "depth": args.depth, "patch": args.patch,
                         "num_envs": args.num_envs,
@@ -452,6 +461,7 @@ def main():
                             f"lsgd_k={args.lsgd_k} lsgd_mode={args.lsgd_mode} "
                             f"lsgd_bf16={args.lsgd_bf16} "
                             f"lsgd_sync_state={args.lsgd_sync_state} "
+                            f"adv_top_frac={args.adv_top_frac} "
                             f"params={count_params(params):,}"])
     cfg = {"arch": args.arch, "embed": args.embed, "depth": args.depth,
            "patch": args.patch, "heads": args.heads,
@@ -522,21 +532,17 @@ def main():
                     key, mb_local, args.clip_eps, args.vf_coef,
                     args.ent_coef, args.epochs, axis_name="dev",
                     sync_k=args.lsgd_k, bf16_sync=args.lsgd_bf16,
-                    sync_state=args.lsgd_sync_state, return_loss=True)
+                    sync_state=args.lsgd_sync_state, return_loss=True,
+                    adv_top_frac=args.adv_top_frac)
         else:
             params, opt_state, last_loss = ppo_update(
                 params, opt, opt_state, args.arch,
                 (obs, state, acts, lps, advs, rets, masks),
                 key, mb_local, args.clip_eps, args.vf_coef, args.ent_coef,
-                args.epochs, axis_name="dev", return_loss=True)
+                args.epochs, axis_name="dev", return_loss=True,
+                adv_top_frac=args.adv_top_frac)
         key = jrandom.split(key)[0]
-        # 跨全部 replica（含跨实例）all_gather 参数摘要 → RCCL 正确性证据
         digest = jax.lax.all_gather(param_digest(params), "dev")
-        # 每迭代聚合统计（评估/监控）：(平均回报, 每帧结束率 → 平均对局长度,
-        #  探索分/帧 —— nov 是窗口内每 env/玩家 novelty 计数，÷steps×coef
-        #  与 rew 均值同口径，用来盯着探索分不压过胜负/掉血信号；
-        #  击杀率 kill_rate = 2×kills.sum()/max(done.sum(),1) ∈[0,1]（每局最多
-        #  1 击杀）—— 动态退火 α_dyn = max(0,1-tanh(k·kill_rate)) 的 x)
         ep_cnt = jnp.maximum(done.sum().astype(jnp.float32), 1.0)
         kill_rate = 2.0 * kills.sum() / ep_cnt
         stats = jnp.stack([jnp.mean(rew),
@@ -545,13 +551,14 @@ def main():
                            kill_rate])
         return params, opt_state, states, key, digest, last_loss, stats
 
+
     one_iter = jax.pmap(shard, axis_name="dev",
                         in_axes=(None, None, 0, 0, None, None, None, None),
                         out_axes=(None, None, 0, 0, 0, 0, 0))
 
-    # ---- 评估：当前策略 vs 冻结基线（两策略对打，--eval-vs + --eval-every）----
+    # ---- 评估：两策略对打（用于课程胜率门禁与 --eval-vs 基线）----
     eval_fn = None
-    if args.eval_vs and args.eval_every > 0:
+    if (args.eval_vs and args.eval_every > 0) or (curriculum is not None and args.curriculum_eval_every > 0):
         def eval_shard(params, frozen, states, key):
             states, (w, l) = collect_rollout_two(
                 params, frozen, args.arch, states, key, steps,
@@ -562,9 +569,7 @@ def main():
                            in_axes=(None, None, 0, 0),
                            out_axes=(0, 0, 0, 0))
 
-    # ---- warmup（编译 + 预热，输出丢弃）：保证 iters = 真实训练轮数，
-    #      且接续跑与连续跑逐位一致（接续时 warmup 不会吃掉第一轮）----
-    # 塑形 coef 传满值（warmup 输出丢弃，只编译；首轮真实退火在循环里算）
+    # ---- warmup（编译 + 预热，输出丢弃）----
     _w = one_iter(params, opt_state, states, keys,
                   jnp.maximum(0.0, args.crate_reward_coef),
                   jnp.maximum(0.0, args.explore_reward_coef),
@@ -577,30 +582,52 @@ def main():
     last_local_save = t0
     n_run = 0
     cur = (params, opt_state, states, keys)
+    ema_params = jax.tree.map(np.asarray, params)    # EMA 参数副本
+    stage_baseline_params = cur[0]                    # 当前 Stage 的初始冻结基准 (内存零 IO)
+    stage_start_iter = it_done + 1                    # 当前 Stage 开始的 iter
     steps_per_iter_g = 2 * args.num_envs * steps     # 全局环境步/迭代
     kill_rate_prev = 0.0                              # 上一 iter 击杀率（首轮未知 → α_dyn=1）
     for i in range(it_done + 1, args.iters + 1):
         ti = time.time()
         gs = reward_schedule_global_steps(
             i, steps_per_iter_g, args.reward_anneal_step_offset)
-        # 课程按本次 run 自己走过的步数切换；参数 warm-start offset 只继承
-        # reward 的固定退火进度，不能跳过本 run 的地图课程阶段。
         curriculum_gs = (i - 1) * steps_per_iter_g
-        if curriculum is not None:
-            frac = curriculum_gs / max(1, steps_per_iter_g * args.iters)
-            si = 0
-            for t in curriculum['thresholds']:
-                if frac >= t:
-                    si += 1
-            if si != cur_stage:
-                _set_stage(si)
-                cur_stage = si
-                print(f"[{rank}] 课程 → Stage{si + 1}"
-                      f"（{len(curriculum['stages'][si])} 张图，frac={frac:.4f}，"
-                      f"jit 重编译）", flush=True)
-        # 统一退火：α = α_fix(固定 30B 线性) × α_dyn(1-tanh(k·击杀率))。
-        #   α_fix 兜底（防击杀率长期停滞塑形不退）；α_dyn 动态——击杀率上来
-        #   （模型会打架了）塑形自动归零，只剩纯胜负（Pommerman 论文机制）。
+
+        # ---- 课程自适应胜率门禁提档 (Dynamic Winrate Gating) ----
+        if curriculum is not None and cur_stage < len(curriculum['stages']) - 1:
+            iters_in_stage = i - stage_start_iter
+            step_frac = curriculum_gs / max(1, steps_per_iter_g * args.iters)
+            step_fallback = (step_frac >= curriculum['thresholds'][cur_stage]) if cur_stage < len(curriculum['thresholds']) else False
+
+            winrate_passed = False
+            wr = 0.0
+            if eval_fn is not None and i % args.curriculum_eval_every == 0 and iters_in_stage >= args.curriculum_min_iters:
+                est, ekey, ew, el = eval_fn(cur[0], stage_baseline_params, cur[2], cur[3])
+                jax.block_until_ready(est)
+                cur = (cur[0], cur[1], est, ekey)
+                ew_sum = int(np.sum(np.asarray(ew)))
+                el_sum = int(np.sum(np.asarray(el)))
+                wr = ew_sum / max(ew_sum + el_sum, 1)
+                print(f"[{rank}] [Curriculum Gate] Stage {cur_stage + 1} 评估: "
+                      f"vs StageBaseline win={ew_sum} lose={el_sum} winrate={wr:.1%} "
+                      f"(晋级门禁={args.curriculum_winrate_gate:.1%}, 已训={iters_in_stage} iters)", flush=True)
+                write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                                    f"[Gate] Stage {cur_stage + 1} vs Baseline "
+                                    f"winrate={wr:.1%} ({ew_sum}/{ew_sum + el_sum})"])
+                if wr >= args.curriculum_winrate_gate:
+                    winrate_passed = True
+
+            if winrate_passed or step_fallback:
+                cur_stage += 1
+                _set_stage(cur_stage)
+                stage_start_iter = i
+                stage_baseline_params = cur[0]  # 锁定当前学成的新模型作为下一阶段 Baseline
+                reason = f"胜率达标 (winrate={wr:.1%} >= {args.curriculum_winrate_gate:.1%})" if winrate_passed else f"步数兜底 (frac={step_frac:.4f})"
+                print(f"[{rank}] 🏆 课程晋级 → Stage {cur_stage + 1}（原因: {reason}，"
+                      f"{len(curriculum['stages'][cur_stage])} 张图）", flush=True)
+                write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                                    f"PROMOTION -> Stage {cur_stage + 1} ({reason})"])
+
         alpha_fix = fixed_reward_alpha(
             i, steps_per_iter_g, shared_anneal_steps,
             args.reward_anneal_step_offset)
@@ -615,6 +642,11 @@ def main():
         jax.block_until_ready(res)
         cur = res
         n_run += 1
+        # 更新参数 EMA
+        cur_p_np = jax.tree.map(np.asarray, res[0])
+        d_ema = float(args.ema_decay)
+        ema_params = jax.tree.map(lambda e, p: d_ema * e + (1.0 - d_ema) * p,
+                                  ema_params, cur_p_np)
         dt_i = time.time() - ti
         dt_avg = (time.time() - t0) / n_run
         sps_i = 2 * args.num_envs * steps / dt_i
@@ -645,7 +677,7 @@ def main():
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                                     f"ckpt saved iter {i}"])
                 last_save = time.time()
-        # rank0 轻量参数快照（供拉回本地/评估；~25MB pickle，不拖速度）
+        # rank0 轻量参数快照 + EMA 快照
         if (args.ckpt_local_dir and rank == 0
                 and (i == args.iters or stop_flag["v"]
                      or (args.ckpt_local_every > 0
@@ -655,11 +687,15 @@ def main():
                 os.makedirs(args.ckpt_local_dir, exist_ok=True)
                 p = os.path.join(args.ckpt_local_dir,
                                  f"params_it{i:08d}.pkl")
+                p_ema = os.path.join(args.ckpt_local_dir,
+                                     f"params_it{i:08d}_ema.pkl")
                 with open(p, "wb") as f:
-                    pickle.dump(jax.tree.map(np.asarray, res[0]), f)
-                print(f"[{rank}] params snapshot -> {p}", flush=True)
+                    pickle.dump(cur_p_np, f)
+                with open(p_ema, "wb") as f:
+                    pickle.dump(ema_params, f)
+                print(f"[{rank}] params & EMA snapshot -> {p}", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                                    f"params snapshot iter {i}"])
+                                    f"params & EMA snapshot iter {i}"])
                 last_local_save = time.time()
             except Exception as e:
                 print(f"[{rank}] WARN: 参数快照失败: {e}", flush=True)

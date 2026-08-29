@@ -864,17 +864,23 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     dirs, bombs = actions[:, 0], actions[:, 1]
     alive0 = alive
 
+    # 0. 双方物理结算优先级（按 tick 轮换：偶数 tick P0 先手，奇数 tick P1 先手，50/50 绝对对称）
+    first = jnp.where((t % 2) == 1, 1, 0)
+    second = 1 - first
+    order = jnp.stack([first, second])
+
     # 1. 引信递减
     fuse = jnp.where(fuse > 0, fuse - 1, fuse)
 
-    # 2. 放泡（移动前，落在起始中心格；威力按此刻档位快照；墙/砖格不可放）
+    # 2. 放泡（移动前，落在起始中心格；威力按此刻档位快照；墙/砖格不可放；按轮换优先级结算）
     cell = pos.astype(jnp.int32)                 # center_cell = floor
-    for me in range(2):
+    for idx in range(2):
+        me = order[idx]
         y, x = cell[me, 0], cell[me, 1]
-        idx = jnp.clip(y, 0, H - 1) * W + jnp.clip(x, 0, W - 1)
-        cur_f = fuse.reshape(-1)[idx]
+        idx_c = jnp.clip(y, 0, H - 1) * W + jnp.clip(x, 0, W - 1)
+        cur_f = fuse.reshape(-1)[idx_c]
         live = ((owner == me) & (fuse > 0)).sum()
-        solid_cell = (wall | brick).reshape(-1)[idx]
+        solid_cell = (wall | brick).reshape(-1)[idx_c]
         ok = (alive0[me] & (bombs[me] == 1) & (cur_f <= 0)
               & (live < bombs_cap[me]) & ~solid_cell)
         fuse = fuse.at[y, x].set(jnp.where(ok, FUSE, cur_f))
@@ -887,8 +893,9 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     #     持续推 ≥PUSH_TIME(0.3s = 3 tick) 箱子移一格；目标格有墙/砖/泡/
     #     道具/其他箱 → 推不动（计时清零）。箱子格 = brick（blocked 挡玩家，
     #     本 tick 玩家顶箱不动，箱子移走后下 tick 跟进）。逐格模型：数据
-    #     里 push_boxes 全是 1×1 单格箱，每格独立计时推动。
-    for me in range(2):
+    #     里 push_boxes 全是 1×1 单格箱，每格独立计时推动。按轮换优先级结算。
+    for idx in range(2):
+        me = order[idx]
         y, x = pos[me, 0], pos[me, 1]
         dy = jnp.where(dirs[me] == 0, -1, jnp.where(dirs[me] == 1, 1, 0))
         dx = jnp.where(dirs[me] == 2, -1, jnp.where(dirs[me] == 3, 1, 0))
@@ -1024,10 +1031,9 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     kind_code = crate.reshape(-1)[flat].astype(jnp.int32)   # 1-7
     rb_grow = jax.random.uniform(key3, (2,))
     hits = stood & alive0                        # torch 用 alive0（死人不开箱）
-    # A crate is shared map state. Resolve a simultaneous same-cell pickup once,
-    # with P0 matching the deterministic turn order used elsewhere in the sim.
+    # 共享地图宝箱：两人踩在同一宝箱上时，按当 tick 轮换优先级归属结算
     same_crate_cell = (cy2[0] == cy2[1]) & (cx2[0] == cx2[1])
-    hits = hits.at[1].set(hits[1] & ~(same_crate_cell & hits[0]))
+    hits = hits.at[second].set(hits[second] & ~(same_crate_cell & hits[first]))
     fixed = (kind_code - 1) % 3                  # 1/2/3→0/1/2；4/5/6→0/1/2（超级同种类）
     attr = jnp.where(kind_code == 7, (rb_grow * 3).astype(jnp.int32), fixed)
     is_super = (kind_code >= 4) & (kind_code <= 6)
