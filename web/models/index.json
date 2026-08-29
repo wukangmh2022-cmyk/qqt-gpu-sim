@@ -1,6 +1,24 @@
 {
  "models": [
   {
+   "name": "params_Pre-Train_Test",
+   "display_name": "Pre-Train Test (Patch3 ViT 7.5M)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 250,
+   "global_step": 65536000,
+   "source": "params_Pre-Train_Test.pkl",
+   "generated_at": "2026-08-29 09:50 UTC"
+  },
+  {
    "name": "ViTModel2_31.9B",
    "display_name": "ViTModel2_31.9B",
    "arch": "transformer",
