@@ -2283,12 +2283,52 @@
     ctx.font = '12px sans-serif';
     const lvN = sim && sim.level ? `${sim.level.name}${sim.level.mode.includes('空场景') ? '(空场景)' : ''}` : '-';
     ctx.fillText(`地图：${lvN} · 对局 #${gameSeed % 100000}`,
-                 BOARD_PX - 18, y0 + 32);
+                 BOARD_PX - 18, y0 + 30);
+
+    // ---- 实时 AI 胜率评估条 (Real-Time Win Probability Bar) ----
+    const em = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
+    const p0m = elSpectate.checked && p0Sel && p0Sel !== HUNTER_VAL ? modelCache.get(p0Sel) : null;
+    let p0WinProb = 0.5;
+    if (p0m && p0m._lastVal && p0m._lastVal[0] !== undefined) {
+      p0WinProb = Math.max(0.02, Math.min(0.98, (p0m._lastVal[0] + 1.0) / 2.0));
+    } else if (em && em._lastVal) {
+      const v = (em._lastVal[1] !== undefined && !elSpectate.checked) ? em._lastVal[1] : (em._lastVal[0] !== undefined ? em._lastVal[0] : 0.0);
+      p0WinProb = Math.max(0.02, Math.min(0.98, 1.0 - (v + 1.0) / 2.0));
+    } else {
+      const hpDiff = (sim.hp[0] - sim.hp[1]) / CFG.maxHp;
+      p0WinProb = Math.max(0.05, Math.min(0.95, 0.5 + hpDiff * 0.45));
+    }
+    const p1WinProb = 1.0 - p0WinProb;
+
+    // 绘制胜率条
+    const barX = 18;
+    const barY = y0 + 48;
+    const barW = BOARD_PX - 36;
+    const barH = 14;
+    const splitX = barX + Math.round(barW * p0WinProb);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(barX, barY, barW, barH);
+    ctx.fillStyle = '#ff6b6b'; // P0 红色
+    ctx.fillRect(barX, barY, Math.max(0, splitX - barX), barH);
+    ctx.fillStyle = '#5aa7ff'; // P1 蓝色
+    ctx.fillRect(splitX, barY, Math.max(0, barX + barW - splitX), barH);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(splitX - 1, barY - 1, 2, barH + 2);
+
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${p0Kind} ${(p0WinProb * 100).toFixed(0)}%`, barX + 6, barY + barH / 2);
+    ctx.textAlign = 'right';
+    ctx.fillText(`${(p1WinProb * 100).toFixed(0)}% ${p1Kind}`, barX + barW - 6, barY + barH / 2);
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#5a6275';
     ctx.font = '11px sans-serif';
-    const em = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
-      ctx.fillText(`敌人：${em ? modelDisplayName(em.meta) + '（' + fmtStep(em.meta.global_step) + '步）' : p1Kind}`,
-
+    ctx.fillText(`敌人：${em ? modelDisplayName(em.meta) + '（' + fmtStep(em.meta.global_step) + '步）' : p1Kind}`,
                  18, y0 + 78);
   }
 

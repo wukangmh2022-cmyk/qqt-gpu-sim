@@ -1671,6 +1671,8 @@
     _decide(sim, pid, mm, bm, rng) {
       const logits = this.forward(sim.encodeObsJAX(pid, this.obsShape[0]),
                                   sim.encodeStateJAX(pid));
+      if (!this._lastVal) this._lastVal = [0, 0];
+      this._lastVal[pid] = logits.value;
       const aM = this._sampleMasked(logits.move, mm[pid], rng);
       const aB = this._sampleMasked(logits.bomb, bm[pid], rng);
       return [aM, aB];
@@ -1688,6 +1690,7 @@
         const [f0, f1] = this.forward2(
           sim.encodeObsJAX(0, this.obsShape[0]), sim.encodeStateJAX(0),
           sim.encodeObsJAX(1, this.obsShape[0]), sim.encodeStateJAX(1));
+        this._lastVal = [f0.value, f1.value];
         this._cA[0] = [this._sampleMasked(f0.move, mm[0], rng),
                       this._sampleMasked(f0.bomb, bm[0], rng)];
         this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
@@ -1804,6 +1807,7 @@
         const [f0, f1] = await this.forward2(
           sim.encodeObsJAX(0, this.obsShape[0]), sim.encodeStateJAX(0),
           sim.encodeObsJAX(1, this.obsShape[0]), sim.encodeStateJAX(1));
+        this._lastVal = [f0.value, f1.value];
         this._cA[0] = [this._sampleMasked(f0.move, mm[0], rng),
                       this._sampleMasked(f0.bomb, bm[0], rng)];
         this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
@@ -1816,6 +1820,8 @@
     async _decide(sim, pid, mm, bm, rng) {
       const logits = await this.forward(
         sim.encodeObsJAX(pid, this.obsShape[0]), sim.encodeStateJAX(pid));
+      if (!this._lastVal) this._lastVal = [0, 0];
+      this._lastVal[pid] = logits.value;
       const aM = this._sampleMasked(logits.move, mm[pid], rng);
       const aB = this._sampleMasked(logits.bomb, bm[pid], rng);
       return [aM, aB];
