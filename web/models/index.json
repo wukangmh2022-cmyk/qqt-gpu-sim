@@ -1,8 +1,8 @@
 {
  "models": [
   {
-   "name": "params_Pre-Train_Test",
-   "display_name": "Pre-Train Test (Patch3 ViT 7.5M)",
+   "name": "params_it00000346_ema",
+   "display_name": "🔥 48卡正式训练 it346 EMA (Patch3 ViT 7.5M)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -13,10 +13,28 @@
    "patch": 3,
    "depth": 4,
    "n_players": 2,
-   "it": 250,
-   "global_step": 65536000,
+   "it": 346,
+   "global_step": 2902458368,
+   "source": "params_it00000346_ema.pkl",
+   "generated_at": "2026-08-29 12:49 UTC"
+  },
+  {
+   "name": "params_Pre-Train_Test",
+   "display_name": "⚡ Pre-Train Test (Patch3 ViT 7.5M)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 0,
+   "global_step": 0,
    "source": "params_Pre-Train_Test.pkl",
-   "generated_at": "2026-08-29 09:50 UTC"
+   "generated_at": "2026-08-29 13:00 UTC"
   },
   {
    "name": "ViTModel2_31.9B",

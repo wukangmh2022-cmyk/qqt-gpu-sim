@@ -56,6 +56,7 @@ def build_onnx(weights: dict, embed: int, depth: int, patch: int,
 
     gp = -(-h // patch)
     n_tok = gp * gp
+    tot_tok = n_tok + 1
     d = embed // heads
     F = int(weights["b0_ff1_w"].shape[1])
 
@@ -79,7 +80,7 @@ def build_onnx(weights: dict, embed: int, depth: int, patch: int,
 
     # ---- 常量权重 ----
     tok_w = C("tok_w", weights["tok_w"]); tok_b = C("tok_b", weights["tok_b"])
-    pos = C("pos", weights["pos"])                       # (17, E)
+    pos = C("pos", weights["pos"])                       # (tot_tok, E)
     st_w = C("state_w", weights["state_w"]); st_b = C("state_b", weights["state_b"])
     head_wm = C("head_wm_w", weights["head_wm_w"]); head_bm = C("head_wm_b", weights["head_wm_b"])
     head_wb = C("head_wb_w", weights["head_wb_w"]); head_bb = C("head_wb_b", weights["head_wb_b"])
@@ -109,7 +110,7 @@ def build_onnx(weights: dict, embed: int, depth: int, patch: int,
                        C("pa2", np.array([0], np.int64))], [mid("pos")])   # (1, E)
     st = N("Add", [st, posl], [mid("add")])
     st = N("Reshape", [st, C("s3", np.array([0, 1, embed], np.int64))], [mid("rs")])
-    x = N("Concat", [x, st], [mid("cat")], axis=1)                         # [N,17,E]
+    x = N("Concat", [x, st], [mid("cat")], axis=1)                         # [N,tot_tok,E]
 
     inv_sqrt = C("inv_sqrt_d", np.array([1.0 / np.sqrt(d)], np.float32))
 
@@ -131,18 +132,18 @@ def build_onnx(weights: dict, embed: int, depth: int, patch: int,
         q = N("MatMul", [ln1, qw], [mid("mm")]); q = N("Add", [q, qb], [mid("add")])
         k = N("MatMul", [ln1, kw], [mid("mm")]); k = N("Add", [k, kb], [mid("add")])
         v = N("MatMul", [ln1, vw], [mid("mm")]); v = N("Add", [v, vb], [mid("add")])
-        q = N("Reshape", [q, C(f"sq{i}", np.array([0, 17, heads, d], np.int64))], [mid("rs")])
-        k = N("Reshape", [k, C(f"sk{i}", np.array([0, 17, heads, d], np.int64))], [mid("rs")])
-        v = N("Reshape", [v, C(f"sv{i}", np.array([0, 17, heads, d], np.int64))], [mid("rs")])
-        q = N("Transpose", [q], [mid("tp")], perm=[0, 2, 1, 3])   # [N,4,17,98]
-        kt = N("Transpose", [k], [mid("tp")], perm=[0, 2, 3, 1])  # [N,4,98,17]
-        v = N("Transpose", [v], [mid("tp")], perm=[0, 2, 1, 3])   # [N,4,17,98]
+        q = N("Reshape", [q, C(f"sq{i}", np.array([0, tot_tok, heads, d], np.int64))], [mid("rs")])
+        k = N("Reshape", [k, C(f"sk{i}", np.array([0, tot_tok, heads, d], np.int64))], [mid("rs")])
+        v = N("Reshape", [v, C(f"sv{i}", np.array([0, tot_tok, heads, d], np.int64))], [mid("rs")])
+        q = N("Transpose", [q], [mid("tp")], perm=[0, 2, 1, 3])   # [N,4,tot_tok,d]
+        kt = N("Transpose", [k], [mid("tp")], perm=[0, 2, 3, 1])  # [N,4,d,tot_tok]
+        v = N("Transpose", [v], [mid("tp")], perm=[0, 2, 1, 3])   # [N,4,tot_tok,d]
         sc = N("MatMul", [q, kt], [mid("mm")])
         sc = N("Mul", [sc, inv_sqrt], [mid("mul")])
         sm = N("Softmax", [sc], [mid("sm")], axis=-1)
-        att = N("MatMul", [sm, v], [mid("mm")])                    # [N,4,17,98]
-        att = N("Transpose", [att], [mid("tp")], perm=[0, 2, 1, 3])  # [N,17,4,98]
-        att = N("Reshape", [att, C(f"sa{i}", np.array([0, 17, embed], np.int64))], [mid("rs")])
+        att = N("MatMul", [sm, v], [mid("mm")])                    # [N,4,tot_tok,d]
+        att = N("Transpose", [att], [mid("tp")], perm=[0, 2, 1, 3])  # [N,tot_tok,4,d]
+        att = N("Reshape", [att, C(f"sa{i}", np.array([0, tot_tok, embed], np.int64))], [mid("rs")])
         proj = N("MatMul", [att, prw], [mid("mm")]); proj = N("Add", [proj, prb], [mid("add")])
         x = N("Add", [x, proj], [mid("add")])
         ln2 = N("LayerNormalization", [x, ln2g, ln2b], [mid("ln")], axis=-1, epsilon=1e-6)
@@ -159,7 +160,13 @@ def build_onnx(weights: dict, embed: int, depth: int, patch: int,
     mv = N("MatMul", [g, head_wm], [mid("mm")]); mv = N("Add", [mv, head_bm], [mid("add")])
     bm = N("MatMul", [g, head_wb], [mid("mm")]); bm = N("Add", [bm, head_bb], [mid("add")])
     va = N("MatMul", [g, head_wv], [mid("mm")]); va = N("Add", [va, head_bv], [mid("add")])
-    va = N("Squeeze", [va, C("sqz", np.array([1], np.int64))], [mid("add")])
+    if int(weights["head_wv_w"].shape[1]) == 128:
+        sm_v = N("Softmax", [va], [mid("sm")], axis=-1)
+        bc = C("bin_centers", np.linspace(-1.0, 1.0, 128, dtype=np.float32))
+        va_mul = N("Mul", [sm_v, bc], [mid("mul")])
+        va = N("ReduceSum", [va_mul, C("rs_axes", np.array([1], np.int64))], [mid("sum")], keepdims=0)
+    else:
+        va = N("Squeeze", [va, C("sqz", np.array([1], np.int64))], [mid("add")])
     mv = N("Identity", [mv], ["move"])
     bm = N("Identity", [bm], ["bomb"])
     va = N("Identity", [va], ["value"])

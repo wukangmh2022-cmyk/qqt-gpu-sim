@@ -263,6 +263,9 @@ def main():
                     help="课程对战评估间隔（迭代数，默认 50：每 50 轮评估一次 vs 阶段基线胜率）")
     ap.add_argument("--curriculum-min-iters", type=int, default=50,
                     help="每个课程阶段最小训练迭代数（默认 50：防止阶段跳变过快）")
+    ap.add_argument("--curriculum-eval-steps", type=int, default=0,
+                    help="课程 Gate 评估对战步数（默认 0=使用 --num-steps；"
+                         "建议设为 1800 与正式对局一致，保证复杂地图有足够步数分出胜负）")
     args = ap.parse_args()
     if args.reward_anneal_step_offset < 0:
         raise SystemExit("--reward-anneal-step-offset must be non-negative")
@@ -569,10 +572,11 @@ def main():
 
     # ---- 评估：两策略对打（用于课程胜率门禁与 --eval-vs 基线）----
     eval_fn = None
+    eval_steps = args.curriculum_eval_steps if args.curriculum_eval_steps > 0 else steps
     if (args.eval_vs and args.eval_every > 0) or (curriculum is not None and args.curriculum_eval_every > 0):
         def eval_shard(params, frozen, states, key):
             states, (w, l) = collect_rollout_two(
-                params, frozen, args.arch, states, key, steps,
+                params, frozen, args.arch, states, key, eval_steps,
                 args.no_mask, args.obs_quant)
             return states, key, w, l
 

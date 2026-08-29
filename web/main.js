@@ -1148,15 +1148,11 @@
   async function loadModelList() {
     const resp = await fetch('models/index.json');
     modelList = (await resp.json()).models;
-    // 下拉按时间倒序(最新在前): generated_at 缺失的排最后
-    modelList.sort((a, b) => String(b.generated_at || '').localeCompare(String(a.generated_at || '')));
     // 敌人 AI 下拉 + 观战「我方：」下拉：都列全部模型 + 规则 Hunter
     fillAiSelect(elEnemyAi, true);
     fillAiSelect(elP0Ai, true);
-    elEnemyAi.value = LATEST_VIT;             // 默认敌人 = 最新 ViT 模型
+    elEnemyAi.value = modelList[0] ? modelList[0].name : LATEST_VIT;
     elP0Ai.value = HUNTER_VAL;                // 观战「我方：」默认规则 Hunter
-    // 观战「我方：」默认策略**同步初始化**（之前只在下拉 change 时赋值，
-    // 直接勾观战 → p0Sel=null → aiOf(0) 返回 IDLE → 我方站着不动）
     p0Sel = elP0Ai.value;
     await applyModel();            // 预加载默认敌人模型（我方默认同款，已入缓存）
   }
@@ -2312,11 +2308,11 @@
                  BOARD_PX - 18, y0 + 30);
 
     // ---- 实时 AI 胜率评估条 (Real-Time Win Probability Bar) ----
+    const em = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
     let p0WinProb = 0.5;
     if (replayExporting && replayWinProb !== null) {
       p0WinProb = replayWinProb;
     } else {
-      const em = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
       const p0m = elSpectate.checked && p0Sel && p0Sel !== HUNTER_VAL ? modelCache.get(p0Sel) : null;
       if (p0m && p0m._lastVal && p0m._lastVal[0] !== undefined) {
         p0WinProb = Math.max(0.02, Math.min(0.98, (p0m._lastVal[0] + 1.0) / 2.0));

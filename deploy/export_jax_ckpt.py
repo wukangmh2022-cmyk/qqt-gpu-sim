@@ -151,7 +151,12 @@ def _forward_fp32(params, obs, state=None):
     g = x[:, :n_tok].mean(1)
     mv = g @ params["heads"]["wm"][0] + params["heads"]["wm"][1]
     bm = g @ params["heads"]["wb"][0] + params["heads"]["wb"][1]
-    v = (g @ params["heads"]["wv"][0] + params["heads"]["wv"][1]).squeeze(-1)
+    v_raw = g @ params["heads"]["wv"][0] + params["heads"]["wv"][1]
+    if v_raw.shape[-1] == 128:
+        bin_centers = jnp.linspace(-1.0, 1.0, 128)
+        v = jnp.sum(jax.nn.softmax(v_raw, axis=-1) * bin_centers, axis=-1)
+    else:
+        v = v_raw.squeeze(-1)
     return mv, bm, v
 
 
@@ -199,7 +204,12 @@ def transformer_forward_js(params_flat: dict, obs: np.ndarray,
     g = x[:n_tok].mean(0)
     mv = g @ params_flat["head_wm_w"] + params_flat["head_wm_b"]
     bm = g @ params_flat["head_wb_w"] + params_flat["head_wb_b"]
-    v = (g @ params_flat["head_wv_w"] + params_flat["head_wv_b"]).squeeze(-1)
+    v_raw = g @ params_flat["head_wv_w"] + params_flat["head_wv_b"]
+    if v_raw.shape[-1] == 128:
+        bin_centers = np.linspace(-1.0, 1.0, 128, dtype=np.float64)
+        v = np.sum(_softmax(v_raw.astype(np.float32)).astype(np.float64) * bin_centers, axis=-1)
+    else:
+        v = v_raw.squeeze(-1)
     return mv.astype(np.float32), bm.astype(np.float32), v.astype(np.float32)
 
 

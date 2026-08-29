@@ -1622,7 +1622,8 @@
       // 4) patch-token 均值池化 → 三头（每玩家）
       const hmw = this.T('head_wm_w'), hmb = this.T('head_wm_b');   // (E, 5)
       const hbw = this.T('head_wb_w'), hbb = this.T('head_wb_b');   // (E, 2)
-      const hvw = this.T('head_wv_w'), hvb = this.T('head_wv_b');   // (E, 1)
+      const hvw = this.T('head_wv_w'), hvb = this.T('head_wv_b');   // (E, 1) or (E, 128)
+      const numBins = hvb.length;
       const outs = [];
       for (let p = 0; p < n; p++) {
         const base = p * TS;
@@ -1639,8 +1640,31 @@
         }
         for (let o = 0; o < 5; o++) move[o] += hmb[o];
         for (let o = 0; o < 2; o++) bomb[o] += hbb[o];
-        let value = hvb[0];
-        for (let j = 0; j < E; j++) value += g[j] * hvw[j];
+        let value = 0;
+        if (numBins === 128) {
+          const vLogits = new Float64Array(128);
+          for (let b = 0; b < 128; b++) vLogits[b] = hvb[b];
+          for (let j = 0; j < E; j++) {
+            const gj = g[j], jB = j * 128;
+            for (let b = 0; b < 128; b++) vLogits[b] += gj * hvw[jB + b];
+          }
+          let maxLogit = -Infinity;
+          for (let b = 0; b < 128; b++) if (vLogits[b] > maxLogit) maxLogit = vLogits[b];
+          let expSum = 0;
+          const exps = new Float64Array(128);
+          for (let b = 0; b < 128; b++) {
+            exps[b] = Math.exp(vLogits[b] - maxLogit);
+            expSum += exps[b];
+          }
+          for (let b = 0; b < 128; b++) {
+            const prob = exps[b] / expSum;
+            const center = -1.0 + (2.0 * b) / 127.0;
+            value += prob * center;
+          }
+        } else {
+          value = hvb[0];
+          for (let j = 0; j < E; j++) value += g[j] * hvw[j];
+        }
         outs.push({ move, bomb, value });
       }
       return outs;
