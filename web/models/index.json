@@ -19,222 +19,6 @@
    "generated_at": "2026-08-26 11:21 UTC"
   },
   {
-   "name": "ViTModel2_31.2B",
-   "display_name": "ViTModel2_31.2B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1418,
-   "global_step": 31224983552,
-   "source": "ViTModel2_1418_it00001418.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_30.5B",
-   "display_name": "ViTModel2_30.5B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1375,
-   "global_step": 30503739392,
-   "source": "ViTModel2_1375_it00001375.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_29.8B",
-   "display_name": "ViTModel2_29.8B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1332,
-   "global_step": 29782495232,
-   "source": "ViTModel2_1332_it00001332.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_29.1B",
-   "display_name": "ViTModel2_29.1B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1289,
-   "global_step": 29061251072,
-   "source": "ViTModel2_1289_it00001289.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_28.3B",
-   "display_name": "ViTModel2_28.3B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1246,
-   "global_step": 28340006912,
-   "source": "ViTModel2_1246_it00001246.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_27.6B",
-   "display_name": "ViTModel2_27.6B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1203,
-   "global_step": 27618762752,
-   "source": "ViTModel2_1203_it00001203.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_26.9B",
-   "display_name": "ViTModel2_26.9B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1160,
-   "global_step": 26897518592,
-   "source": "ViTModel2_1160_it00001160.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_26.2B",
-   "display_name": "ViTModel2_26.2B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1117,
-   "global_step": 26176274432,
-   "source": "ViTModel2_1117_it00001117.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_25.5B",
-   "display_name": "ViTModel2_25.5B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1074,
-   "global_step": 25455030272,
-   "source": "ViTModel2_1074_it00001074.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_24.7B",
-   "display_name": "ViTModel2_24.7B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1031,
-   "global_step": 24733786112,
-   "source": "ViTModel2_1031_it00001031.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_24.0B",
-   "display_name": "ViTModel2_24.0B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 988,
-   "global_step": 24012541952,
-   "source": "ViTModel2_988_it00000988.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_23.3B",
-   "display_name": "ViTModel2_23.3B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 945,
-   "global_step": 23291297792,
-   "source": "ViTModel2_945_it00000945.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
    "name": "ViTModel2_22.6B",
    "display_name": "ViTModel2_22.6B",
    "arch": "transformer",
@@ -313,60 +97,6 @@
    "generated_at": "2026-08-26 11:21 UTC"
   },
   {
-   "name": "ViTModel2_7.2B",
-   "display_name": "ViTModel2_7.2B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 859,
-   "global_step": 7205814272,
-   "source": "ViTModel2_859_it00000859.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_6.8B",
-   "display_name": "ViTModel2_6.8B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 816,
-   "global_step": 6845104128,
-   "source": "ViTModel2_816_it00000816.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_6.5B",
-   "display_name": "ViTModel2_6.5B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 773,
-   "global_step": 6484393984,
-   "source": "ViTModel2_773_it00000773.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
    "name": "duel_nobc_6.46B",
    "arch": "mlp",
    "obs_shape": [
@@ -395,42 +125,6 @@
    "generated_at": "2026-08-16 15:11 UTC"
   },
   {
-   "name": "ViTModel2_6.3B",
-   "display_name": "ViTModel2_6.3B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 746,
-   "global_step": 6257901568,
-   "source": "ViTModel2_746_it00000746.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_6.1B",
-   "display_name": "ViTModel2_6.1B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 730,
-   "global_step": 6123683840,
-   "source": "ViTModel2_730_it00000730.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
    "name": "duel_nobc_5.95B",
    "arch": "mlp",
    "obs_shape": [
@@ -445,78 +139,6 @@
    "generated_at": "2026-08-16 15:11 UTC"
   },
   {
-   "name": "ViTModel2_5.8B",
-   "display_name": "ViTModel2_5.8B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 687,
-   "global_step": 5762973696,
-   "source": "ViTModel2_687_it00000687.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_5.4B",
-   "display_name": "ViTModel2_5.4B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 644,
-   "global_step": 5402263552,
-   "source": "ViTModel2_644_it00000644.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_5.0B",
-   "display_name": "ViTModel2_5.0B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 602,
-   "global_step": 5049942016,
-   "source": "ViTModel2_602_it00000602.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_4.7B",
-   "display_name": "ViTModel2_4.7B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 559,
-   "global_step": 4689231872,
-   "source": "ViTModel2_559_it00000559.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
    "name": "duel_nobc_e3970",
    "arch": "mlp",
    "obs_shape": [
@@ -529,42 +151,6 @@
    "elo": 3957.1,
    "source": "duel_nobc_e3970.pt",
    "generated_at": "2026-08-16 15:11 UTC"
-  },
-  {
-   "name": "ViTModel2_4.3B",
-   "display_name": "ViTModel2_4.3B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 516,
-   "global_step": 4328521728,
-   "source": "ViTModel2_516_it00000516.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_4.2B",
-   "display_name": "ViTModel2_4.2B",
-   "arch": "transformer",
-   "obs_shape": [
-    13,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 500,
-   "global_step": 4194304000,
-   "source": "ViTModel2_500_it00000500.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
   },
   {
    "name": "ViTModel_500",
@@ -598,60 +184,6 @@
    "generated_at": "2026-08-16 15:14 UTC"
   },
   {
-   "name": "ViTModel2_4.0B",
-   "display_name": "ViTModel2_4.0B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 473,
-   "global_step": 3967811584,
-   "source": "ViTModel2_473_it00000473.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_3.6B",
-   "display_name": "ViTModel2_3.6B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 430,
-   "global_step": 3607101440,
-   "source": "ViTModel2_430_it00000430.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_3.2B",
-   "display_name": "ViTModel2_3.2B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 387,
-   "global_step": 3246391296,
-   "source": "ViTModel2_387_it00000387.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
    "name": "duel_nobc_3B",
    "arch": "mlp",
    "obs_shape": [
@@ -664,24 +196,6 @@
    "elo": 3461.2,
    "source": "duel_nobc_3B.pt",
    "generated_at": "2026-08-16 15:11 UTC"
-  },
-  {
-   "name": "ViTModel2_2.9B",
-   "display_name": "ViTModel2_2.9B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 344,
-   "global_step": 2885681152,
-   "source": "ViTModel2_344_it00000344.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
   },
   {
    "name": "ViTModel_340",
@@ -701,42 +215,6 @@
    "generated_at": "2026-08-20 15:31 UTC"
   },
   {
-   "name": "ViTModel2_2.5B",
-   "display_name": "ViTModel2_2.5B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 301,
-   "global_step": 2524971008,
-   "source": "ViTModel2_301_it00000301.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_2.2B",
-   "display_name": "ViTModel2_2.2B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 258,
-   "global_step": 2164260864,
-   "source": "ViTModel2_258_it00000258.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
    "name": "ViTModel_238",
    "arch": "transformer",
    "obs_shape": [
@@ -754,24 +232,6 @@
    "generated_at": "2026-08-20 14:06 UTC"
   },
   {
-   "name": "ViTModel2_1.8B",
-   "display_name": "ViTModel2_1.8B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 215,
-   "global_step": 1803550720,
-   "source": "ViTModel2_215_it00000215.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
    "name": "ViTModel_204",
    "arch": "transformer",
    "obs_shape": [
@@ -787,24 +247,6 @@
    "global_step": 1711276032,
    "source": "params_it00000204.pkl",
    "generated_at": "2026-08-20 13:28 UTC"
-  },
-  {
-   "name": "ViTModel2_1.4B",
-   "display_name": "ViTModel2_1.4B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 172,
-   "global_step": 1442840576,
-   "source": "ViTModel2_172_it00000172.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
   },
   {
    "name": "ViTModel2_1.1B",
@@ -854,24 +296,6 @@
    "global_step": 855638016,
    "source": "params_it00000102.pkl",
    "generated_at": "2026-08-20 13:28 UTC"
-  },
-  {
-   "name": "ViTModel2_721M",
-   "display_name": "ViTModel2_721M",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 86,
-   "global_step": 721420288,
-   "source": "ViTModel2_86_it00000086.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
   },
   {
    "name": "cnn_course_latest_min",
@@ -959,24 +383,6 @@
    "elo": 2437.0,
    "source": "duel_5x3.pt",
    "generated_at": "2026-08-16 15:11 UTC"
-  },
-  {
-   "name": "ViTModel2_361M",
-   "display_name": "ViTModel2_361M",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 43,
-   "global_step": 360710144,
-   "source": "ViTModel2_43_it00000043.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
   },
   {
    "name": "duel_cnn",
