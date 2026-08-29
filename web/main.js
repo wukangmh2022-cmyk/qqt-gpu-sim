@@ -182,6 +182,8 @@
   // ------------------------------------------------------------ 状态
   let sim = null, modelList = [], res = null;
   let replayExporting = false;
+  let replayWinProb = null;
+  let currentWinProb = 0.5;
   let replayAnim = null;   // 视频导出中非 null：{moving:[pid0,pid1]} —— 行走动画按导出帧间位移驱动
   let rng = null;
   // 鼠标寻路：hover 周围九宫格，click 映射到四方向 Destination / IDLE
@@ -1564,7 +1566,16 @@
           }
           exportSim.pos[2] = prevP1[0] + (frame.pos[2] - prevP1[0]) * a01;
           exportSim.pos[3] = prevP1[1] + (frame.pos[3] - prevP1[1]) * a01;
-          prevPos.set(exportSim.pos); curPos.set(exportSim.pos);
+          // 恢复 60Hz 胜率轨迹（跟随画面与操作实时变化）
+          if (subs[i] && subs[i][5] !== undefined) {
+            replayWinProb = subs[i][5];
+          } else if (frame.winProb !== undefined) {
+            replayWinProb = frame.winProb;
+          } else {
+            const hpDiff = (exportSim.hp[0] - exportSim.hp[1]) / CFG.maxHp;
+            replayWinProb = Math.max(0.05, Math.min(0.95, 0.5 + hpDiff * 0.45));
+          }
+
           // 快照不含 sprite 状态：朝向/行走动画按本渲染帧与上一帧的位移推断，
           // 否则导出的视频角色锁朝向、腿部静止。
           for (let pid = 0; pid < 2; pid++) {
@@ -1598,6 +1609,7 @@
       bgmRecNode = null; bgmRecGain = null;
       CFG.radius = savedRadius;
       replayExporting = false;
+      replayWinProb = null;
       replayAnim = null;
       face[0] = oldFace[0]; face[1] = oldFace[1];
       elBanner.innerHTML = oldBanner;
@@ -1699,7 +1711,11 @@
     const snapshotMs = performance.now() - snapshotT0;
     const stepT0 = performance.now();
     const info = sim.step([a0, a1]);
-    if (replay) replay.frames.push(sim.snapshotReplay(info));
+    if (replay) {
+      const snap = sim.snapshotReplay(info);
+      snap.winProb = currentWinProb;
+      replay.frames.push(snap);
+    }
     curPos.set(sim.pos);
     const stepMs = performance.now() - stepT0;
     const eventT0 = performance.now();
@@ -2296,17 +2312,22 @@
                  BOARD_PX - 18, y0 + 30);
 
     // ---- 实时 AI 胜率评估条 (Real-Time Win Probability Bar) ----
-    const em = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
-    const p0m = elSpectate.checked && p0Sel && p0Sel !== HUNTER_VAL ? modelCache.get(p0Sel) : null;
     let p0WinProb = 0.5;
-    if (p0m && p0m._lastVal && p0m._lastVal[0] !== undefined) {
-      p0WinProb = Math.max(0.02, Math.min(0.98, (p0m._lastVal[0] + 1.0) / 2.0));
-    } else if (em && em._lastVal) {
-      const v = (em._lastVal[1] !== undefined && !elSpectate.checked) ? em._lastVal[1] : (em._lastVal[0] !== undefined ? em._lastVal[0] : 0.0);
-      p0WinProb = Math.max(0.02, Math.min(0.98, 1.0 - (v + 1.0) / 2.0));
+    if (replayExporting && replayWinProb !== null) {
+      p0WinProb = replayWinProb;
     } else {
-      const hpDiff = (sim.hp[0] - sim.hp[1]) / CFG.maxHp;
-      p0WinProb = Math.max(0.05, Math.min(0.95, 0.5 + hpDiff * 0.45));
+      const em = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
+      const p0m = elSpectate.checked && p0Sel && p0Sel !== HUNTER_VAL ? modelCache.get(p0Sel) : null;
+      if (p0m && p0m._lastVal && p0m._lastVal[0] !== undefined) {
+        p0WinProb = Math.max(0.02, Math.min(0.98, (p0m._lastVal[0] + 1.0) / 2.0));
+      } else if (em && em._lastVal) {
+        const v = (em._lastVal[1] !== undefined && !elSpectate.checked) ? em._lastVal[1] : (em._lastVal[0] !== undefined ? em._lastVal[0] : 0.0);
+        p0WinProb = Math.max(0.02, Math.min(0.98, 1.0 - (v + 1.0) / 2.0));
+      } else if (sim) {
+        const hpDiff = (sim.hp[0] - sim.hp[1]) / CFG.maxHp;
+        p0WinProb = Math.max(0.05, Math.min(0.95, 0.5 + hpDiff * 0.45));
+      }
+      currentWinProb = p0WinProb;
     }
     const p1WinProb = 1.0 - p0WinProb;
 
@@ -2453,7 +2474,7 @@
     // 60Hz 帧级位置轨迹（不管对局是谁）：人类/观战下角色在渲染帧间的真实
     // 位置只存在于这里，导出视频据此做 60fps 平滑重放。
     if (replay && running && sim && !sim.done && !replayExporting) {
-      replay.framePos.push([sim.t, sim.pos[0], sim.pos[1], sim.pos[2], sim.pos[3]]);
+      replay.framePos.push([sim.t, sim.pos[0], sim.pos[1], sim.pos[2], sim.pos[3], currentWinProb]);
     }
     const frameDt = now - prevFrame;          // 真实帧间隔(ms, rAF 时间戳)
     prevFrame = now;
