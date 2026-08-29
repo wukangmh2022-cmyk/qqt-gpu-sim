@@ -186,6 +186,13 @@ def main():
                     shutil.copy2(src, OUT_MUSIC / name)
                     music_done.add(name)
                 music_rel = f"assets/music/{name}"
+        layers_flat = [flat(t) for t in d["layers_raw"]]
+        bush_flat = flat(d["bush"]) if "bush" in d else [0] * (w * h)
+        # 老的 levels_qqt 导出可能保留了 6003 图层但 bush 布尔层为空；
+        # 6003 是野外灌木，必须在共享 JSON 中恢复为可通行、可炸状态。
+        if layers_flat and len(layers_flat[0]) == w * h:
+            bush_flat = [int(bool(v) or abs(layers_flat[0][i]) == 6003)
+                         for i, v in enumerate(bush_flat)]
         levels.append({
             "id": int(pt.stem.split("_")[1]),
             "source": d["source"], "name": d.get("map_name", ""),
@@ -196,9 +203,9 @@ def main():
             "wall": flat(d["wall"]), "brick": flat(d["brick"]),
             "overhead": flat(d["overhead"]), "pushable": flat(d["pushable"]),
             "cover": flat(d["cover"]) if "cover" in d else [0] * (w * h),
-            "bush": flat(d["bush"]) if "bush" in d else [0] * (w * h),
+            "bush": bush_flat,
             "ground": flat(d["ground"]),
-            "layers": [flat(t) for t in d["layers_raw"]],
+            "layers": layers_flat,
             "spawns": [[int(y), int(x)] for y, x in d["spawns"]],
             "initial_stats": d["initial_stats"],
             "crate_rate": d["meta"]["crate_rate"],
