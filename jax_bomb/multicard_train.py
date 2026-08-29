@@ -115,13 +115,13 @@ def newest_ckpt(ckpt_dir, rank):
     return max(files, key=lambda p: int(os.path.basename(p).split("_")[1]))
 
 
-def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg):
+def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg, cur_stage=0):
     """每个 rank 存自己的文件（states/keys 每 rank 不同；params/opt_state
     跨 rank 一致）。host 数组序列化，加载时转回 jax 数组。"""
     path = ckpt_file(ckpt_dir, rank, it)
     try:
         os.makedirs(ckpt_dir, exist_ok=True)
-        payload = {"it": it, "cfg": cfg,
+        payload = {"it": it, "cfg": cfg, "cur_stage": int(cur_stage),
                    "params": jax.tree.map(np.asarray, params),
                    "opt_state": jax.tree.map(np.asarray, opt_state),
                    "states": jax.tree.map(np.asarray, states),
@@ -442,6 +442,10 @@ def main():
                     f"如确要新跑请加 --fresh 或删除检查点目录")
             it_done, params, opt_state = p["it"], p["params"], p["opt_state"]
             states, keys = p["states"], p["keys"]
+            if "cur_stage" in p and curriculum is not None:
+                cur_stage = int(p["cur_stage"])
+                _set_stage(cur_stage)
+                print(f"[{rank}] 课程阶段恢复为 Stage {cur_stage}（{len(curriculum['stages'][cur_stage])} 张图）", flush=True)
             print(f"[{rank}] 接续检查点 {ck}（iter {it_done}）", flush=True)
             write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                                 f"RESUME from {ck} iter={it_done}"])
@@ -634,18 +638,22 @@ def main():
                 if total_games >= 30 and wr >= gate_thresh:
                     winrate_passed = True
 
-            # 严格门禁：开启评估时，必须在真实对决中完局>=30局且胜率达到门禁阈值，杜绝任何超时放行
+            # 课程晋级判定：
+            # 1. 优先胜率大考（完局>=30局且胜率>=门禁阈值）
+            # 2. 安全兜底（某阶段深练超 300 轮且胜率>=50%，防止后期超大迷宫图局长过长死锁）
             step_fallback = False
             if eval_fn is None:
                 step_frac = curriculum_gs / max(1, steps_per_iter_g * args.iters)
                 step_fallback = (step_frac >= curriculum['thresholds'][cur_stage]) if cur_stage < len(curriculum['thresholds']) else False
+            elif iters_in_stage >= 300 and total_games >= 30 and wr >= 0.50:
+                step_fallback = True
 
             if winrate_passed or step_fallback:
                 cur_stage += 1
                 _set_stage(cur_stage)
                 stage_start_iter = i
                 stage_baseline_params = cur[0]  # 锁定当前学成的新模型作为下一阶段 Baseline
-                reason = f"胜率达标 (winrate={wr:.1%} >= {gate_thresh:.1%}, 完局={total_games}局)" if winrate_passed else f"步数达标 (step_frac={step_frac:.1%})"
+                reason = f"胜率达标 (winrate={wr:.1%} >= {gate_thresh:.1%}, 完局={total_games}局)" if winrate_passed else (f"安全超时晋级 (已练 {iters_in_stage} iters, winrate={wr:.1%})" if eval_fn is not None else f"步数达标 (step_frac={step_frac:.1%})")
                 print(f"[{rank}] 🏆 课程晋级 → Stage {cur_stage}（原因: {reason}，"
                       f"{len(curriculum['stages'][cur_stage])} 张图）", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
@@ -694,9 +702,9 @@ def main():
                                   and time.time() - last_save
                                   >= args.ckpt_every * 60)):
             if save_ckpt(args.ckpt_dir, rank, i,
-                         res[0], res[1], res[2], res[3], cfg):
+                         res[0], res[1], res[2], res[3], cfg, cur_stage=cur_stage):
                 print(f"[{rank}] ckpt saved: "
-                      f"{ckpt_file(args.ckpt_dir, rank, i)}", flush=True)
+                      f"{ckpt_file(args.ckpt_dir, rank, i)} (Stage {cur_stage})", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                                     f"ckpt saved iter {i}"])
                 last_save = time.time()

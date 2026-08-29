@@ -490,7 +490,6 @@ def ppo_update_gradsync(params, opt, opt_state, arch, batch, key, minibatch,
     mm_f, bm_f = masks
     mm_f = mm_f.reshape(total, -1)
     bm_f = bm_f.reshape(total, -1)
-    bm_f = bm_f.reshape(total, -1)
     big = sync_k * minibatch
     GRAD_MAX_SAMPLES = 65536
     if big > GRAD_MAX_SAMPLES:
@@ -499,8 +498,6 @@ def ppo_update_gradsync(params, opt, opt_state, arch, batch, key, minibatch,
             f"{GRAD_MAX_SAMPLES}（64GB DCU 实测 131K 样本 OOM）。"
             f"请减小 --lsgd-k（本配置 K ≤ {GRAD_MAX_SAMPLES // minibatch}）"
             f"或改用 param 模式（--lsgd-mode param，无此限制）")
-
-    n_mb = n_keep // mb_half
 
     def update_big(carry, mb):
         """一个 sync_k×minibatch 的大批：单次 value_and_grad → pmean → update。
@@ -535,12 +532,10 @@ def ppo_update_gradsync(params, opt, opt_state, arch, batch, key, minibatch,
 
     last_loss = None
     for _ in range(epochs):
-        ka, kc = jrandom.split(key)
-        perm_a = jrandom.permutation(ka, n_keep)
-        idx_a = actor_idx[perm_a].reshape(n_mb, mb_half)
-        critic_perm = jrandom.permutation(kc, total)[:n_keep]
-        idx_c = critic_perm.reshape(n_mb, mb_half)
-        idx = jnp.concatenate([idx_a, idx_c], axis=1)
+        key, ek = jrandom.split(key)
+        perm = jrandom.permutation(ek, total)
+        idx = perm.reshape(-1, minibatch)
+        n_mb = idx.shape[0]
         n_full, rem = divmod(n_mb, sync_k)
         chunk_means = []
 
