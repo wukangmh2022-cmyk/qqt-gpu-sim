@@ -51,7 +51,10 @@
         elLoading = $('loading'), elLoadingText = $('loading-text'),
         elSaveReplay = $('save-replay'), elSaveGif = $('save-gif'), elRecClip = $('rec-clip'),
         elSaveVideo = $('save-video'), elRecMsg = $('rec-msg'),
-        elModelLowfreq = $('model-lowfreq');
+        elModelLowfreq = $('model-lowfreq'),
+        elP0WinFill = $('p0-win-fill'), elP1WinFill = $('p1-win-fill'),
+        elP0WinPct = $('p0-win-pct'), elP1WinPct = $('p1-win-pct'),
+        elP0WinName = $('p0-win-name'), elP1WinName = $('p1-win-name');
 
   function mouseGridCell(e) {
     const rect = canvas.getBoundingClientRect();
@@ -2300,7 +2303,19 @@
     }
     const p1WinProb = 1.0 - p0WinProb;
 
-    // 绘制胜率条
+    // 同步更新网页顶部 Header 胜率条 (Header Win Probability Gauge)
+    if (elP0WinFill) {
+      const p0Pct = Math.round(p0WinProb * 100);
+      const p1Pct = 100 - p0Pct;
+      elP0WinFill.style.width = `${p0Pct}%`;
+      elP1WinFill.style.width = `${p1Pct}%`;
+      elP0WinPct.textContent = `${p0Pct}%`;
+      elP1WinPct.textContent = `${p1Pct}%`;
+      if (elP0WinName) elP0WinName.textContent = `我方：${p0Kind}`;
+      if (elP1WinName) elP1WinName.textContent = `敌人：${p1Kind}`;
+    }
+
+    // 绘制底部 HUD 胜率条
     const barX = 18;
     const barY = y0 + 48;
     const barW = BOARD_PX - 36;

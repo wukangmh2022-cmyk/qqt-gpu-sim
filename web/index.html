@@ -10,7 +10,21 @@
 <div id="wrap">
   <header>
     <h1>💣 QQT 格斗</h1>
-    <p class="sub">241 张原版 QQ堂地图 · 原版元件贴图渲染 · 规则 Hunter AI 对打</p>
+    <div id="win-rate-wrap">
+      <div class="win-rate-header">
+        <span class="win-label-p0" id="p0-win-name">我方 (P0)</span>
+        <span class="win-vs">⚡ 实时 AI 胜率对峙 ⚡</span>
+        <span class="win-label-p1" id="p1-win-name">敌人 (P1)</span>
+      </div>
+      <div id="win-rate-bar" class="win-rate-bar">
+        <div id="p0-win-fill" class="win-fill p0-fill" style="width: 50%;">
+          <span id="p0-win-pct">50%</span>
+        </div>
+        <div id="p1-win-fill" class="win-fill p1-fill" style="width: 50%;">
+          <span id="p1-win-pct">50%</span>
+        </div>
+      </div>
+    </div>
   </header>
 
   <div id="layout">
