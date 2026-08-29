@@ -700,7 +700,7 @@ def main():
             except Exception as e:
                 print(f"[{rank}] WARN: 参数快照失败: {e}", flush=True)
         # ---- 评估：当前策略 vs 冻结基线（两策略对打，--eval-vs/--eval-every）----
-        if eval_fn is not None and i % args.eval_every == 0:
+        if eval_fn is not None and args.eval_vs and args.eval_every > 0 and i % args.eval_every == 0:
             fpath = args.eval_vs.replace("{RANK}", str(rank))
             try:
                 with open(fpath, "rb") as f:
