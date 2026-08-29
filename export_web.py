@@ -66,6 +66,50 @@ def load_elements(csv_path: Path) -> dict:
     return elems
 
 
+def repair_multicell_footprints(levels: list[dict], elems: dict) -> int:
+    """多格元件占位补碰撞(与 scripts/repair_multicell_footprints.js 同规则)。
+
+    超过 1×1 的元件不可通行半格：layer1 正值(元件原点)落在 wall/brick 上时，
+    整个 w×h footprint 补成 wall/brick。生成管线内联执行 —— 重新生成
+    levels.json 不再依赖手动跑修复脚本(漏跑会把多格元件占位回退成可通行)。
+    返回修补格数。
+    """
+    changed = 0
+    for lv in levels:
+        w, h = lv["w"], lv["h"]
+        layers = lv.get("layers") or []
+        if len(layers) < 2 or not layers[1]:
+            continue
+        layer = layers[1]
+        for r in range(h):
+            for c in range(w):
+                raw = layer[r * w + c]
+                if not raw or raw < 0:
+                    continue
+                elem = elems.get(raw) or elems.get(str(raw))
+                if not elem or (elem["w"] <= 1 and elem["h"] <= 1):
+                    continue
+                origin = r * w + c
+                is_wall = bool(lv["wall"][origin])
+                is_brick = bool(lv["brick"][origin])
+                if not is_wall and not is_brick:
+                    continue          # 可通行原点：结构不挡路，不补
+                for dr in range(elem["h"]):
+                    for dc in range(elem["w"]):
+                        rr, cc = r + dr, c + dc
+                        if rr >= h or cc >= w:
+                            continue
+                        i = rr * w + cc
+                        if is_wall:
+                            if not lv["wall"][i]:
+                                lv["wall"][i] = 1
+                                changed += 1
+                        elif not lv["brick"][i]:
+                            lv["brick"][i] = 1
+                            changed += 1
+    return changed
+
+
 def ensure_die_png(eid: int, city_dir: str, out_root: Path) -> str | None:
     """把元件被炸毁的中间态图(_die)复制/转换为 PNG:
        res/mapElem/<城市>/elemN_die.png 优先, 其次 geno 的 gif/编辑器 img 转换。
@@ -223,10 +267,14 @@ def main():
             "initial_crates": [[int(y), int(x)] for y, x in d.get("initial_crates", [])],
             "music": music_rel, "bg": bg_rel,
             # 可推箱(origin格): [r, c, w, h] — 原点 = layers[1] 正值的可推格
-            "push_boxes": [[int(r), int(c), int(elems.get(str(eid), {}).get("w", 1)),
-                            int(elems.get(str(eid), {}).get("h", 1))]
+            # elems 键是 int；此前误用 str(eid) 永远查空 → 多格可推箱足迹
+            # 被压成 1×1，非原点格全部可穿行。
+            "push_boxes": [[int(r), int(c), int(elems.get(eid, {}).get("w", 1)),
+                            int(elems.get(eid, {}).get("h", 1))]
                            for (r, c, eid) in _push_origins(d, w, h)],
         })
+    n_fix = repair_multicell_footprints(levels, elems)
+    print(f"多格元件占位补碰撞 {n_fix} 格")
     (OUT_LEVELS / "levels.json").write_text(
         json.dumps(levels, ensure_ascii=False), encoding="utf-8")
 
