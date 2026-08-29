@@ -324,6 +324,7 @@ def main():
             with open(args.curriculum_json, encoding="utf-8") as f:
                 curriculum = json.load(f)
             _set_stage(0)
+            cur_stage = 0
             print(f"[{rank}] 课程模式: {args.curriculum_json} 初始 Stage1"
                   f"（{len(curriculum['stages'][0])} 张）阈值"
                   f" {curriculum['thresholds']}", flush=True)
