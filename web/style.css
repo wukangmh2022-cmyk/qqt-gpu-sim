@@ -198,6 +198,43 @@ section.meta code { background: #262c39; padding: 1px 4px; border-radius: 4px; }
 .mm-prev-name { font-size: 15px; font-weight: 700; }
 .mm-prev-meta { font-size: 11px; color: var(--dim); text-align: center; }
 
+/* 选图确认页：预览置顶，属性设置占用右栏下半部。 */
+.mm-prev-panel {
+  justify-content: flex-start;
+  align-items: stretch;
+  max-height: 64vh;
+  overflow-y: auto;
+}
+.mm-prev-img { min-height: 100px; height: 150px; flex: 0 0 150px; }
+.mm-prev-img img { max-height: 150px; margin: 0 auto; }
+.mm-prev-name, .mm-prev-meta { text-align: center; }
+.mm-stats {
+  width: 100%; margin-top: 6px; padding-top: 8px;
+  border-top: 1px solid var(--line);
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px;
+}
+.mm-stat { min-width: 0; }
+.mm-stat span {
+  display: flex; justify-content: space-between; gap: 6px;
+  color: var(--fg); font-size: 10px; font-weight: 600;
+}
+.mm-stat output { color: var(--accent); font-variant-numeric: tabular-nums; }
+.mm-stat input[type="range"] { width: 100%; margin: 3px 0 0; accent-color: var(--accent); }
+.mm-enter {
+  display: block; width: 100%; margin: 12px 0 2px;
+  padding: 9px 16px; font-size: 16px; font-weight: 700;
+  color: #1a1408; background: var(--accent); border-color: var(--accent);
+  animation: blink 1.2s ease-in-out infinite;
+}
+.mm-enter:hover { filter: brightness(1.1); }
+
+@media (max-width: 760px) {
+  #banner { min-width: 0; width: calc(100% - 20px); padding: 10px; }
+  .mm-tree-wrap { flex-direction: column; }
+  .mm-tree { max-height: 30vh; }
+  .mm-prev-panel { min-width: 0; max-height: 44vh; }
+}
+
 /* ---- 顶部特殊块(随机地图/空场景) + 一级预览 ---- */
 .mm-special { margin: 8px 0 6px; display: flex; flex-direction: column; gap: 6px; }
 #mm-random-btn, #mm-empty-btn {
@@ -517,3 +554,23 @@ section.meta code { background: #262c39; padding: 1px 4px; border-radius: 4px; }
   background: rgba(10,12,16,0.6); padding: 2px 6px; border-radius: 4px;
   cursor: pointer; user-select: text; z-index: 30;
 }
+
+.radius-setting > span {
+  display: flex; justify-content: space-between; gap: 8px;
+  color: var(--fg); font-size: 13px;
+}
+.radius-setting output { color: var(--accent); font-variant-numeric: tabular-nums; }
+.radius-setting input[type="range"] { width: 100%; margin-top: 8px; accent-color: var(--accent); }
+
+/* 选图页参数控件最终覆盖规则：避免欢迎层 24px 基准字号被继承到滑块标签。 */
+#banner .mm-stats,
+#banner .mm-stats .mm-stat,
+#banner .mm-stats .mm-stat span,
+#banner .mm-stats .mm-stat output {
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+}
+#banner .mm-stats { gap: 5px 10px; margin-top: 4px; padding-top: 6px; }
+#banner .mm-stats input[type="range"] { margin-top: 2px; height: 14px; }
+#banner .mm-prev-name { font-size: 16px; }
+#banner .mm-prev-meta { font-size: 11px; }

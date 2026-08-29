@@ -20,6 +20,8 @@
   // 全部地图(含空场景)统一 15×13（QQ堂竞技标准尺寸，241 张原版图）
   const H = 13, W = 15, N = H * W;
   const PUSH_TIME = 0.3;   // 推箱子: 持续推 ≥0.3s 才动一格
+  const BUSH_EID = 6003;   // 野外绿色躲猫猫草丛（可通行、可被爆炸清除）
+  const ORT_RUN_TIMEOUT_MS = 1500;  // WebGPU 卡住时及时回退纯 JS，不能阻塞游戏 tick
   const N_PLAYERS = 2;
   const MOVE_UP = 0, MOVE_DOWN = 1, MOVE_LEFT = 2, MOVE_RIGHT = 3, MOVE_IDLE = 4;
   const N_MOVES = 5, N_BOMB = 2;
@@ -30,7 +32,7 @@
   // duel.py 的配置（map_mode=corridor + open_fraction=1.0 即 open 关；
   // corridor 关用 growth_*_start 起步 + 顶墙/侧砖）。
   const CFG = {
-    tickHz: 10, speed: 3.0, radius: 0.45, maxSteps: 1800,   // 碰撞半径 0.45 (盒 54x54px)
+    tickHz: 10, speed: 3.0, radius: 0.36, maxSteps: 1800,
     fuse: 30, blast: 2, maxBombs: 10, maxChain: 16,
     maxHp: 5, invulnTicks: 30,
     stepLen: 3.0 / 10,                 // 0.3 格/tick
@@ -117,7 +119,7 @@
     const secondHit = hitAt(secondLead);
     const has = firstHit || secondHit;
     const first = firstHit ? firstLead : (secondHit ? secondLead : 0);
-    const stopPos = sgn > 0 ? first - rad - EPS : first + 1 + rad + EPS;
+    const stopPos = sgn > 0 ? first - CFG.radius - EPS : first + 1 + CFG.radius + EPS;
     return has ? stopPos : coord;
   }
 
@@ -172,6 +174,9 @@
       this.winner = null;        // 0 / 1 / null（平局或未结束）
       this.lastCovered = null;   // 最近一次爆炸覆盖掩码（渲染用）
       this.lastDied = [false, false];
+      this.lastReplayCovered = null;
+      this.lastReplayTriggered = null;
+      this.lastReplayPlaced = [false, false];
       this.spawnCells = null;    // 本局出生点（回收排除用）
       // 属性上限默认 = CFG 上限（open/corridor；关卡模式在 _loadLevel 覆盖）
       this.bombsMax = CFG.growthBombsMax;
@@ -223,6 +228,92 @@
       this.sinceBomb[0] = 0; this.sinceBomb[1] = 0;
     }
 
+    // Serializable logical state used by replay export. Typed arrays are copied to
+    // plain arrays so the JSON document is independent from the live simulation.
+    snapshotReplay(info) {
+      const arr = (v) => v == null ? null : Array.from(v);
+      return {
+        t: this.t,
+        pos: arr(this.pos),
+        alive: this.alive.slice(),
+        hp: this.hp.slice(),
+        invuln: this.invuln.slice(),
+        sinceBomb: this.sinceBomb.slice(),
+        bombsCap: this.bombsCap.slice(),
+        blastCap: this.blastCap.slice(),
+        spdG: this.spdG.slice(),
+        loBombs: this.loBombs.slice(),
+        loBlast: this.loBlast.slice(),
+        loSpeed: this.loSpeed.slice(),
+        wall: arr(this.wall),
+        brick: arr(this.brick),
+        cover: arr(this.cover),
+        bush: arr(this.bush),
+        crate: arr(this.crate),
+        superCrate: arr(this.superCrate),
+        crateType: arr(this.crateType),
+        recycle: arr(this.recycle),
+        fuse: arr(this.fuse),
+        owner: arr(this.owner),
+        bombBlast: arr(this.bombBlast),
+        pushable: arr(this.pushable),
+        pushT: arr(this.pushT),
+        pushBoxAt: arr(this.pushBoxAt),
+        pushSprite: arr(this.pushSprite),
+        pushBoxes: this.pushBoxes.map((b) => ({
+          o: b.o, cells: b.cells.slice(), eid: b.eid, dead: !!b.dead,
+        })),
+        done: this.done,
+        winner: this.winner,
+        lastDied: this.lastDied.slice(),
+        covered: info && info.covered ? arr(info.covered) : arr(this.lastReplayCovered),
+        triggered: info && info.triggered ? arr(info.triggered) : arr(this.lastReplayTriggered),
+        died: info && info.died ? info.died.slice() : this.lastDied.slice(),
+        placed: info && info.placed ? info.placed.slice() : this.lastReplayPlaced.slice(),
+      };
+    }
+
+    // Restore a frame for deterministic replay rendering; it intentionally does
+    // not advance the simulation or consume its random stream.
+    restoreReplay(frame) {
+      const copy = (name, Type) => {
+        if (frame[name] == null) return;
+        this[name] = Type ? new Type(frame[name]) : frame[name].slice();
+      };
+      copy('pos', Float64Array);
+      this.alive = frame.alive.slice();
+      this.hp = frame.hp.slice();
+      this.invuln = frame.invuln.slice();
+      this.sinceBomb = frame.sinceBomb.slice();
+      this.bombsCap = frame.bombsCap.slice();
+      this.blastCap = frame.blastCap.slice();
+      this.spdG = frame.spdG.slice();
+      this.loBombs = frame.loBombs.slice();
+      this.loBlast = frame.loBlast.slice();
+      this.loSpeed = frame.loSpeed.slice();
+      for (const name of ['wall', 'brick', 'cover', 'bush', 'crate', 'superCrate',
+        'recycle', 'fuse', 'owner', 'bombBlast', 'pushable', 'pushT', 'pushBoxAt',
+        'pushSprite']) {
+        const old = this[name];
+        if (frame[name] == null) continue;
+        this[name] = new old.constructor(frame[name]);
+      }
+      if (frame.crateType != null) this.crateType = new Int8Array(frame.crateType);
+      this.pushBoxes = (frame.pushBoxes || []).map((b) => ({
+        o: b.o, cells: b.cells.slice(), eid: b.eid, dead: !!b.dead,
+      }));
+      this.t = frame.t;
+      this.done = !!frame.done;
+      this.winner = frame.winner == null ? null : frame.winner;
+      this.lastDied = (frame.lastDied || frame.died || [false, false]).slice();
+      this.lastReplayCovered = frame.covered ? new Uint8Array(frame.covered) : null;
+      this.lastReplayTriggered = frame.triggered ? new Uint8Array(frame.triggered) : null;
+      this.lastReplayPlaced = (frame.placed || [false, false]).slice();
+      this.lastCovered = this.lastReplayCovered;
+      this._gen = (this._gen || 0) + 1;
+      return this;
+    }
+
     // 加载一张新地图关卡（web/assets/maps/levels.json 导出的 241 张之一）：
     //   wall/brick 通行性、出生点随机二选、初始属性按地图配置、炸砖爆率按地图
     //   crate_rate（= 57/W，保证全图砖清完 ≈300% 单人满属性）、空场景中心十字宝箱。
@@ -232,6 +323,11 @@
         this.brick[i] = level.brick[i];
         if (level.cover) this.cover[i] = level.cover[i];
         if (level.bush) this.bush[i] = level.bush[i];
+        // 旧版 Web 地图导出可能只有 layers，没有同步 bush 布尔层。
+        // 野外 6003 是可通行且可炸的躲猫猫草丛，运行时必须补回状态层。
+        if (!this.bush[i] && level.layers && Math.abs(level.layers[0][i] || 0) === BUSH_EID) {
+          this.bush[i] = 1;
+        }
       }
       // 旧模型兼容: 多出的两列(13,14)填为不可通行墙 → 环境与旧版 13 宽一致
       if (this.oldMode) {
@@ -239,6 +335,8 @@
           this.wall[r * W + W - 1] = 1;
           this.wall[r * W + W - 2] = 1;
         }
+        // 兼容墙可能覆盖关卡自带的初始道具；墙体生成后统一清掉重叠项。
+        this._clearBlockedCrates();
       }
       // 可推箱运行时状态: push_boxes [[r,c,w,h]...] → 足迹格/推动计时/精灵
       const pb = level.push_boxes || [];
@@ -289,9 +387,28 @@
       // 空场景：开局中心十字宝箱直接放地上（踩到必升）
       if (level.initial_crates && level.initial_crates.length) {
         for (const [r, c] of level.initial_crates) {
-          this.crate[r * W + c] = 1;
-          this.crateType[r * W + c] = -1;   // 空场景随机宝箱(问号)
+          const i = r * W + c;
+          if (!this._crateBlocked(i)) {
+            this.crate[i] = 1;
+            this.crateType[i] = -1;   // 空场景随机宝箱(问号)
+          }
         }
+      }
+      // 初始宝箱写入发生在兼容墙生成之后；再次清理可防止地图数据越界覆盖。
+      this._clearBlockedCrates();
+    }
+
+    _crateBlocked(i) {
+      return i < 0 || i >= N || this.wall[i] || this.brick[i] || this.pushable[i];
+    }
+
+    _clearBlockedCrates() {
+      for (let i = 0; i < N; i++) {
+        if (!this._crateBlocked(i)) continue;
+        this.crate[i] = 0;
+        this.superCrate[i] = 0;
+        this.recycle[i] = 0;
+        this.crateType[i] = -1;
       }
     }
 
@@ -310,12 +427,14 @@
       }
       for (let c = 0; c < W; c++) {
         for (const rr of [cy - 1, cy]) {
-          if (!excl.has(rr * W + c)) this.crate[rr * W + c] = 1;
+          const i = rr * W + c;
+          if (!excl.has(i) && !this._crateBlocked(i)) this.crate[i] = 1;
         }
       }
       for (let r = 0; r < H; r++) {
         for (const cc of [cx - 1, cx]) {
-          if (!excl.has(r * W + cc)) this.crate[r * W + cc] = 1;
+          const i = r * W + cc;
+          if (!excl.has(i) && !this._crateBlocked(i)) this.crate[i] = 1;
         }
       }
     }
@@ -337,6 +456,9 @@
       const hpBefore = [this.hp[0], this.hp[1]];
       this.lastDied = [false, false];
       this.lastCovered = new Uint8Array(N);
+      this.lastReplayCovered = new Uint8Array(N);
+      this.lastReplayTriggered = new Uint8Array(N);
+      this.lastReplayPlaced = [false, false];
 
       // 1. 引信递减
       for (let i = 0; i < N; i++) if (this.fuse[i] > 0) this.fuse[i]--;
@@ -355,6 +477,8 @@
           placed[p] = true;
         }
       }
+      // Keep event masks with the logical frame for deterministic replay.
+      this.lastReplayPlaced = placed.slice();
       // 被动计时
       this.sinceBomb[0]++; this.sinceBomb[1]++;
       if (placed[0]) this.sinceBomb[0] = 0;
@@ -371,7 +495,7 @@
         const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
         const dist = CFG.stepLen * this.spdG[p];
         const [dy, dx] = DIRS[mv];
-        // 推箱子: 前缘顶着可推箱 → 累计推动时间(每tick 0.1s), ≥PUSH_TIME 后箱子移一格
+                // 推箱子: 前缘顶着可推箱 → 累计推动时间(每tick 0.1s), ≥PUSH_TIME 后箱子移一格
         if (dy !== 0 || dx !== 0) {
           const pr = dy !== 0 ? (dy > 0 ? Math.floor(y + CFG.radius + EPS * 8) : Math.floor(y - CFG.radius - EPS * 8)) : Math.floor(y);
           const pc = dx !== 0 ? (dx > 0 ? Math.floor(x + CFG.radius + EPS * 8) : Math.floor(x - CFG.radius - EPS * 8)) : Math.floor(x);
@@ -409,36 +533,8 @@
             }
           }
         }
-        // 中心路径硬约束（对齐 JAX _move_player）：中心点扫过的每一格必须
-        // 可通行（起点格脚下豁免）。resolveAxis 的盒覆盖豁免允许盒压着泡格
-        // 擦边移动，但**中心不能进入泡/墙/砖格** —— 防穿炮：放泡后能离开
-        // 泡格，但不能踩回泡格中心，更不能穿过泡格继续走。
-        const startR = Math.max(0, Math.min(H - 1, Math.floor(y)));
-        const startC = Math.max(0, Math.min(W - 1, Math.floor(x)));
-        let ny = y, nx = x;
-        if (dy !== 0) {
-          ny = resolveAxis(y + dy * dist, dy * dist, x, y, x,
-                           blocked, CFG.radius, H, W, true);
-          // 中心沿起点列扫过的行段必须全可通行（起点行脚下豁免）
-          const yLo = Math.max(0, Math.min(H - 1, Math.floor(Math.min(y, ny))));
-          const yHi = Math.max(0, Math.min(H - 1, Math.floor(Math.max(y, ny))));
-          for (let r = yLo; r <= yHi; r++) {
-            if (r === startR) continue;
-            if (blocked[r * W + startC]) { ny = y; break; }
-          }
-        }
-        if (dx !== 0) {
-          nx = resolveAxis(x + dx * dist, dx * dist, y, ny, x,
-                           blocked, CFG.radius, H, W, false);
-          // 中心沿 ny 行扫过的列段必须全可通行（起点格脚下豁免）
-          const xLo = Math.max(0, Math.min(W - 1, Math.floor(Math.min(x, nx))));
-          const xHi = Math.max(0, Math.min(W - 1, Math.floor(Math.max(x, nx))));
-          const cy0 = Math.max(0, Math.min(H - 1, Math.floor(ny)));
-          for (let c = xLo; c <= xHi; c++) {
-            if (c === startC && cy0 === startR) continue;
-            if (blocked[cy0 * W + c]) { nx = x; break; }
-          }
-        }
+        // 中心路径硬约束 + 贪婪转向：模型输出=目标相邻格，直走被挡自动试垂直方向
+        const [ny, nx] = this._steer(y, x, mv, blocked, dist);
         this.pos[p * 2] = ny;
         this.pos[p * 2 + 1] = nx;
         // 边界夹紧（防穿出地图）
@@ -449,6 +545,8 @@
       // 4. 爆炸与连锁（sim/blast.py::resolve_explosions 的标量版）
       const { covered, triggered } = this._resolveExplosions(blocked);
       this.lastCovered = covered;
+      this.lastReplayCovered = covered;
+      this.lastReplayTriggered = triggered;
       // 炸掉的砖 → 宝箱（按地图爆率 crate_rate 判定；摧毁砖）
       // 灌木(bush)：可通行 + **可炸毁** —— 被火焰覆盖即摧毁（不给宝箱）
       for (let i = 0; i < N; i++) {
@@ -465,7 +563,7 @@
               this.pushSprite[cell] = -1;
             }
           }
-          if (this.rng() < this.crateRate) {
+          if (this.rng() < this.crateRate && !this._crateBlocked(i)) {
             this.crate[i] = 1;
             this.superCrate[i] = this.rng() < this.superFraction ? 1 : 0;
             this.crateType[i] = Math.floor(this.rng() * 3);   // 吃到啥在炸开时定
@@ -787,8 +885,9 @@
     //   ch0 我位置(splat) ch1 我的泡引信  ch2 敌位置(splat) ch3 敌泡引信
     //   ch4 墙|砖  ch5 危险图  ch6 进度  ch7 宝箱存在  ch8 灌木
     //   ch9 泡道具(1/4) ch10 威力道具(2/5) ch11 速度道具(3/6) ch12 超级(4/5/6)
-    encodeObsJAX(pid) {
-      const C = 13;
+    encodeObsJAX(pid, C = 14) {
+      // C=14（新标准，ch13=可推箱）；旧 ViT ckpt obs_shape[0]=13 → 不含箱子
+      // 通道，由调用方传模型的 obs_shape[0] 保持逐位对齐。
       const o = new Float32Array(C * N);
       const opp = 1 - pid;
       const splat = (ch, p) => {
@@ -826,6 +925,9 @@
       for (let i = 0; i < N; i++) o[5 * N + i] = danger[i];
       const tv = this.t / CFG.maxSteps;
       for (let i = 0; i < N; i++) o[6 * N + i] = tv;
+      if (C >= 14) {
+        for (let i = 0; i < N; i++) o[13 * N + i] = this.pushable[i];
+      }
       return o;
     }
 
@@ -849,34 +951,127 @@
       return g;   // g[11..23] = 0（预留）
     }
 
-    // 方向掩码：探针 4 方向（按 step_len 试探碰撞消解，动了才算合法）；IDLE 恒合法。
-    // 放泡掩码：中心格可放泡（can_place）；bomb=0 恒合法。
+    // 单方向移动尝试（原 Sim.step 移动块提取）：resolveAxis AABB 滑动碰撞 +
+    // 中心路径硬约束（起点格脚下豁免）。对齐 JAX _move_player，逐位一致。
+    _tryMove(y, x, mv, blocked, dist) {
+      const [dy, dx] = DIRS[mv];
+      const startR = Math.max(0, Math.min(H - 1, Math.floor(y)));
+      const startC = Math.max(0, Math.min(W - 1, Math.floor(x)));
+      let ny = y, nx = x;
+      if (dy !== 0) {
+        ny = resolveAxis(y + dy * dist, dy * dist, x, y, x,
+                         blocked, CFG.radius, H, W, true);
+        // 中心沿起点列扫过的行段必须全可通行（起点行脚下豁免）
+        const yLo = Math.max(0, Math.min(H - 1, Math.floor(Math.min(y, ny))));
+        const yHi = Math.max(0, Math.min(H - 1, Math.floor(Math.max(y, ny))));
+        for (let r = yLo; r <= yHi; r++) {
+          if (r === startR) continue;
+          if (blocked[r * W + startC]) { ny = y; break; }
+        }
+      }
+      if (dx !== 0) {
+        nx = resolveAxis(x + dx * dist, dx * dist, y, ny, x,
+                         blocked, CFG.radius, H, W, false);
+        // 中心沿 ny 行扫过的列段必须全可通行（起点格脚下豁免）
+        const xLo = Math.max(0, Math.min(W - 1, Math.floor(Math.min(x, nx))));
+        const xHi = Math.max(0, Math.min(W - 1, Math.floor(Math.max(x, nx))));
+        const cy0 = Math.max(0, Math.min(H - 1, Math.floor(ny)));
+        for (let c = xLo; c <= xHi; c++) {
+          if (c === startC && cy0 === startR) continue;
+          if (blocked[cy0 * W + c]) { nx = x; break; }
+        }
+      }
+      return [ny, nx];
+    }
+
+    // 贪婪转向适配器（对齐 JAX _steer）：模型输出=目标相邻格，选第一个能动的
+    // 方向。优先级：直走(mv) > 垂直偏转1 > 垂直偏转2。每 tick 无状态决策——
+    // 不跨 tick 承诺方向，不会振荡。
+    // 垂直回退方向按目标行/列的**斜对角开闭**排序：楔死时朝开口侧滑——朝墙
+    // 侧滑永远进不了目标行/列，会背向目标绕路（点上方开口却左滑绕墙的 bug）。
+    // 两边同开/同堵 → 朝目标格中心线归中。固定偏左/偏上会让角色在目标
+    // 方向受阻时走向错误一侧，尤其是角色中心尚未对齐当前格中心的情况。
+    _steer(y, x, mv, blocked, dist) {
+      if (mv >= 4) return [y, x];
+      let [ny, nx] = this._tryMove(y, x, mv, blocked, dist);
+      const moved = Math.abs(ny - y) + Math.abs(nx - x);
+      // 完整直走直接结束；只走到半步（常见于碰撞盒擦住侧砖）仍需尝试
+      // 垂直修正，否则会卡在砖边缘。推箱目标例外：保留直走动作累计 pushT。
+      const fullStep = moved >= dist * 0.95;
+      const r0 = Math.max(0, Math.min(H - 1, Math.floor(y)));
+      const c0 = Math.max(0, Math.min(W - 1, Math.floor(x)));
+      const [dr, dc] = DIRS[mv];
+      const tr0 = r0 + dr, tc0 = c0 + dc;
+      // 可推箱必须持续收到同一方向动作累计 PUSH_TIME。箱子仍属于 blocked，
+      // 但这里不能把“顶箱未移动”误判成失败后侧滑，否则计时会中断且角色
+      // 产生上下/左右偏移。箱子移走后的下一 tick 会正常直行进入原箱格。
+      if (this.pushable && tr0 >= 0 && tr0 < H && tc0 >= 0 && tc0 < W &&
+          this.pushable[tr0 * W + tc0]) return [ny, nx];
+      if (fullStep) return [ny, nx];
+      const open = (r, c) => r >= 0 && r < H && c >= 0 && c < W && !blocked[r * W + c];
+      let perp;
+      if (mv < 2) {
+        // 上/下：目标行 tr；左斜(tr,c0-1)堵且右斜(tr,c0+1)开 → 先右滑
+        const tr = r0 + (mv === 0 ? -1 : 1);
+        const leftOpen = open(tr, c0 - 1), rightOpen = open(tr, c0 + 1);
+        if (leftOpen !== rightOpen) perp = rightOpen ? [3, 2] : [2, 3];
+        else perp = x < c0 + 0.5 ? [3, 2] : [2, 3];
+      } else {
+        // 左/右：目标列 tc；上斜(r0-1,tc)堵且下斜(r0+1,tc)开 → 先下滑
+        const tc = c0 + (mv === 2 ? -1 : 1);
+        const upOpen = open(r0 - 1, tc), downOpen = open(r0 + 1, tc);
+        if (upOpen !== downOpen) perp = downOpen ? [1, 0] : [0, 1];
+        else perp = y < r0 + 0.5 ? [1, 0] : [0, 1];
+      }
+      const p1 = this._tryMove(y, x, perp[0], blocked, dist);
+      const p2 = this._tryMove(y, x, perp[1], blocked, dist);
+      // 目标前方是一格宽通道（两侧都堵）时，侧移只负责归中，不能一次
+      // 越过中心线，否则下一 tick 会反向修正并左右/上下振荡。
+      if (mv < 2 && !open(r0 + (mv === 0 ? -1 : 1), c0 - 1) &&
+          !open(r0 + (mv === 0 ? -1 : 1), c0 + 1)) {
+        const center = c0 + 0.5;
+        if (perp[0] === MOVE_LEFT) p1[1] = Math.max(p1[1], center);
+        else p1[1] = Math.min(p1[1], center);
+        if (perp[1] === MOVE_LEFT) p2[1] = Math.max(p2[1], center);
+        else p2[1] = Math.min(p2[1], center);
+      } else if (mv >= 2 && !open(r0 - 1, c0 + (mv === 2 ? -1 : 1)) &&
+                 !open(r0 + 1, c0 + (mv === 2 ? -1 : 1))) {
+        const center = r0 + 0.5;
+        if (perp[0] === MOVE_UP) p1[0] = Math.max(p1[0], center);
+        else p1[0] = Math.min(p1[0], center);
+        if (perp[1] === MOVE_UP) p2[0] = Math.max(p2[0], center);
+        else p2[0] = Math.min(p2[0], center);
+      }
+      const moved1 = Math.abs(p1[0] - y) + Math.abs(p1[1] - x) > 2 * EPS;
+      const moved2 = Math.abs(p2[0] - y) + Math.abs(p2[1] - x) > 2 * EPS;
+      if (moved1) return p1;
+      if (moved2) return p2;
+      return moved > 2 * EPS ? [ny, nx] : [y, x];
+    }
+
+    // 方向掩码：目标格 blocked 查表（O(1)，不探测碰撞物理——对齐 JAX legal_mask）；
+    // IDLE 恒合法。放泡掩码：中心格可放泡（can_place）；bomb=0 恒合法。
     legalMask() {
       const mm = [[1, 1, 1, 1, 1], [1, 1, 1, 1, 1]];
       const bm = [[1, 1], [1, 1]];
       const blocked = new Uint8Array(N);
       for (let i = 0; i < N; i++) {
-        blocked[i] = this.wall[i] || this.brick[i] || this.fuse[i] > 0 ? 1 : 0;
+        // 推箱格豁免：mask 把朝可推箱方向标记为合法（模型才会选这个方向去推），
+        // 但 Sim.step 的移动仍用含 brick 的 blocked 挡住（推箱期间贴箱不动，
+        // 3 tick 后箱子移走玩家跟进）。
+        blocked[i] = this.wall[i] || (this.brick[i] && !this.pushable[i]) || this.fuse[i] > 0 ? 1 : 0;
       }
       for (let p = 0; p < 2; p++) {
         if (!this.alive[p]) continue;
         const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
-        const dist = CFG.stepLen;      // 与 torch legal_mask 一致：用基础步长探测
+        // 目标格查询：floor(位置) + DIRS 的 4 个相邻格，blocked 查表
+        const r0 = Math.max(0, Math.min(H - 1, Math.floor(y)));
+        const c0 = Math.max(0, Math.min(W - 1, Math.floor(x)));
         for (let mv = 0; mv < 4; mv++) {
-          const [dy, dx] = DIRS[mv];
-          let moved = false;
-          // 判定阈值 = 步长 5% (不能只靠 EPS: 贴墙时 stopPos 含 +EPS 会误报可走)
-          const minMove = dist * 0.05;
-          if (dy !== 0) {
-            const ny = resolveAxis(y + dy * dist, dy * dist, x, y, x,
-                                   blocked, CFG.radius, H, W, true);
-            moved = Math.abs(ny - y) > minMove;
-          } else {
-            const nx = resolveAxis(x + dx * dist, dx * dist, y, y, x,
-                                   blocked, CFG.radius, H, W, false);
-            moved = Math.abs(nx - x) > minMove;
-          }
-          mm[p][mv] = moved ? 1 : 0;
+          const [dr, dc] = DIRS[mv];
+          const tr = r0 + dr, tc = c0 + dc;
+          if (tr < 0 || tr >= H || tc < 0 || tc >= W) { mm[p][mv] = 0; continue; }
+          mm[p][mv] = blocked[tr * W + tc] ? 0 : 1;   // 目标格非障碍 = 合法
         }
         const [r, c] = this.centerCell(p);
         const i = r * W + c;
@@ -1457,8 +1652,13 @@
     // 中间 tick 复用上一次的动作（省 CPU 的玩法选项；默认 1 = 每 tick）。
     act(sim, pid, rng) {
       const every = this.inferEvery || 1;
-      const need = sim !== this._cSim || sim._gen !== this._cGen ||
-        this._cT[pid] < 0 || (sim.t - this._cT[pid] >= every);
+      const changed = sim !== this._cSim || sim._gen !== this._cGen;
+      if (changed) {
+        this._cT[0] = -1; this._cT[1] = -1;
+        this._cA[0] = null; this._cA[1] = null;
+      }
+      const need = changed || this._cT[pid] < 0 ||
+        (sim.t - this._cT[pid] >= every);
       if (need) {
         this._cSim = sim; this._cGen = sim._gen;
         const { mm, bm } = sim.legalMask();
@@ -1469,7 +1669,8 @@
     }
 
     _decide(sim, pid, mm, bm, rng) {
-      const logits = this.forward(sim.encodeObsJAX(pid), sim.encodeStateJAX(pid));
+      const logits = this.forward(sim.encodeObsJAX(pid, this.obsShape[0]),
+                                  sim.encodeStateJAX(pid));
       const aM = this._sampleMasked(logits.move, mm[pid], rng);
       const aB = this._sampleMasked(logits.bomb, bm[pid], rng);
       return [aM, aB];
@@ -1485,8 +1686,8 @@
         this._cSim = sim; this._cGen = sim._gen;
         const { mm, bm } = sim.legalMask();
         const [f0, f1] = this.forward2(
-          sim.encodeObsJAX(0), sim.encodeStateJAX(0),
-          sim.encodeObsJAX(1), sim.encodeStateJAX(1));
+          sim.encodeObsJAX(0, this.obsShape[0]), sim.encodeStateJAX(0),
+          sim.encodeObsJAX(1, this.obsShape[0]), sim.encodeStateJAX(1));
         this._cA[0] = [this._sampleMasked(f0.move, mm[0], rng),
                       this._sampleMasked(f0.bomb, bm[0], rng)];
         this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
@@ -1508,12 +1709,41 @@
       this.session = session;
     }
 
+    async _runWithTimeout(inputs, shape, label) {
+      if (this._ortDisabled) return null;
+      let timer;
+      try {
+        const run = this.session.run(inputs);
+        const timeout = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`ORT ${label} 超时（>${ORT_RUN_TIMEOUT_MS}ms），回退纯 JS`)),
+                              ORT_RUN_TIMEOUT_MS);
+        });
+        return await Promise.race([run, timeout]);
+      } catch (e) {
+        this._ortDisabled = true;
+        this._lastInferError = String(e && e.message ? e.message : e);
+        console.warn('[ort] 推理失败，回退纯 JS：', this._lastInferError);
+        return null;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+
+    _fallbackForward(obs, state) {
+      return TransformerModel.prototype.forward.call(this, obs, state);
+    }
+
+    _fallbackForward2(o0, s0, o1, s1) {
+      return TransformerModel.prototype.forward2.call(this, o0, s0, o1, s1);
+    }
+
     async forward(obs, state) {
       const t0 = performance.now();
-      const out = await this.session.run({
+      const out = await this._runWithTimeout({
         obs: new ort.Tensor('float32', obs, [1, this.obsShape[0], this.obsShape[1], this.obsShape[2]]),
         state: new ort.Tensor('float32', Float32Array.from(state), [1, state.length]),
-      });
+      }, [1, this.obsShape[0], this.obsShape[1], this.obsShape[2]], '单玩家');
+      if (!out) return this._fallbackForward(obs, state);
       this._inferMs += performance.now() - t0;   // [prof] 推理耗时累计
       return { move: out.move.data, bomb: out.bomb.data, value: out.value.data[0] };
     }
@@ -1526,10 +1756,11 @@
       obs.set(o0, 0); obs.set(o1, C * h * w);
       const st = new Float32Array(48);
       st.set(Float32Array.from(s0), 0); st.set(Float32Array.from(s1), 24);
-      const out = await this.session.run({
+      const out = await this._runWithTimeout({
         obs: new ort.Tensor('float32', obs, [2, C, h, w]),
         state: new ort.Tensor('float32', st, [2, 24]),
-      });
+      }, [2, C, h, w], '双玩家');
+      if (!out) return this._fallbackForward2(o0, s0, o1, s1);
       this._inferMs += performance.now() - t0;   // [prof] 推理耗时累计
       const n5 = 5, n2 = 2;
       const f0 = {
@@ -1547,8 +1778,13 @@
 
     async act(sim, pid, rng) {
       const every = this.inferEvery || 1;
-      const need = sim !== this._cSim || sim._gen !== this._cGen ||
-        this._cT[pid] < 0 || (sim.t - this._cT[pid] >= every);
+      const changed = sim !== this._cSim || sim._gen !== this._cGen;
+      if (changed) {
+        this._cT[0] = -1; this._cT[1] = -1;
+        this._cA[0] = null; this._cA[1] = null;
+      }
+      const need = changed || this._cT[pid] < 0 ||
+        (sim.t - this._cT[pid] >= every);
       if (need) {
         this._cSim = sim; this._cGen = sim._gen;
         const { mm, bm } = sim.legalMask();
@@ -1566,8 +1802,8 @@
         this._cSim = sim; this._cGen = sim._gen;
         const { mm, bm } = sim.legalMask();
         const [f0, f1] = await this.forward2(
-          sim.encodeObsJAX(0), sim.encodeStateJAX(0),
-          sim.encodeObsJAX(1), sim.encodeStateJAX(1));
+          sim.encodeObsJAX(0, this.obsShape[0]), sim.encodeStateJAX(0),
+          sim.encodeObsJAX(1, this.obsShape[0]), sim.encodeStateJAX(1));
         this._cA[0] = [this._sampleMasked(f0.move, mm[0], rng),
                       this._sampleMasked(f0.bomb, bm[0], rng)];
         this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
@@ -1578,7 +1814,8 @@
     }
 
     async _decide(sim, pid, mm, bm, rng) {
-      const logits = await this.forward(sim.encodeObsJAX(pid), sim.encodeStateJAX(pid));
+      const logits = await this.forward(
+        sim.encodeObsJAX(pid, this.obsShape[0]), sim.encodeStateJAX(pid));
       const aM = this._sampleMasked(logits.move, mm[pid], rng);
       const aB = this._sampleMasked(logits.bomb, bm[pid], rng);
       return [aM, aB];

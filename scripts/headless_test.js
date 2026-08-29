@@ -46,7 +46,7 @@ const VS_ARG = arg('--vs', '').split(',').filter(Boolean);
 // --pairs "0,5;1,2"：显式索引配对（--models 列表内），分号分隔
 const PAIRS_ARG = arg('--pairs', '');
 const MAPS_PER_THEME = parseInt(arg('--maps', '2'), 10);
-const MAP_SOURCE = arg('--map-source', '');   // 只测指定 source 的地图(如 empty_scene)
+const MAP_SOURCE = arg('--map-source', '').split(',').filter(Boolean); // 指定 source 列表（逗号分隔）
 const EP_PER_MAP = parseInt(arg('--ep', '3'), 10);
 const MAX_TICK = parseInt(arg('--max-tick', '900'), 10);
 const SEED = parseInt(arg('--seed', '20260821'), 10);
@@ -92,8 +92,8 @@ function discoverModels() {
 function sampleMaps(nPerTheme) {
   const maps = JSON.parse(fs.readFileSync(MAPS_JSON, 'utf8'));
   const list = Array.isArray(maps) ? maps : (maps.levels || maps.maps);
-  if (MAP_SOURCE) {
-    const hit = list.filter((m) => (m.source || '') === MAP_SOURCE);
+  if (MAP_SOURCE.length) {
+    const hit = list.filter((m) => MAP_SOURCE.includes(m.source || ''));
     if (hit.length) {
       // 只测指定图(隔离度标注照旧)
       return hit.map((m) => { m._isolated = 0; return m; });
@@ -246,6 +246,31 @@ function summarize(games, pid) {
   };
 }
 
+// With --swap, model A alternates between P0 and P1. Keep the model role
+// attached to each game so cross/vs win rates do not mix the two actors.
+function summarizeRole(games, role) {
+  const pidOf = (g) => role === 'a' ? (g.swapped ? 1 : 0) : (g.swapped ? 0 : 1);
+  const n = games.length;
+  const wins = games.filter((g) => g.st.winner === pidOf(g)).length;
+  const draws = games.filter((g) => g.st.winner === null).length;
+  const sui = games.filter((g) => g.st.suicide[pidOf(g)]).length;
+  return {
+    n, wins, draws, losses: n - wins - draws,
+    winRate: n ? wins / n : 0,
+    suicideRate: n ? sui / n : 0,
+    ticks: aggStat(games, (g) => g.st.ticks),
+    explore: aggStat(games, (g) => g.st.explored[pidOf(g)].size / TOTAL_CELLS),
+    bombs: aggStat(games, (g) => g.st.bombs[pidOf(g)]),
+    hits: aggStat(games, (g) => g.st.hits[pidOf(g)]),
+    walls: aggStat(games, (g) => g.st.walls[pidOf(g)]),
+    crates: aggStat(games, (g) => g.st.crates[pidOf(g)]),
+    moveRate: aggStat(games, (g) => {
+      const pid = pidOf(g);
+      return g.st.ticksAlive[pid] ? g.st.moves[pid] / g.st.ticksAlive[pid] : 0;
+    }),
+  };
+}
+
 // ---------------- 主流程 ----------------
 (async () => {
   const t0 = Date.now();
@@ -353,12 +378,12 @@ function summarize(games, pid) {
       ? `${job.kind}|${job.a.name}|${job.b.name}` : `${job.a.name}|${job.kind}`;
     const rec = res[key];
     if (job.kind === 'self') {
-      const s = summarize(rec.all, 0);
+      const s = summarizeRole(rec.all, 'a');
       console.log(`\n[同模型内耗] ${job.a.name}`);
       console.log(`  自杀 ${(s.suicideRate * 100).toFixed(1)}%  探索 ${(s.explore * 100).toFixed(0)}%  ` +
                   `放炮 ${s.bombs.toFixed(0)}/局  命中 ${s.hits.toFixed(1)}/局  炸墙 ${s.walls.toFixed(1)}  吃箱 ${s.crates.toFixed(1)}  ` +
                   `移动率 ${(s.moveRate * 100).toFixed(0)}%  平均局长 ${s.ticks.toFixed(0)} tick  n=${s.n}`);
-      const iso = summarize(rec.isolated, 0);
+      const iso = summarizeRole(rec.isolated, 'a');
       if (rec.isolated.length) {
         console.log(`  [隔离地图] 自杀 ${(iso.suicideRate * 100).toFixed(1)}%  探索 ${(iso.explore * 100).toFixed(0)}%  ` +
                     `放炮 ${iso.bombs.toFixed(0)}/局  局长 ${iso.ticks.toFixed(0)}  n=${iso.n}`);
@@ -370,12 +395,12 @@ function summarize(games, pid) {
                     `模型在 P1(敌方): 胜率 ${(p1.winRate * 100).toFixed(1)}% (n=${p1.n})`);
       }
     } else if (job.kind === 'hunter') {
-      const s = summarize(rec.all, 0);
+      const s = summarizeRole(rec.all, 'a');
       console.log(`\n[vs Hunter] ${job.a.name}  胜率 ${(s.winRate * 100).toFixed(1)}%（${s.wins}胜/${s.draws}平/${s.losses}负）`);
       console.log(`  自杀 ${(s.suicideRate * 100).toFixed(1)}%  探索 ${(s.explore * 100).toFixed(0)}%  ` +
                   `放炮 ${s.bombs.toFixed(0)}/局  命中 ${s.hits.toFixed(1)}/局  吃箱 ${s.crates.toFixed(1)}  局长 ${s.ticks.toFixed(0)}  n=${s.n}`);
     } else {
-      const a = summarize(rec.all, 0), b = summarize(rec.all, 1);
+      const a = summarizeRole(rec.all, 'a'), b = summarizeRole(rec.all, 'b');
       console.log(`\n[${job.kind === 'vs' ? 'vs基准' : '交叉'}] ${job.a.name} vs ${job.b.name}`);
       console.log(`  A 胜率 ${(a.winRate * 100).toFixed(1)}%（${a.wins}胜/${a.draws}平/${a.losses}负）  B 胜率 ${(b.winRate * 100).toFixed(1)}%`);
       console.log(`  A: 自杀 ${(a.suicideRate * 100).toFixed(1)}% 探索 ${(a.explore * 100).toFixed(0)}% 放炮 ${a.bombs.toFixed(0)} 命中 ${a.hits.toFixed(1)} 吃箱 ${a.crates.toFixed(1)} 局长 ${a.ticks.toFixed(0)}`);
@@ -394,9 +419,16 @@ function summarize(games, pid) {
     for (const job of jobs) {
       const key = job.kind === 'cross' || job.kind === 'vs'
       ? `${job.kind}|${job.a.name}|${job.b.name}` : `${job.a.name}|${job.kind}`;
+      const rec = res[key];
       out[key] = {
-        all: { p0: summarize(res[key].all, 0), p1: summarize(res[key].all, 1) },
-        isolated: { p0: summarize(res[key].isolated, 0), p1: summarize(res[key].isolated, 1) },
+        all: {
+          a: summarizeRole(rec.all, 'a'), b: summarizeRole(rec.all, 'b'),
+          p0: summarize(rec.all, 0), p1: summarize(rec.all, 1),
+        },
+        isolated: {
+          a: summarizeRole(rec.isolated, 'a'), b: summarizeRole(rec.isolated, 'b'),
+          p0: summarize(rec.isolated, 0), p1: summarize(rec.isolated, 1),
+        },
       };
     }
     out._meta = { maps: maps.length, isolated: isolatedMaps.length, epPerMap: EP_PER_MAP,

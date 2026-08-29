@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>rAF probe</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:14px monospace}</style>
+<pre id="out">running...</pre>
+<script>
+'use strict';
+let last = 0, start = 0, frames = 0, spikes = [], max = 0;
+const out = document.getElementById('out');
+function loop(now) {
+  if (!start) start = now;
+  if (last) {
+    const dt = now - last;
+    frames++;
+    max = Math.max(max, dt);
+    if (dt > 25) spikes.push(dt);
+  }
+  last = now;
+  if (now - start >= 30000) {
+    out.textContent = JSON.stringify({ frames, spikes, max });
+    return;
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>

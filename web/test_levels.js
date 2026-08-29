@@ -76,7 +76,72 @@ for (const src of picks) {
   const lv = levels.find((l) => l.source === src);
   if (lv) sel.push(lv); else console.log('(无此图,跳过)', src);
 }
+
+// 旧 13 列模型兼容：空场景右侧两列是永久墙，任何道具都不得重叠。
+const empty = levels.find((l) => l.source === 'empty_scene');
+if (empty) {
+  try {
+    const sim = new Sim(123);
+    sim.reset(empty, { oldMode: true });
+    let overlap = 0;
+    for (let r = 0; r < H; r++) {
+      for (const c of [W - 2, W - 1]) {
+        const i = r * W + c;
+        assert(sim.wall[i] === 1, `兼容空场景右侧墙缺失 (${r},${c})`);
+        if (sim.crate[i] || sim.superCrate[i] || sim.recycle[i]) overlap++;
+      }
+    }
+    assert(overlap === 0, `兼容空场景右侧墙有 ${overlap} 个重叠道具`);
+    console.log('✅ 兼容空场景右侧两列墙体无重叠道具');
+  } catch (e) {
+    console.log(`❌ 兼容空场景墙体道具: ${e.message}`);
+    process.exitCode = 1;
+  }
+}
 let fails = 0;
+// 野外躲猫猫草丛：旧导出可能 bush 数组为空，但 layers[0] 的 6003 仍必须可炸。
+const field = levels.find((l) => l.source === 'field01_4.map');
+if (field) {
+  try {
+    const bushCells = [];
+    for (let i = 0; i < N; i++) {
+      if (Math.abs(field.layers[0][i] || 0) === 6003) bushCells.push(i);
+    }
+    assert(bushCells.length > 0, '野外01 没有找到 6003 草丛');
+    const sim = new Sim(456);
+    sim.reset(field);
+    for (const i of bushCells) assert(sim.bush[i] === 1, `草丛状态未加载 (${i})`);
+    const target = bushCells.find((i) => {
+      const r = (i / W) | 0, c = i % W;
+      return r > 0 && r < H - 1 && c > 0 && c < W - 1 &&
+        !sim.wall[i] && !sim.brick[i];
+    });
+    assert(target != null, '没有可测试的草丛格');
+    const tr = (target / W) | 0, tc = target % W;
+    // 从相邻的纯地面格连续走入草丛中心，覆盖 AABB/中心路径两条约束。
+    const entry = [[tr - 1, tc], [tr + 1, tc], [tr, tc - 1], [tr, tc + 1]]
+      .find(([r, c]) => r >= 0 && r < H && c >= 0 && c < W &&
+        !sim.wall[r * W + c] && !sim.brick[r * W + c]);
+    assert(entry, `草丛没有可进入的相邻地面 (${tr},${tc})`);
+    sim.pos[0] = entry[0] + 0.5; sim.pos[1] = entry[1] + 0.5;
+    sim.pos[2] = 1.5; sim.pos[3] = 1.5;
+    const move = entry[0] < tr ? 1 : entry[0] > tr ? 0 : entry[1] < tc ? 3 : 2;
+    for (let t = 0; t < 8; t++) sim.step([[move, 0], [MOVE_IDLE, 0]]);
+    assert(Math.floor(sim.pos[0]) === tr && Math.floor(sim.pos[1]) === tc,
+      `无法进入草丛 (${entry} -> ${tr},${tc}), 实际=${sim.pos[0]},${sim.pos[1]}`);
+    // 草丛中心放泡，连续推进到引爆；草丛应消失且不生成砖/箱阻挡。
+    sim.pos[0] = tr + 0.5; sim.pos[1] = tc + 0.5;
+    sim.step([[MOVE_IDLE, 1], [MOVE_IDLE, 0]]);
+    for (let t = 0; t < 35 && sim.bush[target]; t++) sim.step([[MOVE_IDLE, 0], [MOVE_IDLE, 0]]);
+    assert(sim.bush[target] === 0, `草丛被爆炸覆盖后仍存在 (${tr},${tc})`);
+    assert(sim.brick[target] === 0 && sim.wall[target] === 0,
+      `草丛清除后错误变成阻挡 (${tr},${tc})`);
+    console.log('✅ 野外躲猫猫草丛可被爆炸清除');
+  } catch (e) {
+    console.log(`❌ 野外草丛爆炸: ${e.message}`);
+    process.exitCode = 1;
+  }
+}
 for (const lv of sel) {
   try {
     const out = run(lv, 42, 400);

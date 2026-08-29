@@ -17,6 +17,17 @@
 
   const H = Q.H, W = Q.W, N = Q.N;
   const CELL = 60;                 // 与 play/duel.py 一致：素材原生 40px/格 × 1.5
+  const RADIUS_MIN = 0.20, RADIUS_MAX = 0.49;
+  function setRadiusLabel() {
+    const r = Number(elRadius.value);
+    elRadiusValue.textContent = `${r.toFixed(2)} 格（${Math.round(r * CELL * 2)}px）`;
+  }
+  function applyRadius() {
+    const r = Math.max(RADIUS_MIN, Math.min(RADIUS_MAX, Number(elRadius.value)));
+    CFG.radius = Number.isFinite(r) ? r : 0.36;
+    elRadius.value = CFG.radius.toFixed(2);
+    setRadiusLabel();
+  }
   const SCALE = CELL / 40.0;
   const BOARD_PX = CELL * W;       // 宽: 15 列 × 60px = 900
   const BOARD_H = CELL * H;        // 高: 13 行 × 60px = 780
@@ -34,18 +45,149 @@
         elSpectate = $('spectate'), elDanger = $('danger'), elSound = $('sound'),
         elBgm = $('bgm'), elApplyModel = $('apply-model'), elCurModel = $('cur-model'),
         elEnemyAi = $('enemy-ai'), elP0Ai = $('p0-ai'), elP0AiWrap = $('p0-ai-wrap'),
+        elMousePath = $('mouse-path'),
+        elRadius = $('radius'), elRadiusValue = $('radius-value'),
         elRestart = $('restart'), elStatus = $('status'), elBanner = $('banner'),
         elLoading = $('loading'), elLoadingText = $('loading-text'),
         elSaveReplay = $('save-replay'), elSaveGif = $('save-gif'), elRecClip = $('rec-clip'),
         elSaveVideo = $('save-video'), elRecMsg = $('rec-msg'),
         elModelLowfreq = $('model-lowfreq');
 
+  function mouseGridCell(e) {
+    const rect = canvas.getBoundingClientRect();
+    // 映射回 canvas 原生像素坐标（clientLeft/Top = CSS 边框宽，rect 含边框而绘图区不含）
+    const mx = (e.clientX - rect.left - canvas.clientLeft) * (canvas.width / (rect.width - 2 * canvas.clientLeft));
+    const my = (e.clientY - rect.top - canvas.clientTop) * (canvas.height / (rect.height - 2 * canvas.clientTop)) - BOARD_OFFSET;
+    const gc = Math.floor(mx / CELL), gr = Math.floor(my / CELL);
+    return gr >= 0 && gr < H && gc >= 0 && gc < W ? { r: gr, c: gc } : null;
+  }
+
+  function cardinalDestinationLegalAt(y, x, dir) {
+    const pr = Math.floor(y), pc = Math.floor(x);
+    const tr = pr + DY[dir], tc = pc + DX[dir];
+    if (tr < 0 || tr >= H || tc < 0 || tc >= W) return false;
+    const bi = tr * W + tc;
+    return !(sim.wall[bi] || (sim.brick[bi] && !sim.pushable[bi]) || sim.fuse[bi] > 0);
+  }
+
+  function mouseDestination(cell, search = true) {
+    if (!cell || !sim || !sim.alive[0]) return -1;
+    const pr = Math.floor(sim.pos[0]), pc = Math.floor(sim.pos[1]);
+    const dr = cell.r - pr, dc = cell.c - pc;
+    if (Math.abs(dr) > 1 || Math.abs(dc) > 1) return -1;
+    // 直接点击四邻可推箱时，必须返回朝箱子的动作；不能用下面的距离试算，
+    // 因为顶箱前两 tick 坐标不变，却正在有效累计 0.3s 推动时间。
+    if (Math.abs(dr) + Math.abs(dc) === 1) {
+      const direct = dr < 0 ? MOVE_UP : dr > 0 ? MOVE_DOWN : dc < 0 ? MOVE_LEFT : MOVE_RIGHT;
+      if (sim.pushable[cell.r * W + cell.c]) return direct;
+      if (cardinalDestinationLegalAt(sim.pos[0], sim.pos[1], direct)) return direct;
+    }
+    // hover 只负责显示九宫格，不需要预测真实下一步；保持 O(1)，避免鼠标
+    // 移动时反复创建 blocked 数组和调用碰撞逻辑。
+    if (!search) return MOVE_IDLE;
+    const y = sim.pos[0], x = sim.pos[1];
+    const ty = cell.r + 0.5, tx = cell.c + 0.5;
+    const blocked = new Uint8Array(N);
+    for (let i = 0; i < N; i++) blocked[i] = sim.wall[i] || sim.brick[i] || sim.fuse[i] > 0 ? 1 : 0;
+    const dist = CFG.stepLen * sim.spdG[0];
+    const score = (py, px) => (py - ty) ** 2 + (px - tx) ** 2;
+    const before = score(y, x);
+    let bestDir = MOVE_IDLE, bestScore = before;
+
+    // 一步贪心会在大型碰撞体边缘形成局部死点：正确动作可能要先横向/纵向
+    // 对齐，第一步距离不降，第二步才进入黄色格。用真实 _steer 做 4 tick
+    // 小范围试算（最多 4^4=256 个节点），选择最终最近路径的第一步。
+    // 每次点击仍只执行第一步，不把网页控制器变成自动寻路。
+    let frontier = [{ y, x, first: MOVE_IDLE }];
+    for (let depth = 0; depth < 4; depth++) {
+      const next = [];
+      for (const node of frontier) {
+        for (let dir = 0; dir < 4; dir++) {
+          if (!cardinalDestinationLegalAt(node.y, node.x, dir)) continue;
+          const [ny, nx] = sim._steer(node.y, node.x, dir, blocked, dist);
+          if (Math.abs(ny - node.y) + Math.abs(nx - node.x) <= 2 * EPS) continue;
+          const first = node.first === MOVE_IDLE ? dir : node.first;
+          const after = score(ny, nx);
+          if (after < bestScore - 1e-8) {
+            bestScore = after;
+            bestDir = first;
+          }
+          next.push({ y: ny, x: nx, first });
+        }
+      }
+      frontier = next;
+      if (!frontier.length) break;
+    }
+    return bestDir;
+  }
+
+  // 鼠标寻路：hover 玩家周围 3×3（含中心），click 映射到上下左右/停留
+  canvas.addEventListener('mousemove', (e) => {
+    if (!elMousePath.checked) { hoverCell = null; hoverDir = -1; return; }
+    if (!sim || !running) { hoverCell = null; hoverDir = -1; return; }
+    const cell = mouseGridCell(e);
+    hoverDir = mouseDestination(cell, false);
+    hoverCell = hoverDir >= 0 ? cell : null;
+  });
+  canvas.addEventListener('mouseleave', () => { hoverCell = null; hoverDir = -1; });
+  if (elMousePath) elMousePath.addEventListener('change', () => {
+    if (elMousePath.checked) return;
+    hoverCell = null;
+    hoverDir = -1;
+    mousePush = null;
+  });
+  canvas.addEventListener('click', (e) => {
+    if (!elMousePath.checked) return;
+    if (!sim || !running || elSpectate.checked) return;
+    // 角色可能已在上次 mousemove 后到达高亮格；点击时必须按当前位置重算。
+    // 点当前格会继续向该格中心归位；已经居中或没有改善动作才映射为 IDLE。
+    const cell = mouseGridCell(e);
+    const searchT0 = performance.now();
+    const dir = mouseDestination(cell);
+    prof.mouseSearchLast = performance.now() - searchT0;
+    if (dir < 0 || !sim.alive[0]) {
+      hoverCell = null;
+      hoverDir = -1;
+      return;
+    }
+    if (dir === MOVE_IDLE) return;
+    const pr = Math.floor(sim.pos[0]), pc = Math.floor(sim.pos[1]);
+    const tr = pr + DY[dir], tc = pc + DX[dir];
+    if (tr >= 0 && tr < H && tc >= 0 && tc < W && sim.pushable[tr * W + tc]) {
+      // 鼠标点击本来只执行一个 tick；推箱需要同方向持续 ≥0.3s。为人工验证
+      // 自动保持稍长于阈值的一小段时间，实际推动仍走 frameMove 的原版逻辑。
+      mousePush = { dir, until: performance.now() + 420 };
+      return;
+    }
+    const y = sim.pos[0], x = sim.pos[1];
+    const blocked = new Uint8Array(N);
+    for (let i = 0; i < N; i++) blocked[i] = sim.wall[i] || sim.brick[i] || sim.fuse[i] > 0 ? 1 : 0;
+    const dist = CFG.stepLen * sim.spdG[0];
+    const [ny, nx] = sim._steer(y, x, dir, blocked, dist);
+    // 点击方向是意图，_steer 的返回值才是实际移动。正常直走时更新精灵
+    // 朝向；若受阻后发生垂直侧滑，保留原朝向，不能让侧滑改变人物图案。
+    const movedAsIntended =
+      (dir === MOVE_UP && ny < y - 2 * EPS && Math.abs(nx - x) <= 2 * EPS) ||
+      (dir === MOVE_DOWN && ny > y + 2 * EPS && Math.abs(nx - x) <= 2 * EPS) ||
+      (dir === MOVE_LEFT && nx < x - 2 * EPS && Math.abs(ny - y) <= 2 * EPS) ||
+      (dir === MOVE_RIGHT && nx > x + 2 * EPS && Math.abs(ny - y) <= 2 * EPS);
+    if (movedAsIntended) face[0] = dir;
+    sim.pos[0] = Math.min(Math.max(ny, CFG.radius), H - CFG.radius);
+    sim.pos[1] = Math.min(Math.max(nx, CFG.radius), W - CFG.radius);
+  });
+
   // ------------------------------------------------------------ 状态
   let sim = null, modelList = [], res = null;
+  let replayExporting = false;
   let rng = null;
+  // 鼠标寻路：hover 周围九宫格，click 映射到四方向 Destination / IDLE
+  let hoverCell = null;       // {r, c} 或 null
+  let hoverDir = -1;          // 0-4 对应上下左右/停留，-1=无
+  let mousePush = null;       // 点击可推箱后的短时持续方向输入
   // 新地图系统: 241 张原版关卡 (levels.json) + 元素属性表 (elements.json)
   let levels = [], levelById = new Map(), elements = {};
   let selectedLevel = null;         // 黑屏菜单选中的关卡对象
+  let customStats = null;           // 选图页覆盖属性：{bombs,blast,speed,bombsMax,blastMax,speedMax}
   let elemImgCache = new Map();     // eid → Image (按需懒加载, 防启动加载 268 张)
   let showDanger = true;            // 与启动器一致：危险图红色渐变默认常显
   let showBox = false;              // B 键：绘制角色碰撞包围盒(调试)
@@ -79,17 +221,51 @@
   // 视频录制：canvas.captureStream + MediaRecorder（VP9/VP8/H.264，浏览器内置
   // 视频编码器）。WebP 动图对高动态画面效率低（等效码率 ~6.9Mbps），视频编码
   // 同样内容 ~1MB/12s。环形缓冲只留最近 ~13s，点保存时合并导出。
-  let mediaRec = null, mediaMime = '', mediaChunks = [];
+  let mediaRec = null, mediaMime = '', mediaChunks = [], mediaStopPromise = null;
+  function stopVideoRecorder() {
+    const rec = mediaRec;
+    if (!rec || rec.state === 'inactive') return Promise.resolve();
+    if (mediaStopPromise) return mediaStopPromise;
+    mediaStopPromise = new Promise((resolve) => {
+      rec.addEventListener('stop', resolve, { once: true });
+      try { rec.stop(); } catch (e) { resolve(); }
+    }).finally(() => { mediaStopPromise = null; });
+    return mediaStopPromise;
+  }
+  function flushVideoRecorder() {
+    const rec = mediaRec;
+    if (!rec || rec.state !== 'recording') return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        rec.removeEventListener('dataavailable', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, 1500);
+      rec.addEventListener('dataavailable', finish, { once: true });
+      try { rec.requestData(); } catch (e) {
+        clearTimeout(timer);
+        rec.removeEventListener('dataavailable', finish);
+        reject(e);
+      }
+    });
+  }
   function startVideoRecorder() {
     try {
       if (!canvas.captureStream || !window.MediaRecorder) return;
-      const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8',
-        'video/webm', 'video/mp4'].find((t) => MediaRecorder.isTypeSupported(t));
+      const mime = [
+        'video/mp4;codecs=avc1.42E01E', 'video/mp4',
+        'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm',
+      ].find((t) => MediaRecorder.isTypeSupported(t));
       if (!mime) return;
       const stream = canvas.captureStream(20);
       mediaRec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 800000 });
       mediaMime = mime;
       mediaChunks = [];
+      mediaStopPromise = null;
       mediaRec.ondataavailable = (e) => {
         if (e.data && e.data.size) mediaChunks.push({ t: performance.now(), blob: e.data });
         const nowT = performance.now();
@@ -100,6 +276,7 @@
       mediaRec.start(250);
     } catch (e) {
       mediaRec = null;
+      mediaMime = '';
       console.warn('视频录制不可用:', e);
     }
   }
@@ -111,7 +288,7 @@
   const hunter = new Q.HunterAI();   // 规则 AI（纯进攻寻路），可当敌/我方
   const HUNTER_VAL = '__hunter__';   // 下拉里规则 AI 的 value 哨兵
   const IDLE_VAL = '__idle__';      // 静止敌人(不动不炸)哨兵
-  const LATEST_VIT = 'ViTModel_500';         // 最新 ViT 模型(默认敌人)
+  const LATEST_VIT = 'ViTModel2_31.9B';       // 最新 ViT 模型(默认敌人)
 
   // 敌/我方 AI 选择：'__hunter__'（规则）或模型名。模型按需懒加载到缓存。
   // 敌人默认 = 列表第一个（ELO 最高）；观战我方默认 = 同样的最强模型。
@@ -173,7 +350,12 @@
     const m = sel ? modelCache.get(sel) : null;
     if (m) {
       try { return await m.act(sim, pid, rng); }
-      catch (e) { return [MOVE_IDLE, 0]; }   // 13x13 旧模型在 15x13 上不适用：先站着
+      catch (e) {
+        // 推理失败不能伪装成正常 IDLE；记录首个错误供状态栏和调试钩子定位。
+        if (!m._lastInferError) m._lastInferError = String(e && e.message ? e.message : e);
+        console.error('[ai] 推理失败', sel, e);
+        return [MOVE_IDLE, 0];
+      }
     }
     return [MOVE_IDLE, 0];          // 模型还没加载好：先站着
   }
@@ -650,7 +832,7 @@
 
   // 探测实际能移动多少并返回移动量(格)。三态判定:
   //   <5% 步长 = 贴墙被挡; 5%~95% = 部分可走(还能往墙滑); ≥95% = 完全可走。
-  // 不能用 EPS 判断“可走”: 贴墙时 resolveAxis 的 stopPos 含 +EPS, 会误报能走。
+  // 不能用 EPS 判断"可走": 贴墙时 resolveAxis 的 stopPos 含 +EPS, 会误报能走。
   function probeMoveDist(pid, mv) {
     const y = sim.pos[pid * 2], x = sim.pos[pid * 2 + 1];
     const blocked = blockedGrid();
@@ -674,12 +856,17 @@
   //   调大=更容易触发(擦边一点就转), 调小=要更贴边才转; 0=永不转。
   const MIN_OFF = 0.399;
   let turnInput = -1, turnSlide = -1;    // 状态: 上次输入方向 + 承诺滑动方向(-1=无; 0=上合法!)
+  let turnSlideTarget = null;            // {axis:'x'|'y', value}: 缺口格中心线，防高速越线反向
+  function clearTurnSlide() {
+    turnSlide = -1;
+    turnSlideTarget = null;
+  }
   function autoTurn(pid, move) {
     const stepLen = CFG.stepLen;
     const moved = move >= 4 ? stepLen : probeMoveDist(pid, move);
     // 完全可走(盒子能走满一步) → 正常移动, 取消滑动
-    if (move >= 4 || moved >= stepLen * 0.95) { turnSlide = -1; return move; }
-    if (move !== turnInput) turnSlide = -1;  // 输入方向变了: 取消旧滑动
+    if (move >= 4 || moved >= stepLen * 0.95) { clearTurnSlide(); return move; }
+    if (move !== turnInput) clearTurnSlide();  // 输入方向变了: 取消旧滑动
     turnInput = move;
     const R = CFG.radius;
     const y = sim.pos[pid * 2], x = sim.pos[pid * 2 + 1];
@@ -705,10 +892,11 @@
       }
     }
     if (turnSlide !== -1) {
-      // 已承诺滑动: 只要缺口方向仍可行就**继续滑到底**(不被部分移动/pen 截断),
-      // 直到盒子对齐(直接移动完全可走)为止 —— 中途截断会卡在角落
-      if (dir !== -1) return turnSlide;
-      turnSlide = -1;
+      // 已承诺滑动：不再根据瞬时缺口判定反向。高速/大半径可能一帧跨过
+      // 判定边界；方向重算会左→右→左循环。只朝启动时记录的中心线移动，
+      // frameMove 后钳制到该线；侧向本身被完全挡住才放弃。
+      if (probeMoveDist(pid, turnSlide) > stepLen * 0.05) return turnSlide;
+      clearTurnSlide();
       return move;
     }
     // 初次触发: 贴墙被挡(moved <5% 步长)才触发 —— 还能往墙滑(部分可走)不触发
@@ -737,10 +925,17 @@
         else { dir2 = MOVE_DOWN; off = do2; okSlide = open(rr2, c + dx) && (rr2 === r || open(rr2, c)); }
       }
     }
-    if (dir2 === -1 || !okSlide) { turnSlide = -1; return move; }   // 不横跨/滑不动: 不转
+    if (dir2 === -1 || !okSlide) { clearTurnSlide(); return move; } // 不横跨/滑不动: 不转
     if (turnSlide !== -1) return turnSlide;                          // 已承诺: 继续滑到底
     if (off >= MIN_OFF) return move;                                 // 偏移不够近0: 不触发
     turnSlide = dir2;
+    if (move === MOVE_UP || move === MOVE_DOWN) {
+      const targetCol = dir2 === MOVE_LEFT ? Math.floor(x - R) : Math.floor(x + R);
+      turnSlideTarget = { axis: 'x', value: targetCol + 0.5 };
+    } else {
+      const targetRow = dir2 === MOVE_UP ? Math.floor(y - R) : Math.floor(y + R);
+      turnSlideTarget = { axis: 'y', value: targetRow + 0.5 };
+    }
     return dir2;
   }
 
@@ -846,11 +1041,27 @@
     sim = new Sim(gameSeed);
     window.__sim = sim;                        // 调试钩子：读 sim 状态/帧率用
     sim.reset(selectedLevel, { oldMode: oldModeActive() });  // 旧模型: 13/14列填墙+13宽观测
+    if (customStats) {
+      const bombsMax = Math.max(1, customStats.bombsMax | 0);
+      const blastMax = Math.max(1, customStats.blastMax | 0);
+      const speedMax = Math.max(0.1, Number(customStats.speedMax));
+      const bombs = Math.min(bombsMax, Math.max(1, customStats.bombs | 0));
+      const blast = Math.min(blastMax, Math.max(1, customStats.blast | 0));
+      const speed = Math.min(speedMax, Math.max(0.1, Number(customStats.speed)));
+      sim.bombsMax = bombsMax; sim.blastMax = blastMax; sim.speedMax = speedMax;
+      for (let p = 0; p < 2; p++) {
+        sim.bombsCap[p] = bombs; sim.blastCap[p] = blast; sim.spdG[p] = speed;
+        sim.loBombs[p] = bombs; sim.loBlast[p] = blast; sim.loSpeed[p] = speed;
+      }
+    }
     preloadLevelImages(selectedLevel);       // 预取本图元件贴图
     prevCovered = new Set();                 // 清空结构覆盖/进入动画状态
     structAnim.clear();
     rng = Q.mulberry32(gameSeed ^ 0x13579BDF);
     human.dirStack = []; human.latch.clear(); human.move = MOVE_IDLE; human.pendingBomb = false;
+    mousePush = null;
+    turnInput = -1;
+    clearTurnSlide();
     tickDebt = 0;                  // 新开局清空节流补偿欠账
     joyMove = null;                    // 摇杆归位（移动端）
     explosion = null; explosionTrig = null; resultShown = false;
@@ -861,15 +1072,22 @@
         mapName: selectedLevel.name,
         category: selectedLevel.category,
         seed: gameSeed,
-        initial: selectedLevel.initial_stats,
+        initial: customStats ? Object.assign({}, customStats) : selectedLevel.initial_stats,
         skin: elSkin.value,
         spectate: elSpectate.checked,
         p0: elSpectate.checked ? p0Sel : 'human',
         p1: enemySel,
         cfg: Object.assign({}, CFG),   // CFG 快照：重放/分析时不依赖当前版本常量
+        levelId: selectedLevel.id,
+        oldMode: !!sim.oldMode,
+        tickHz: CFG.tickHz,
+        replayStateVersion: 2,
       },
       actions: [],
       snapshots: [],
+      // 完整逻辑帧很重（每帧复制二十多个地图数组），只在明确开启录制时保存。
+      // 默认关闭必须保持零堆增长；普通 JSON 重放仍使用 actions + 周期 snapshots。
+      frames: elRecClip.checked ? [sim.snapshotReplay()] : [],
     };
     clipFrames = [];
     lastClipCap = 0;
@@ -877,6 +1095,7 @@
     prevPos.set(sim.pos); curPos.set(sim.pos);
     face[0] = MOVE_DOWN; face[1] = MOVE_DOWN;
     lastTickT = performance.now();
+    fpsFrames = 0; fpsT0 = 0; fpsNow = 0;
     running = true;
     mapMenuOpen = false;                      // 开局恢复渲染
     elBanner.classList.add('hidden');
@@ -888,6 +1107,10 @@
     if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
     if (n >= 1e6) return (n / 1e6).toFixed(0) + 'M';
     return String(n);
+  }
+
+  function modelDisplayName(meta) {
+    return meta.display_name || meta.name;
   }
 
   function fillAiSelect(sel, includeHunter) {
@@ -907,7 +1130,7 @@
       opt.value = m.name;
       const gstep = m.global_step != null ? m.global_step : (m.it || 0);
       const elo = m.elo != null ? ` · elo ${m.elo}` : '';
-      opt.textContent = `${m.name}  · ${fmtStep(gstep)}步${elo} · 导出于 ${(m.generated_at || '').slice(0, 10)}`;
+      opt.textContent = `${modelDisplayName(m)}  · ${fmtStep(gstep)}步${elo} · 导出于 ${(m.generated_at || '').slice(0, 10)}`;
       sel.appendChild(opt);
     }
   }
@@ -951,15 +1174,16 @@
       modelLoaded = true;
       requestAnimationFrame(updateProgress);
       elCurModel.textContent =
-        `${m.meta.name}（${fmtStep(m.meta.global_step ?? m.meta.it ?? 0)}步 · 导出于 ${(m.meta.generated_at || '').slice(0, 10)}）`;
+        `${modelDisplayName(m.meta)}（${fmtStep(m.meta.global_step ?? m.meta.it ?? 0)}步 · 导出于 ${(m.meta.generated_at || '').slice(0, 10)}）`;
       elStatus.innerHTML =
-        `当前模型：<b>${m.meta.name}</b><br>` +
+        `当前模型：<b>${modelDisplayName(m.meta)}</b><br>` +
         `训练步数 ${fmtStep(m.meta.global_step ?? m.meta.it ?? 0)}<br>` +
         `观测 ${m.meta.obs_shape.join('×')} · 参数 ${Object.values(m.tensors)
           .reduce((s, [, n]) => s + n, 0).toLocaleString()}<br>` +
         `推理后端：${m.constructor.name === 'ORTTransformerModel'
           ? (navigator.gpu ? 'WebGPU' : 'WASM') : '纯 JS'}` +
-        (m._ortError ? `<br><span class="dim">ORT 失败：${m._ortError.slice(0, 120)}</span>` : '');
+        (m._ortError ? `<br><span class="dim">ORT 失败：${m._ortError.slice(0, 120)}</span>` : '') +
+        (m._lastInferError ? `<br><span class="dim">推理失败：${m._lastInferError.slice(0, 160)}</span>` : '');
     } catch (e) {
       elStatus.innerHTML = `模型加载失败：${e.message}`;
     }
@@ -968,7 +1192,7 @@
   elRestart.addEventListener('click', startGame);
   const elMapBtn = $('map-btn');
   if (elMapBtn) elMapBtn.addEventListener('click', openMapMenu);
-  elBanner.addEventListener('click', () => { if (!running) startGame(); });  // 欢迎窗口点击开始
+  // 选图页由独立“点击进入”按钮确认，避免调滑块/展开分类时误开局。
   elSkin.addEventListener('change', () => {
     if (res && res.skins) res.players = res.skins[elSkin.value];   // 换皮肤
     startGame();
@@ -990,11 +1214,14 @@
     if (elRecClip.checked) {
       if (!mediaRec) startVideoRecorder();
       clipFrames = [];
+      if (replay && sim) replay.frames = [sim.snapshotReplay()];
       recMsg('录制动图：已开启（保存 GIF/视频需此开关）');
     } else {
-      if (mediaRec && mediaRec.state === 'recording') { try { mediaRec.stop(); } catch (e) {} }
-      mediaRec = null; mediaChunks = [];
+      stopVideoRecorder().finally(() => {
+        mediaRec = null; mediaMime = ''; mediaChunks = [];
+      });
       clipFrames = [];
+      if (replay) replay.frames = [];          // 立即释放完整状态帧，避免后续 GC 停顿
       recMsg('录制动图：已关闭（零开销）');
     }
   });
@@ -1008,6 +1235,8 @@
     startGame();
   });
   elDanger.addEventListener('change', () => { showDanger = elDanger.checked; });
+  elRadius.addEventListener('input', setRadiusLabel);
+  elRadius.addEventListener('change', () => { applyRadius(); startGame(); });
   elSound.addEventListener('change', () => { soundOn = elSound.checked; });
   elBgm.addEventListener('change', () => {
     bgmOn = elBgm.checked;
@@ -1037,23 +1266,36 @@
     }, 10000);
   }
 
-  elSaveReplay.addEventListener('click', () => {
-    if (!replay || !replay.actions.length) { recMsg('还没有本局录像 —— 先开始一局再保存'); return; }
-    const doc = {
+  function buildReplayDoc() {
+    if (!replay || !replay.actions.length) return null;
+    return {
       format: 'qqt-replay',
-      version: 1,
+      version: 2,
       meta: Object.assign({}, replay.meta, {
         savedAt: new Date().toISOString(),
         done: sim ? sim.done : false,
-        result: sim && sim.done ? sim.winner : null,   // 保存时刻的终局（0/1/null）
+        result: sim && sim.done ? sim.winner : null,
         finalT: sim ? sim.t : 0,
       }),
       ticks: replay.actions.length,
-      actions: replay.actions,
-      snapshots: replay.snapshots,
+      actions: replay.actions.map((a) => a.slice()),
+      snapshots: replay.snapshots.map((s) => Object.assign({}, s)),
+      frames: replay.frames.map((f) => f),
     };
-    const blob = new Blob([JSON.stringify(doc, null, 1)], { type: 'application/json' });
-    downloadBlob(blob, `replay_${doc.meta.mode}_s${doc.meta.seed}_${timeStamp()}.json`);
+  }
+
+  function downloadReplayDoc(doc) {
+    const text = JSON.stringify(doc, null, 1);
+    const blob = new Blob([text], { type: 'application/json' });
+    const mapName = doc.meta.mapName || doc.meta.map || 'map';
+    downloadBlob(blob, `replay_${mapName}_s${doc.meta.seed}_${timeStamp()}.json`);
+    return { text, blob };
+  }
+
+  elSaveReplay.addEventListener('click', () => {
+    const doc = buildReplayDoc();
+    if (!doc) { recMsg('还没有本局录像 —— 先开始一局再保存'); return; }
+    const { blob } = downloadReplayDoc(doc);
     recMsg(`录像已保存：${doc.ticks} tick，${(blob.size / 1024).toFixed(0)}KB`);
   });
 
@@ -1135,26 +1377,89 @@
     }, 30);
   });
 
-  elSaveVideo.addEventListener('click', async () => {
-    if (!mediaRec || mediaRec.state !== 'recording') {
-      recMsg('未录制视频：请先勾选「录制动图」再开局');
-      return;
+  async function exportReplayVideo(doc) {
+    if (!canvas.captureStream || !window.MediaRecorder) {
+      throw new Error('当前浏览器不支持 Canvas 视频录制；JSON 已保存');
     }
-    if (!replay || !replay.actions.length) { recMsg('还没有可录的画面 —— 先开始一局再保存'); return; }
-    recMsg('视频导出中…');
+    if (!doc.frames || doc.frames.length < 2) {
+      throw new Error('录像没有完整状态帧；请重新开局后再保存');
+    }
+    const mime = [
+      'video/mp4;codecs=avc1.42E01E', 'video/mp4',
+      'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm',
+    ].find((t) => MediaRecorder.isTypeSupported(t));
+    if (!mime) throw new Error('当前浏览器没有可用的视频编码器；JSON 已保存');
+
+    const oldRunning = running;
+    const oldSim = sim;
+    const oldLevel = selectedLevel;
+    const oldDanger = dangerCache;
+    const oldExplosion = explosion;
+    const oldExplosionTrig = explosionTrig;
+    const oldExplosionT = explosionT;
+    const replayLevel = levels.find((l) => l.id === doc.meta.levelId) ||
+      levels.find((l) => l.source === doc.meta.map);
+    if (!replayLevel) throw new Error(`找不到录像地图 ${doc.meta.map}`);
+
+    const exportSim = new Sim(doc.meta.seed);
+    exportSim.reset(replayLevel, { oldMode: !!doc.meta.oldMode });
+    const stream = canvas.captureStream(Number(doc.meta.tickHz || CFG.tickHz));
+    const chunks = [];
+    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 1200000 });
+    const stopped = new Promise((resolve, reject) => {
+      recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      recorder.onerror = (e) => reject(e.error || new Error('视频编码失败'));
+      recorder.onstop = resolve;
+    });
+    const frameDelay = 1000 / Number(doc.meta.tickHz || CFG.tickHz);
+    replayExporting = true;
+    running = false;
+    sim = exportSim;
+    selectedLevel = replayLevel;
+    const savedRadius = CFG.radius;
+    if (doc.meta.cfg && Number.isFinite(Number(doc.meta.cfg.radius))) CFG.radius = Number(doc.meta.cfg.radius);
     try {
-      mediaRec.requestData();                      // 冲刷未落盘的数据
-      await new Promise((r) => setTimeout(r, 80));
-      const now = performance.now();
-      // 与 WebP 一致：只取最近 12s + 终局前（冻结结算画面不入片）
-      const chunks = mediaChunks.filter((c) =>
-        now - c.t <= CLIP_WINDOW_MS + 250 && (!gameEndT || c.t <= gameEndT));
-      const bytes = chunks.reduce((s, c) => s + c.blob.size, 0);
-      if (!chunks.length || bytes < 8192) { recMsg('视频数据不足，等几秒再点'); return; }
-      const blob = new Blob(chunks.map((c) => c.blob), { type: mediaMime });
-      const ext = mediaMime.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
-      downloadBlob(blob, `clip_${replay.meta.mode}_s${replay.meta.seed}_${timeStamp()}.${ext}`);
-      recMsg(`视频已保存：${(blob.size / 1024).toFixed(0)}KB（${ext}，最近 ${(CLIP_WINDOW_MS / 1000).toFixed(0)}s）`);
+      recorder.start();
+      for (const frame of doc.frames) {
+        exportSim.restoreReplay(frame);
+        prevPos.set(exportSim.pos); curPos.set(exportSim.pos);
+        dangerCache = exportSim.dangerMap();
+        explosion = frame.covered ? new Uint8Array(frame.covered) : null;
+        explosionTrig = frame.triggered ? new Uint8Array(frame.triggered) : null;
+        explosionT = performance.now();
+        render(performance.now());
+        await new Promise((resolve) => setTimeout(resolve, Math.max(0, frameDelay)));
+      }
+      recorder.stop();
+      await stopped;
+      const blob = new Blob(chunks, { type: mime });
+      if (!blob.size) throw new Error('视频编码器没有输出数据；JSON 已保存');
+      const isMp4 = mime.includes('mp4');
+      const ext = isMp4 ? 'mp4' : 'webm';
+      downloadBlob(blob, `video_${doc.meta.mapName || doc.meta.map}_s${doc.meta.seed}_${timeStamp()}.${ext}`);
+      return { blob, mime, ext };
+    } finally {
+      CFG.radius = savedRadius;
+      replayExporting = false;
+      sim = oldSim;
+      selectedLevel = oldLevel;
+      dangerCache = oldDanger;
+      explosion = oldExplosion;
+      explosionTrig = oldExplosionTrig;
+      explosionT = oldExplosionT;
+      running = oldRunning;
+    }
+  }
+
+  elSaveVideo.addEventListener('click', async () => {
+    if (replayExporting) return;
+    const doc = buildReplayDoc();
+    if (!doc) { recMsg('还没有本局录像 —— 先开始一局再保存'); return; }
+    const { text } = downloadReplayDoc(doc);
+    recMsg('JSON 已保存，正在按完整状态帧渲染视频…');
+    try {
+      const out = await exportReplayVideo(JSON.parse(text));
+      recMsg(`视频已保存：${(out.blob.size / 1024).toFixed(0)}KB（${out.ext}${out.ext === 'webm' ? '；当前浏览器不支持 MP4，已保留真实 WebM' : ''}）`);
     } catch (e) {
       recMsg(`视频导出失败：${e.message}`);
       console.error(e);
@@ -1165,6 +1470,7 @@
   let tickBusy = false;              // async tick 重入保护（await 期间 setInterval 再触发时跳过）
   let tickDebt = 0;                  // 后台节流补偿欠账(ms): 标签页隐藏时 setInterval 被
                                      // 节流到 ~1Hz(10倍慢) → 每次触发补跑缺失的 tick 保持实时
+  const tickTimeline = [];
   async function logicTick() {
     if (!running || !sim || sim.done || tickBusy) return;
     tickBusy = true;
@@ -1190,6 +1496,7 @@
     if (spectate && p0Sel !== HUNTER_VAL && !modelCache.has(p0Sel)) return;
     // 观战 + 双方同一模型 → 一次批处理前向出双玩家动作（ORT 为 batch=2 一次 run）
     let a0, a1;
+    const actionT0 = performance.now();
     const pairM = (spectate && enemySel === p0Sel) ? modelCache.get(enemySel) : null;
     if (pairM && pairM.bothAct) {
       const pair = await pairM.bothAct(sim, rng);
@@ -1206,10 +1513,12 @@
       }
       a1 = await aiOf(1);
     }
+    const actionMs = performance.now() - actionT0;
     // 拾取判定：人类玩家脚下 step 前有宝箱 → step 后没有 = 吃到
     const hc = Math.floor(sim.pos[1]), hr = Math.floor(sim.pos[0]);
     const hadCrate = !spectate && sim.alive[0] && sim.crate[hr * W + hc] === 1;
     // 录像：记录本 tick 实际喂给 step 的动作 + 每 20 tick 一个状态快照
+    const snapshotT0 = performance.now();
     if (replay) {
       replay.actions.push([a0[0], a0[1], a1[0], a1[1]]);
       if (replay.actions.length % 20 === 1) {
@@ -1226,8 +1535,13 @@
     const prevBush = sim.bush ? sim.bush.slice() : null;
     const hpBefore = sim.hp.slice();          // 血量快照（找掉血玩家）
     const prevCrate = sim.crate.slice();      // 宝箱快照（找新回收箱）
+    const snapshotMs = performance.now() - snapshotT0;
+    const stepT0 = performance.now();
     const info = sim.step([a0, a1]);
+    if (replay && elRecClip.checked) replay.frames.push(sim.snapshotReplay(info));
     curPos.set(sim.pos);
+    const stepMs = performance.now() - stepT0;
+    const eventT0 = performance.now();
     // 掉血回收：新出现的 recycle 宝箱 → 从掉血玩家身上抛物线飞向落点（100ms）
     const dmgP = hpBefore[0] > sim.hp[0] ? 0 : (hpBefore[1] > sim.hp[1] ? 1 : -1);
     if (dmgP >= 0) {
@@ -1254,11 +1568,13 @@
         }
       }
     }
-    lastTickT = performance.now();
-    prof.tickLast = performance.now() - tk0;   // tick 耗时(ms)
+    const eventMs = performance.now() - eventT0;
     // danger 缓存：tick 级重建（10Hz），渲染帧直接复用 —— 60fps 每帧重算
     // dangerMap（不动点传播 O(炸弹×blast)）是 AI 对打帧率低的主因
+    const dangerT0 = performance.now();
     dangerCache = sim.dangerMap();
+    const dangerMs = performance.now() - dangerT0;
+    const postT0 = performance.now();
     // 朝向：人类玩家（非观战）的朝向由 60Hz 帧级移动维护，10Hz tick 不覆盖
     //（否则每 tick 把 face[0] 重置成 IDLE → 渲染回退朝下，按左/右后总朝下）
     if (spectate) face[0] = a0[0];
@@ -1275,6 +1591,20 @@
       playSnd('boom');
     }
     if (info.died[0]) playSnd('die');
+    const tickEnd = performance.now();
+    tickTimeline.push({ start: tk0, end: tickEnd, duration: tickEnd - tk0 });
+    while (tickTimeline.length > 200) tickTimeline.shift();
+    lastTickT = tickEnd;
+    prof.tickLast = tickEnd - tk0;
+    prof.tickParts = {
+      at: tickEnd,
+      action: actionMs,
+      snapshot: snapshotMs,
+      step: stepMs,
+      events: eventMs,
+      danger: dangerMs,
+      post: tickEnd - postT0,
+    };
     if (sim.done && !resultShown) {
       resultShown = true;
       gameEndT = performance.now();   // 冻结画面从此刻起不进动图窗口
@@ -1299,10 +1629,19 @@
       console.log('[auto] 自动开局: 双方 ' + (ai || '规则 Hunter') + ', empty_scene');
     }
     // (B键坐标点击复制已移除)
+      await stopVideoRecorder();
       running = false;
     }
   }
-  setInterval(logicTick, TICK * 1000);
+  setInterval(() => {
+    // 将 10Hz 逻辑工作放进浏览器空闲窗口，避免固定 timer 与下一次
+    // vsync 同相位触发而错过一帧。隐藏页仍走原路径，让 tickDebt 补偿继续工作。
+    if (!document.hidden && window.requestIdleCallback) {
+      requestIdleCallback(() => logicTick(), { timeout: TICK * 500 });
+    } else {
+      logicTick();
+    }
+  }, TICK * 1000);
 
   // ------------------------------------------------------------ 渲染（draw_grid 移植）
   // 新图块体系：按关卡 layers_raw 逐格渲染**原版元件贴图**（elements.json），
@@ -1372,7 +1711,8 @@
           const el = elements[v];
           if (!el) continue;
           out.push({ key: li + ':' + r + ':' + c, layer: li, r, c, eid: v, w: el.w, h: el.h,
-                    isBush: !!(lv.bush && lv.bush[r * W + c]) });
+                    isBush: li === 0 && Math.abs(v) === 6003 ||
+                      !!(lv.bush && lv.bush[r * W + c]) });
         }
       }
     }
@@ -1531,7 +1871,7 @@
     // 爆炸：中心格用中心图；臂图按实际爆炸格数从炸弹边缘端切片（duel.py 同款算法）
     if (explosion) {
       const age = (now - explosionT) / 1000;
-      if (age <= 0.6 && explosionTrig) {
+      if (age <= 0.4 && explosionTrig) {
         const blast = explosion;
         const maxBlast = 7;   // 成长上限，与 duel.py 的 res_blast 一致（含 open 关）
         // 引爆源格画中心图
@@ -1722,6 +2062,17 @@
         ctx.fillRect(gxp * CELL - 7, (gyp + CFG.radius) * CELL - 1, 14, 2);
       }
     }
+    // 鼠标寻路：hover 周围九宫格高亮（在 translate 内画，与游戏板同一坐标系）
+    if (hoverCell && !elSpectate.checked && sim && running) {
+      const r = hoverCell.r, c = hoverCell.c;
+      if (r >= 0 && r < H && c >= 0 && c < W) {
+        ctx.fillStyle = 'rgba(255,255,100,0.25)';
+        ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
+        ctx.strokeStyle = 'rgba(255,255,100,0.6)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(c * CELL + 1, r * CELL + 1, CELL - 2, CELL - 2);
+      }
+    }
     ctx.restore();                 // 结束整体下移(translate), HUD 用绝对坐标
     drawHUD();
     // 帧数显示：右上角 11px 黄色小字
@@ -1784,7 +2135,8 @@
     ctx.fillStyle = '#5a6275';
     ctx.font = '11px sans-serif';
     const em = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
-    ctx.fillText(`敌人：${em ? em.meta.name + '（' + fmtStep(em.meta.global_step) + '步）' : p1Kind}`,
+      ctx.fillText(`敌人：${em ? modelDisplayName(em.meta) + '（' + fmtStep(em.meta.global_step) + '步）' : p1Kind}`,
+
                  18, y0 + 78);
   }
 
@@ -1792,27 +2144,104 @@
   let prevFrame = 0;
   let fpsFrames = 0, fpsT0 = 0, fpsNow = 0;   // 帧数统计(右上角显示)
   // ---- profiling: 真实帧间隔/渲染耗时/tick耗时/最大帧 ----
-  let prof = { frames: 0, t0: 0, sumDt: 0, maxDt: 0, renderMs: 0, tickLast: 0, clipLast: 0 };
+  let prof = { frames: 0, t0: 0, sumDt: 0, maxDt: 0, renderMs: 0, tickLast: 0,
+               inputLast: 0, callbackLast: 0, clipLast: 0, mouseSearchLast: 0 };
   let profAvg = null;
   let lastRenderMs = 0;   // 最近一帧 render 耗时(突变帧日志用)
+  const spikeHistory = [];          // 完整保留，不依赖 DevTools 控制台 UI
+  window.__qqtProfSpikes = spikeHistory;
+  const longTasks = [];
+  const longFrames = [];
+  if (window.PerformanceObserver) {
+    try {
+      const po = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          longTasks.push({
+            start: e.startTime,
+            end: e.startTime + e.duration,
+            duration: e.duration,
+            name: e.name || 'self',
+            attribution: (e.attribution || []).map((a) => ({
+              name: a.name || '',
+              entryType: a.entryType || '',
+              containerType: a.containerType || '',
+              containerSrc: a.containerSrc || '',
+              containerName: a.containerName || '',
+            })),
+          });
+        }
+        while (longTasks.length > 20) longTasks.shift();
+      });
+      po.observe({ entryTypes: ['longtask'] });
+    } catch (_) {}
+    try {
+      const loaf = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          const scripts = (e.scripts || []).map((s) => ({
+            duration: s.duration || 0,
+            invoker: s.invoker || s.sourceFunctionName || s.sourceURL || 'script',
+          })).sort((a, b) => b.duration - a.duration);
+          longFrames.push({
+            start: e.startTime,
+            end: e.startTime + e.duration,
+            duration: e.duration,
+            blocking: e.blockingDuration || 0,
+            script: scripts[0] || null,
+          });
+        }
+        while (longFrames.length > 20) longFrames.shift();
+      });
+      loaf.observe({ type: 'long-animation-frame', buffered: true });
+    } catch (_) {}
+  }
+  const PROF_SPIKE_MS = 25;
   function loop(now) {
+    const callbackT0 = performance.now();
     // 人类输入 60Hz 采样 + 帧级移动
+    const inputT0 = callbackT0;
     if (running && !elSpectate.checked) {
       const dt = Math.min((now - prevFrame) / 1000 || 0, 0.25);
-      human.move = sampleHumanMove();
+      const keyMove = sampleHumanMove();
+      if (keyMove !== MOVE_IDLE) mousePush = null;  // 键盘/摇杆立即接管
+      const mousePushing = mousePush && now < mousePush.until && sim.alive[0];
+      if (mousePush && !mousePushing) mousePush = null;
+      human.move = keyMove !== MOVE_IDLE ? keyMove : (mousePushing ? mousePush.dir : MOVE_IDLE);
       if (human.move !== MOVE_IDLE && sim.alive[0]) {
-        const eff = autoTurn(0, human.move);
+        // 顶箱期间禁止玩家自动转向；必须保持同一方向累计推动时间。
+        const eff = mousePushing ? human.move : autoTurn(0, human.move);
         const keepFace = human.move;      // 原始输入方向(自动转向不改行走图朝向)
+        const beforeY = sim.pos[0], beforeX = sim.pos[1];
         frameMove(0, eff, dt);            // 坐标用转向方向滑移
+        if (!mousePushing && turnSlideTarget && eff === turnSlide) {
+          // 只截断本帧的侧滑轴，不改另一轴碰撞结果。到达中心线后下一帧
+          // autoTurn 会发现原方向可完整移动并恢复玩家的意图方向。
+          if (turnSlideTarget.axis === 'x') {
+            sim.pos[1] = eff === MOVE_LEFT
+              ? Math.max(sim.pos[1], turnSlideTarget.value)
+              : Math.min(sim.pos[1], turnSlideTarget.value);
+          } else {
+            sim.pos[0] = eff === MOVE_UP
+              ? Math.max(sim.pos[0], turnSlideTarget.value)
+              : Math.min(sim.pos[0], turnSlideTarget.value);
+          }
+        }
         human.move = eff;                 // 动画播放状态按实际移动
-        face[0] = keepFace;               // 朝向保持玩家按的方向
+        const movedY = sim.pos[0] - beforeY, movedX = sim.pos[1] - beforeX;
+        const intendedMove =
+          (keepFace === MOVE_UP && movedY < -2 * EPS && Math.abs(movedX) <= 2 * EPS) ||
+          (keepFace === MOVE_DOWN && movedY > 2 * EPS && Math.abs(movedX) <= 2 * EPS) ||
+          (keepFace === MOVE_LEFT && movedX < -2 * EPS && Math.abs(movedY) <= 2 * EPS) ||
+          (keepFace === MOVE_RIGHT && movedX > 2 * EPS && Math.abs(movedY) <= 2 * EPS);
+        if (intendedMove) face[0] = keepFace;
       }
     }
+    prof.inputLast = performance.now() - inputT0;
     const frameDt = now - prevFrame;          // 真实帧间隔(ms, rAF 时间戳)
     prevFrame = now;
-    fpsFrames++;
-    if (human.move === MOVE_IDLE || !sim.alive[0]) turnSlide = -1;  // 松手/死亡: 取消滑动
-    if (now - fpsT0 >= 500) { fpsNow = Math.round(fpsFrames * 1000 / (now - fpsT0)); fpsFrames = 0; fpsT0 = now; }
+    if (!fpsT0) fpsT0 = now;
+    else fpsFrames++;                 // 统计帧间隔数，不把窗口首尾两帧都算进去
+    if (human.move === MOVE_IDLE || !sim.alive[0]) clearTurnSlide(); // 松手/死亡: 取消滑动
+    if (now - fpsT0 >= 1000) { fpsNow = Math.round(fpsFrames * 1000 / (now - fpsT0)); fpsFrames = 0; fpsT0 = now; }
     // profiling 累计
     prof.frames++;
     prof.sumDt += frameDt;
@@ -1820,10 +2249,50 @@
     const rs = performance.now();
     render(now);
     lastRenderMs = performance.now() - rs;
+    prof.callbackLast = performance.now() - callbackT0;
     prof.renderMs += lastRenderMs;
-    // 突变帧(>25ms)即时告警到 console(带最近一帧渲染耗时)
-    if (frameDt > 25) {
-      console.warn(`[prof] 突变帧 ${frameDt.toFixed(1)}ms @t=${(now/1000).toFixed(1)}s (渲染${lastRenderMs.toFixed(1)}ms 采样${(prof.clipLast||0).toFixed(1)}ms)`);
+    // 只在实际对局中告警。选图/欢迎页仍使用同一 rAF 做 UI 动画，
+    // 但那里的调度抖动不属于游戏帧卡顿，不能混入诊断日志。
+    if (running && !mapMenuOpen && frameDt > PROF_SPIKE_MS) {
+      const p = prof.tickParts;
+      const age = p ? (now - p.at).toFixed(0) : '-';
+      const parts = p ? ` tick分段动作${p.action.toFixed(1)} 快照${p.snapshot.toFixed(1)} step${p.step.toFixed(1)} 事件${p.events.toFixed(1)} danger${p.danger.toFixed(1)} post${p.post.toFixed(1)}ms（距今${age}ms）` : '';
+      const frameStart = now - frameDt;
+      const renderMs = lastRenderMs;
+      const callbackMs = prof.callbackLast;
+      const inputMs = prof.inputLast;
+      // rAF 时间戳之间的间隔减去当前回调自身耗时，近似表示浏览器/系统
+      // 没有调度页面 JS 的时间；它不是页面函数耗时。
+      const scheduleGapMs = Math.max(0, frameDt - callbackMs);
+      const overlappingTicks = tickTimeline.filter((t) => t.start < now && t.end > frameStart)
+        .map((t) => ({
+          start: t.start,
+          end: t.end,
+          duration: t.duration,
+          overlap: Math.max(0, Math.min(t.end, now) - Math.max(t.start, frameStart)),
+        }));
+      const spike = { at: now, frameDt, callbackMs, inputMs, renderMs,
+                      scheduleGapMs, overlappingTicks, tickParts: p ? { ...p } : null };
+      spikeHistory.push(spike);
+      while (spikeHistory.length > 200) spikeHistory.shift();
+      canvas.dataset.profSpikes = String(spikeHistory.length);
+      canvas.dataset.profLastDt = frameDt.toFixed(1);
+      // PerformanceObserver 通常在当前 rAF 回调之后投递，延迟一个 task 再做
+      // 时间重叠匹配，避免把历史 Long Task 错标到当前突变帧。
+      if (!location.search.includes('profquiet=1')) setTimeout(() => {
+        if (!running || mapMenuOpen) return;
+        const lt = [...longTasks].reverse().find((e) => e.start < now && e.end > frameStart);
+        const lf = [...longFrames].reverse().find((e) => e.start < now && e.end > frameStart);
+        const ltSrc = lt && lt.attribution && lt.attribution.length
+          ? (lt.attribution[0].containerSrc || lt.attribution[0].name || '') : '';
+        const longInfo = lt
+          ? ` longtask${lt.duration.toFixed(1)}ms[${lt.start.toFixed(1)}-${lt.end.toFixed(1)}${ltSrc ? ` ${ltSrc}` : ''}]`
+          : ' longtask无重叠';
+        const frameInfo = lf
+          ? ` LoAF${lf.duration.toFixed(1)}ms 阻塞${lf.blocking.toFixed(1)}ms${lf.script ? ` 最重脚本${lf.script.invoker}:${lf.script.duration.toFixed(1)}ms` : ''}`
+          : '';
+        console.warn(`[prof] 突变帧 ${frameDt.toFixed(1)}ms @t=${(now/1000).toFixed(1)}s (回调${callbackMs.toFixed(1)}ms 输入${inputMs.toFixed(1)}ms 渲染${renderMs.toFixed(1)}ms 调度空档${scheduleGapMs.toFixed(1)}ms 采样${(prof.clipLast||0).toFixed(1)}ms${parts}${longInfo}${frameInfo})`);
+      }, 0);
     }
     if (now - prof.t0 >= 1000) {
       const win = now - prof.t0;
@@ -1839,11 +2308,15 @@
         render: prof.renderMs / prof.frames,
         tick: prof.tickLast,
       };
-      const profLine = `[prof] ${profAvg.fps}fps 帧均${profAvg.avgDt.toFixed(1)}ms 渲染${profAvg.render.toFixed(1)}ms tick${profAvg.tick.toFixed(1)}ms 采样${(prof.clipLast||0).toFixed(1)}ms 推理${inferMs.toFixed(1)}ms 最大${profAvg.maxDt.toFixed(0)}ms${profAvg.maxDt>25?' ⚠含突变':''}`;
-      console.log(profLine);
+      const profLine = `[prof] ${profAvg.fps}fps 帧均${profAvg.avgDt.toFixed(1)}ms 渲染${profAvg.render.toFixed(1)}ms tick${profAvg.tick.toFixed(1)}ms 采样${(prof.clipLast||0).toFixed(1)}ms 鼠标寻路${(prof.mouseSearchLast||0).toFixed(1)}ms 推理${inferMs.toFixed(1)}ms 最大${profAvg.maxDt.toFixed(0)}ms${profAvg.maxDt>25?' ⚠含突变':''}`;
+      // DevTools 打开时，每秒 console.log 的格式化/界面重绘会抢占下一次
+      // vsync，制造 profiler 自己报告的 26~35ms 突变。默认不写控制台；
+      // 显式加 ?profconsole=1 时才输出每秒摘要。
+      if (running && !mapMenuOpen && location.search.includes('profconsole=1')) console.log(profLine);
       // 调试：?profdom=1 时把 [prof] 行写进 document.title（不开 console 也能读帧率/推理）
       if (location.search.includes('profdom=1')) document.title = profLine;
       prof.frames = 0; prof.t0 = now; prof.sumDt = 0; prof.maxDt = 0; prof.renderMs = 0;
+      prof.mouseSearchLast = 0;
     }
     // 动图滚动窗口：按 20fps 把画面缩采样进环形缓冲，保存时取最近 12 秒。
     // 直接存原始像素（getImageData）：中间任何有损编码都会让静止背景
@@ -1903,24 +2376,75 @@
            <div class="mm-prev-img"><img id="mm-prev-img" alt=""></div>
            <div class="mm-prev-name" id="mm-prev-name"></div>
            <div class="mm-prev-meta" id="mm-prev-meta"></div>
+           <div class="mm-stats" id="mm-stats">
+             <div class="mm-stat"><span>初始泡泡 <output id="mm-bombs-v"></output></span><input id="mm-bombs" type="range" min="1" max="10" step="1"></div>
+             <div class="mm-stat"><span>最大泡泡 <output id="mm-bombs-max-v"></output></span><input id="mm-bombs-max" type="range" min="1" max="10" step="1"></div>
+             <div class="mm-stat"><span>初始威力 <output id="mm-blast-v"></output></span><input id="mm-blast" type="range" min="1" max="7" step="1"></div>
+             <div class="mm-stat"><span>最大威力 <output id="mm-blast-max-v"></output></span><input id="mm-blast-max" type="range" min="1" max="7" step="1"></div>
+             <div class="mm-stat"><span>初始速度 <output id="mm-speed-v"></output></span><input id="mm-speed" type="range" min="0.5" max="2.3" step="0.05"></div>
+             <div class="mm-stat"><span>最大速度 <output id="mm-speed-max-v"></output></span><input id="mm-speed-max" type="range" min="0.5" max="2.3" step="0.05"></div>
+           </div>
          </div>
        </div>` +
+      `<button id="mm-enter-btn" class="mm-enter" type="button">点击进入</button>` +
       (isTouch()
         ? `<span class="tip">左摇杆移动 · 💣 键放泡</span>`
         : `<span class="tip">方向键 / WASD 移动 · 空格 放泡</span>`) +
-      `<span class="tip">点击分类展开 → hover 地图看缩略图 → 点击开局；R 重开</span>` +
-      `<span class="tip act">点击地图开始</span>`;
+      `<span class="tip">点击分类展开 → 选择地图 → 调整属性 → 点击进入；R 重开</span>`;
     const tree = document.getElementById('mm-tree');
     const prevImg = document.getElementById('mm-prev-img');
     const prevName = document.getElementById('mm-prev-name');
     const prevMeta = document.getElementById('mm-prev-meta');
+    const enterBtn = document.getElementById('mm-enter-btn');
+    const statIds = ['bombs', 'bombs-max', 'blast', 'blast-max', 'speed', 'speed-max'];
+    const statEls = Object.fromEntries(statIds.map((id) => [id, document.getElementById(`mm-${id}`)]));
+    const statOut = Object.fromEntries(statIds.map((id) => [id, document.getElementById(`mm-${id}-v`)]));
+    const setSelected = (l) => {
+      selectedLevel = l;
+      const st = l.initial_stats || { bombs: 2, blast: 2, speed: 1.3 };
+      customStats = {
+        bombs: st.bombs, blast: st.blast, speed: st.speed,
+        bombsMax: l.bombs_max || CFG.growthBombsMax,
+        blastMax: l.blast_max || CFG.growthBlastMax,
+        speedMax: l.speed_max || CFG.growthSpeedMax,
+      };
+      const values = [customStats.bombs, customStats.bombsMax, customStats.blast,
+                      customStats.blastMax, customStats.speed, customStats.speedMax];
+      statIds.forEach((id, i) => { statEls[id].value = values[i]; statOut[id].textContent = values[i]; });
+      for (const el of tree.children) {
+        const children = el.children && el.children[1];
+        if (!children || !children.children) continue;
+        for (const item of children.children) {
+          item.classList.remove('mm-cur');
+          if (item._levelId === String(l.id)) item.classList.add('mm-cur');
+        }
+      }
+    };
+    const syncStats = () => {
+      const n = (id) => Number(statEls[id].value);
+      let bombsMax = n('bombs-max'), blastMax = n('blast-max'), speedMax = n('speed-max');
+      let bombs = Math.min(n('bombs'), bombsMax);
+      let blast = Math.min(n('blast'), blastMax);
+      let speed = Math.min(n('speed'), speedMax);
+      statEls.bombs.value = bombs; statEls.blast.value = blast; statEls.speed.value = speed;
+      customStats = { bombs, blast, speed, bombsMax, blastMax, speedMax };
+      const vals = [bombs, bombsMax, blast, blastMax, speed.toFixed(2), speedMax.toFixed(2)];
+      statIds.forEach((id, i) => { statOut[id].textContent = vals[i]; });
+    };
+    statIds.forEach((id) => statEls[id].addEventListener('input', (ev) => {
+      ev.stopPropagation(); syncStats();
+    }));
+    if (enterBtn) enterBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (selectedLevel) startGame();
+    });
     const showPrev = (l, extraName, extraMeta, imgSrc) => {
       if (!l && !extraName && !imgSrc) return;
       if (prevImg) prevImg.src = imgSrc || (l && l.thumb) || '';
       if (prevName) prevName.textContent = extraName || (l ? (l.name || l.source) : '');
       const st = l ? (l.initial_stats || {}) : {};
       if (prevMeta) prevMeta.textContent = extraMeta ||
-        (l ? `${l.mode} · ${st.bombs}泡/${st.blast}威/${st.speed}速 · ${l.source}` : '');
+        (l ? `${l.mode} · ${l.source}` : '');
     };
     // 随机地图：官方 rand 缩略图；hover 展示、点击随机开局
     const rndBtn = document.getElementById('mm-random-btn');
@@ -1932,8 +2456,9 @@
         showPrev(null, '随机地图', '全 241 张地图随机抽取', RAND_IMG));
       rndBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        selectedLevel = levels[Math.floor(Math.random() * levels.length)];
-        startGame();
+        const l = levels[Math.floor(Math.random() * levels.length)];
+        setSelected(l);
+        showPrev(l);
       });
       // 官方随机缩略图（rand.png）常驻预览
       if (prevImg) prevImg.src = 'assets/maps/thumb/rand.png';
@@ -1953,8 +2478,8 @@
         head.addEventListener('mouseenter', () => showPrev(emptyLv));
         head.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          selectedLevel = emptyLv;
-          startGame();
+          setSelected(emptyLv);
+          showPrev(emptyLv);
         });
         node.appendChild(head);
         tree.appendChild(node);
@@ -1974,15 +2499,14 @@
       for (const l of maps) {
         const item = document.createElement('button');
         item.className = 'mm-map';
-        const st = l.initial_stats || {};
+        item._levelId = String(l.id);
         item.innerHTML =
-          `<span class="mm-name">${l.name || l.source}</span>` +
-          `<span class="mm-meta">${st.bombs}泡 / ${st.blast}威 / ${st.speed}速</span>`;
+          `<span class="mm-name">${l.name || l.source}</span>`;
         item.addEventListener('mouseenter', () => showPrev(l));
         item.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          selectedLevel = l;
-          startGame();
+          setSelected(l);
+          showPrev(l);
         });
         children.appendChild(item);
       }
@@ -1990,11 +2514,17 @@
       node.appendChild(children);
       tree.appendChild(node);
     }
-    elBanner.classList.remove('hidden');
-  }
+    if (selectedLevel) {
+      setSelected(selectedLevel);
+      showPrev(selectedLevel);
+    }
+      elBanner.classList.remove('hidden');
+    }
   function openMapMenu() {
     running = false;
     mapMenuOpen = true;                       // 冻结渲染
+    prof.tickLast = 0;
+    prof.tickParts = null;                    // 不把上一局 tick 误标到选图页抖动
     stopBgm();                                // 关音乐
     ctx.fillStyle = '#0c0e13';                // 清掉游戏画面
     ctx.fillRect(0, 0, canvas.width, canvas.height);
