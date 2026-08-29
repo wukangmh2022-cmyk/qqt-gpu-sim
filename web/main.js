@@ -1474,6 +1474,7 @@
     const oldFace = face.slice();
     const lastPos = Float64Array.from(exportSim.pos);
     const animMoving = [false, false];
+    dangerCache = null;                // 危险图默认不录入：清掉现场缓存, 重放也不重建
     try {
       elBanner.innerHTML = '⏳ 正在重放录制中…<span class="tip">按完整状态帧逐帧渲染，请勿切换标签页</span>';
       recorder.start();
@@ -1531,8 +1532,9 @@
           if (prevFrame.crate[pcell] === 1 && frame.crate[pcell] === 0) sndRec('pickup');
         }
         // 火光与对局同语义：只在新爆炸时覆盖 —— 无爆炸保留旧值按 0.4s 自然
-        // 到期（否则下一 tick 被置空 → 火焰/糖浆渲染时长比真实游戏短）
-        dangerCache = exportSim.dangerMap();
+        // 到期（否则下一 tick 被置空 → 火焰/糖浆渲染时长比真实游戏短）。
+        // 危险图默认不录入视频：危险叠层是调试/可视化用途，导出重放不重建
+        // dangerCache（置空 → drawDangerOverlay 直接跳过）。
         if (frame.covered && frame.covered.some((v) => v > 0)) {
           explosion = new Uint8Array(frame.covered);
           explosionTrig = frame.triggered ? new Uint8Array(frame.triggered) : null;
