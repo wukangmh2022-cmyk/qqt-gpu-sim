@@ -1389,11 +1389,6 @@
     if (!doc.frames || doc.frames.length < 2) {
       throw new Error('录像没有完整状态帧；请重新开局后再保存');
     }
-    const mime = [
-      'video/mp4;codecs=avc1.42E01E', 'video/mp4',
-      'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm',
-    ].find((t) => MediaRecorder.isTypeSupported(t));
-    if (!mime) throw new Error('当前浏览器没有可用的视频编码器；JSON 已保存');
 
     const oldRunning = running;
     const oldSim = sim;
@@ -1412,7 +1407,55 @@
     // 旧录像（无 framePos）退回每 tick 一帧。
     const tickHz = Number(doc.meta.tickHz || CFG.tickHz);
     const framePos = Array.isArray(doc.framePos) ? doc.framePos : [];
+    // 音频录制：重放期间把 BGM + 音效按事件重新触发，接进 MediaStream
+    // 目的地并并进录制轨道（对局音效由 tick 差分触发，见下方主循环）。
+    const ac = res && res.audio ? res.audio : null;
+    const audioDst = ac ? ac.createMediaStreamDestination() : null;
+    if (audioDst && ac.state === 'suspended') ac.resume().catch(() => {});
+    let bgmRecNode = null, bgmRecGain = null;
+    const mime = (audioDst ? [
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus', 'video/webm',
+    ] : []).concat([
+      'video/mp4;codecs=avc1.42E01E', 'video/mp4',
+      'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm',
+    ]).find((t) => MediaRecorder.isTypeSupported(t));
+    if (!mime) throw new Error('当前浏览器没有可用的视频编码器；JSON 已保存');
+    const withAudio = !!audioDst && /mp4a|opus/.test(mime);
+    const sndRec = (name, vol) => {
+      if (!withAudio || !res.snd || !res.snd[name]) return;
+      try {
+        const src = ac.createBufferSource();
+        src.buffer = res.snd[name];
+        const g = ac.createGain();
+        g.gain.value = vol == null ? 0.6 : vol;
+        src.connect(g).connect(audioDst);
+        src.start();
+      } catch (e) { /* 忽略 */ }
+    };
+    // BGM：停现场曲，改用录像关卡自己的曲子（同时接外放与录制轨道）
+    stopBgm();
+    if (withAudio && replayLevel.music) {
+      try {
+        let buf = bgmBuffers.get(replayLevel.music);
+        if (!buf) {
+          buf = await ac.decodeAudioData(await (await fetch(replayLevel.music)).arrayBuffer());
+          bgmBuffers.set(replayLevel.music, buf);
+        }
+        bgmRecNode = ac.createBufferSource();
+        bgmRecNode.buffer = buf;
+        bgmRecNode.loop = true;
+        bgmRecGain = ac.createGain();
+        bgmRecGain.gain.value = 0.22;          // 与对局 BGM 同音量
+        bgmRecNode.connect(bgmRecGain);
+        bgmRecGain.connect(audioDst);
+        bgmRecGain.connect(ac.destination);
+      } catch (e) { bgmRecNode = null; }
+    }
     const stream = canvas.captureStream(framePos.length ? 60 : tickHz);
+    if (withAudio) {
+      for (const t of audioDst.stream.getAudioTracks()) stream.addTrack(t);
+    }
     const chunks = [];
     const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 1200000 });
     const stopped = new Promise((resolve, reject) => {
@@ -1434,7 +1477,9 @@
     try {
       elBanner.innerHTML = '⏳ 正在重放录制中…<span class="tip">按完整状态帧逐帧渲染，请勿切换标签页</span>';
       recorder.start();
+      if (bgmRecNode) bgmRecNode.start();
       let subPtr = 0;
+      let prevFrame = null;
       let prevP0 = [exportSim.pos[0], exportSim.pos[1]];
       let prevP1 = [exportSim.pos[2], exportSim.pos[3]];
       for (const frame of doc.frames) {
@@ -1448,11 +1493,52 @@
         const n = Math.min(Math.max(subs.length, 1), 15);
         const p0HasPath = subs.length > 1 &&
           subs.some((s) => s[1] !== subs[0][1] || s[2] !== subs[0][2]);
-        // 每 tick 一次的火光/危险图状态
+        // 重建对局里由 tick 前后差分产生的事件特效/音效（快照含全部字段）：
+        // 砖/灌木炸毁的 _die 中间态帧（炸开散落图 0.35s）、掉血回收宝箱抛物线、
+        // 推箱完成、放泡/拾取/死亡音效
+        if (prevFrame) {
+          const l1 = replayLevel.layers && replayLevel.layers[1];
+          const l0 = replayLevel.layers && replayLevel.layers[0];
+          const nowMs = performance.now();
+          let pushDone = false;
+          for (let i = 0; i < N; i++) {
+            if (prevFrame.brick[i] === 1 && frame.brick[i] === 0 && l1 && l1[i]) {
+              dieFx.set(i, { eid: Math.abs(l1[i]), until: nowMs + 350 });
+            }
+            if (prevFrame.bush && prevFrame.bush[i] === 1 && frame.bush[i] === 0 && l0 && l0[i]) {
+              dieFx.set(i, { eid: Math.abs(l0[i]), until: nowMs + 350 });
+            }
+            // 新出现的回收宝箱 = 掉血散落（对局 _scatterRecycle → flyFx）
+            if (prevFrame.crate[i] === 0 && frame.crate[i] === 1 && frame.recycle[i] === 1) {
+              const dmgP = prevFrame.hp[0] > frame.hp[0] ? 0 : (prevFrame.hp[1] > frame.hp[1] ? 1 : -1);
+              if (dmgP >= 0) {
+                flyFx.push({
+                  x0: exportSim.pos[dmgP * 2 + 1], y0: exportSim.pos[dmgP * 2],
+                  x1: (i % W) + 0.5, y1: ((i / W) | 0) + 0.5, cell: i, t0: nowMs,
+                });
+              }
+            }
+            // 箱子从格上消失 = 一次推动完成（对局只在人推时响，这里一并收录）
+            if (!pushDone && prevFrame.pushBoxAt[i] >= 0 && frame.pushBoxAt[i] === -1) {
+              pushDone = true;
+              sndRec('pushbox', 0.6);
+            }
+          }
+          if (frame.placed && frame.placed[0]) sndRec('place');
+          if (frame.died && frame.died[0]) sndRec('die');
+          // 拾取：pid0 前一帧中心格有箱、本帧没了（对局 hadCrate 判定）
+          const pcell = Math.floor(prevFrame.pos[0]) * W + Math.floor(prevFrame.pos[1]);
+          if (prevFrame.crate[pcell] === 1 && frame.crate[pcell] === 0) sndRec('pickup');
+        }
+        // 火光与对局同语义：只在新爆炸时覆盖 —— 无爆炸保留旧值按 0.4s 自然
+        // 到期（否则下一 tick 被置空 → 火焰/糖浆渲染时长比真实游戏短）
         dangerCache = exportSim.dangerMap();
-        explosion = frame.covered ? new Uint8Array(frame.covered) : null;
-        explosionTrig = frame.triggered ? new Uint8Array(frame.triggered) : null;
-        explosionT = performance.now();
+        if (frame.covered && frame.covered.some((v) => v > 0)) {
+          explosion = new Uint8Array(frame.covered);
+          explosionTrig = frame.triggered ? new Uint8Array(frame.triggered) : null;
+          explosionT = performance.now();
+          sndRec('boom');
+        }
         // 每 tick 的真实时长在 n 个子帧内均分 → 视频时长与对局一致
         for (let i = 0; i < n; i++) {
           const a01 = (i + 1) / n;
@@ -1485,6 +1571,7 @@
         }
         prevP0 = [frame.pos[0], frame.pos[1]];
         prevP1 = [frame.pos[2], frame.pos[3]];
+        prevFrame = frame;
       }
       recorder.stop();
       await stopped;
@@ -1495,6 +1582,8 @@
       downloadBlob(blob, `video_${doc.meta.mapName || doc.meta.map}_s${doc.meta.seed}_${timeStamp()}.${ext}`);
       return { blob, mime, ext };
     } finally {
+      if (bgmRecNode) { try { bgmRecNode.stop(); } catch (e) { /* */ } }
+      bgmRecNode = null; bgmRecGain = null;
       CFG.radius = savedRadius;
       replayExporting = false;
       replayAnim = null;
@@ -1507,6 +1596,7 @@
       explosionTrig = oldExplosionTrig;
       explosionT = oldExplosionT;
       running = oldRunning;
+      startBgm();                              // 恢复现场 BGM（走缓存，无网络开销）
     }
   }
 
