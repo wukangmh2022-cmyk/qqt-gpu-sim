@@ -110,8 +110,9 @@ class SimConfig:
     # --- 时间与运动 ---
     tick_hz: int = 10       # 逻辑帧率（≠ 渲染帧率）；每 tick 一次决策
     speed: float = 3.6      # 角色速度，单位"格/秒"。3.6 格/秒 = 每 tick 0.36 格
-                            # （上限 3.9：0.39 < 1-2r=0.4，贴墙滑动不穿模）
-    radius: float = 0.3     # 角色碰撞盒半宽（格），必须 < 0.5
+                            # （单 tick 位移 < 1 格 ⇒ 两点 lead 检查不漏中间砖；
+                            #  大步长跨格由 JAX MAX_SWEEP 全扫兜底，与 JS 同半径对拍逐位一致）
+    radius: float = 0.45    # 角色碰撞盒半宽（格），必须 < 0.5；对齐 WebGL sim.js
     max_steps: int = 600    # 600 tick @10Hz = 60 秒，超时判平局
 
     # --- 泡泡 ---

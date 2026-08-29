@@ -1335,7 +1335,7 @@ def test_corridor_max_growth_speed_no_tunnel():
     """corridor 满成长速度（3.0× = 0.9 格/tick）高速撞 brick 不穿模。
 
     玩家 0 速度拉到满，向左冲 15 tick（0.9×15=13.5 格，远超到左 brick 墙），
-    前缘区间枚举应让它贴在 brick 右壁（x≈4.3）停下，不得穿进 brick 格。
+    前缘区间枚举应让它贴在 brick 右壁（radius=0.45 ⇒ x≈4.45）停下，不得穿进 brick 格。
     """
     cfg = SimConfig(height=13, width=13, n_players=2,
                     map_mode="corridor", corridor_width=5, top_wall_rows=4,
@@ -1347,8 +1347,8 @@ def test_corridor_max_growth_speed_no_tunnel():
     for _ in range(15):
         sim.step(act((MOVE_LEFT, 0), (MOVE_IDLE, 0)), auto_reset=False)
     x = float(sim.pos[0, 0, 1])
-    assert 4.29 <= x <= 4.31, \
-        f"0.9 格/tick 高速撞 brick 应贴右壁停（x≈4.3）: x={x:.3f}"
+    assert 4.44 <= x <= 4.46, \
+        f"0.9 格/tick 高速撞 brick 应贴右壁停（radius=0.45 ⇒ x≈4.45）: x={x:.3f}"
 
 
 def test_approach_reward_removed():

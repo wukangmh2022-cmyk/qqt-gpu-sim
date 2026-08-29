@@ -60,12 +60,13 @@ const out = {
   crate: Array.from(sim.crate), crateType: Array.from(sim.crateType),
   superCrate: Array.from(sim.superCrate), fuse: Array.from(sim.fuse),
   owner: Array.from(sim.owner), bombBlast: Array.from(sim.bombBlast),
-  obs: [], gvec: [], fwd: [],
+  obs: [], gvec: [], fwd: [], pushable: Array.from(sim.pushable),
 };
 for (const pid of [0, 1]) {
-  out.obs.push(Array.from(sim.encodeObsJAX(pid)));
+  out.obs.push(Array.from(sim.encodeObsJAX(pid)));       // 默认 14 通道（含 ch13 可推箱）
   out.gvec.push(Array.from(sim.encodeStateJAX(pid)));
-  const f = model.forward(sim.encodeObsJAX(pid), sim.encodeStateJAX(pid));
+  const f = model.forward(sim.encodeObsJAX(pid, model.obsShape[0]),
+                          sim.encodeStateJAX(pid));      // 按模型通道数（旧 ckpt=13）
   out.fwd.push({ move: Array.from(f.move), bomb: Array.from(f.bomb), value: f.value });
 }
 process.stdout.write(JSON.stringify(out));
@@ -88,7 +89,9 @@ def to_bombstate(d: dict) -> BombState:
         fuse=g2("fuse", np.int32), owner=g2("owner", np.int32),
         bomb_blast=g2("bombBlast", np.int32),
         wall=g2("wall", np.int32) > 0, brick=g2("brick", np.int32) > 0,
-        pushable=jnp.zeros((H, W), jnp.bool_), bush=g2("bush", np.int32) > 0,
+        pushable=g2("pushable", np.int32) > 0,
+        push_t=jnp.zeros((H, W), jnp.float32),
+        bush=g2("bush", np.int32) > 0,
         crate=g2("crate", np.int32), rec_crate=jnp.zeros((H, W), jnp.bool_),
         alive=jnp.array([bool(x) for x in st["alive"]], jnp.bool_),
         hp=jnp.array(st["hp"], jnp.int32),
@@ -107,18 +110,20 @@ def main() -> int:
     ck = pickle.load(open(CKPT, "rb"))
     params_f32 = jax.tree.map(lambda x: x.astype(jnp.float32), ck)
     ok = True
-    for lvl_idx in (0, 3, 7):                     # 抽样 3 张关卡
+    for lvl_idx in (0, 1, 7):                     # 抽样 3 张（1=比赛02，含可推箱）
         d = run_js(lvl_idx)
         state = to_bombstate(d)
         worst = 0.0
         for pid in (0, 1):
-            o_j = np.asarray(make_obs(state, pid))
-            o_js = np.array(d["obs"][pid], np.float32).reshape(13, 13, 15)
+            o_j = np.asarray(make_obs(state, pid))            # (14,13,15)
+            o_js = np.array(d["obs"][pid], np.float32).reshape(14, 13, 15)
             d_obs = float(np.abs(o_j - o_js).max())
             g_j = np.asarray(global_vec(state, pid))
             g_js = np.array(d["gvec"][pid])
             d_g = float(np.abs(g_j - g_js).max())
-            mv_j, bm_j, v_j = _forward_fp32(params_f32, o_js[None], g_js[None])
+            # 旧 ckpt 是 13 通道：前向对拍用前 13 通道（ch13 可推箱不进旧模型）
+            mv_j, bm_j, v_j = _forward_fp32(params_f32, o_js[:13][None],
+                                            g_js[None])
             f = d["fwd"][pid]
             d_m = float(np.abs(np.asarray(mv_j)[0] - np.array(f["move"])).max())
             d_b = float(np.abs(np.asarray(bm_j)[0] - np.array(f["bomb"])).max())

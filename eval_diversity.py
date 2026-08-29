@@ -11,7 +11,7 @@
   idle_rate     MOVE_IDLE 占比
   move_rate     实际移动（非 idle）占比
   dir_entropy   四方向移动的分布熵（0 = 只会一个方向，1 = 四向均匀）
-  speed         avg 位移/ tick（0.756 满速 ≈ 0.756）
+  speed         avg 位移/ tick（STEP=0.3，× 各图 spd 上限）
   pos_entropy   位置分布熵（0 = 钉死一点，1 = 均匀覆盖全场）
   approach      avg(自己到对手距离) / 对角线长（<0.5 爱贴脸，>0.5 爱躲）
 

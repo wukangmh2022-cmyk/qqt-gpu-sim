@@ -37,15 +37,22 @@ if _side in (None, "both", "torch") and "--compare" not in sys.argv:
     from sim.torch_sim import BatchedSim
     from sim.blast import danger_map
 
-# jax 只在 --side jax/both 时才 import（本地 .venv 无 jax；无参数默认 torch 侧）
+# jax 只在 --side jax/both 时才 import（本地 .venv 无 jax；无参数默认 torch 侧）。
+# **不要 sys.path.insert(jax_bomb)**：jax_bomb/platform.py 会劫持标准库
+# platform（jax 内部 numpy 会 import platform）→ ImportError 循环。用
+# namespace package `from jax_bomb.jax_env import ...`（PROJ 已在 sys.path）。
 if _side in ("jax", "both") and "--compare" not in sys.argv:
-    sys.path.insert(0, os.path.join(PROJ, "jax_bomb"))
     import jax
     import jax.numpy as jnp
+    from jax_bomb import jax_env as _jax_env
     from jax_bomb.jax_env import (BLAST, FUSE, H, W, MAX_STEPS, MAX_BOMBS,
                                   MAX_HP, INVULN, MAX_CHAIN, BombState,
                                   legal_mask as jax_legal, make_obs,
                                   step as jax_step)
+    # 与对拍 CFG（growth_crate_prob=0）对齐：拾取概率归零 → 对拍全程无
+    # 成长 RNG（corridor 箱即使被踩也不命中，两侧一致）。step 是 eager
+    # 调用（非 jit），每次读模块全局 → 覆盖生效。
+    _jax_env.CRATE_PROB = 0.0
 else:
     BLAST = 7
     FUSE = 30
@@ -56,28 +63,32 @@ else:
     INVULN = 30
     MAX_CHAIN = 16
 
-# 与 collect_distill.py 相同的对齐配置（纯空场 50% + 变换 50%，全图满级无宝箱）
+# 与 jax 常量一致的对拍配置（growth/open_* 起点 = jax 模块常量；crate 交互
+# 关掉：growth_crate_prob=0 + open_crate_cross=False → 拾取 prob=0 恒不命中、
+# 掉血 lost_all=0 无回收 —— 对拍全程确定性，覆盖 brick 爆炸/挡火/变箱共享逻辑）
 CFG = SimConfig(height=H, width=W, n_players=2, map_mode="corridor",
                 pure_open_fraction=0.5, open_fraction=0.25, ring_fraction=0.0,
                 open_obstacle_max=5, random_wall_rows=True, wall_density=0.45,
                 open_crate_cross=False, growth_crate_prob=0.0,
-                growth_bombs_start=10, growth_blast_start=BLAST,
+                growth_bombs_start=2, growth_blast_start=2,
                 growth_speed_start=1.0,
-                open_growth_bombs=10, open_growth_blast=BLAST,
-                open_growth_speed=1.0,
-                speed=7.56, blast=BLAST, max_steps=MAX_STEPS,
+                open_growth_bombs=3, open_growth_blast=3,
+                open_growth_speed=0.84,
+                speed=3.0, blast=BLAST, max_steps=MAX_STEPS,
                 invuln_ticks=INVULN, max_hp=MAX_HP, max_bombs=MAX_BOMBS) \
     if _side in (None, "both", "torch") and "--compare" not in sys.argv \
     else None
 
 
 def build_torch_state(sim: BatchedSim, pos, fuse, owner, bomb_blast, wall,
-                      alive, hp, invuln, t):
+                      brick, alive, hp, invuln, t, is_open):
     """把固定状态灌进 torch sim（参考 parity_ref.py 的做法）。"""
     n = 1
     sim.wall[:] = torch.tensor(wall, dtype=torch.bool).unsqueeze(0)
-    sim.brick[:] = False
+    sim.brick[:] = torch.tensor(brick, dtype=torch.bool).unsqueeze(0)
     sim.crate[:] = False
+    sim._recycle_crate[:] = False
+    sim._is_open[:] = bool(is_open)
     sim.pos[:] = torch.tensor(pos, dtype=torch.float32).unsqueeze(0)
     sim.fuse[:] = torch.tensor(fuse, dtype=torch.int16).unsqueeze(0)
     sim.owner[:] = torch.tensor(owner, dtype=torch.int8).unsqueeze(0)
@@ -86,22 +97,41 @@ def build_torch_state(sim: BatchedSim, pos, fuse, owner, bomb_blast, wall,
     sim.hp[:] = torch.tensor(hp, dtype=torch.uint8).unsqueeze(0)
     sim.invuln[:] = torch.tensor(invuln, dtype=torch.long).unsqueeze(0)
     sim.t[:] = torch.tensor([t], dtype=torch.long)
-    # 成长属性：满级固定（对齐 jax 固定满级）
-    sim.bombs_cap[:] = MAX_BOMBS
-    sim.blast_cap[:] = BLAST
+    # 成长属性 = 起点（corridor：2/2/1.0；对拍场景无 open 关）→ 掉血 lost=0
+    sim.bombs_cap[:] = 2.0
+    sim.blast_cap[:] = 2.0
     sim.spd_g[:] = 1.0
+    # 掉血惩罚 clamp 用 _lo_*（reset 时按随机地图类型预计算 —— 构造时可能
+    # 残留 open 的 0.84/3，不覆盖则掉血时 spd_g 被扣到 0.84 分叉）。
+    # 对拍场景 corridor 起点 = 2/2/1.0 → lost_all=0，无回收 RNG。
+    sim._lo_bombs[:] = 2.0
+    sim._lo_blast[:] = 2.0
+    sim._lo_spd[:] = 1.0
+    # crate_prob 显式归零：BatchedSim 构造时 reset 会按随机地图类型把部分
+    # env 的 crate_prob 设成 1.0（open 关）—— 不覆盖则对拍随机分叉
+    # （踩箱成长概率 torch=1.0/0.0 不定，jax=CRATE_PROB=0.5）。
+    # 对拍场景无 crate 交互（crate 全 0），概率归零保证两侧都不成长。
+    sim.crate_prob[:] = 0.0
 
 
-def build_jax_state(pos, fuse, owner, bomb_blast, wall, alive, hp, invuln, t):
+def build_jax_state(pos, fuse, owner, bomb_blast, wall, brick, alive, hp,
+                    invuln, t, is_open):
     return BombState(
         pos=jnp.array(pos, jnp.float32),
         fuse=jnp.array(fuse, jnp.int32),
         owner=jnp.array(owner, jnp.int32),
         bomb_blast=jnp.array(bomb_blast, jnp.int32),
         wall=jnp.array(wall, jnp.bool_),
+        brick=jnp.array(brick, jnp.bool_),
+        crate=jnp.zeros((H, W), jnp.bool_),
+        rec_crate=jnp.zeros((H, W), jnp.bool_),
         alive=jnp.array(alive, jnp.bool_),
         hp=jnp.array(hp, jnp.int32),
         invuln=jnp.array(invuln, jnp.int32),
+        bombs_cap=jnp.full((2,), 2.0, jnp.float32),
+        blast_cap=jnp.full((2,), 2.0, jnp.float32),
+        spd_g=jnp.full((2,), 1.0, jnp.float32),
+        is_open=jnp.array(bool(is_open)),
         t=jnp.array(t, jnp.int32),
     )
 
@@ -115,7 +145,7 @@ def torch_obs7(sim: BatchedSim, pid: int) -> np.ndarray:
     alive = sim.alive[0].cpu().numpy()
     t = float(sim.t[0].item())
     me, opp = pid, 1 - pid
-    obs = np.zeros((7, H, W), np.float32)
+    obs = np.zeros((8, H, W), np.float32)
 
     def splat(xy, gate):
         # 与 jax _splat / torch obs._splat 一致：格中心 i 对应 fy=i → 先减半格
@@ -139,20 +169,23 @@ def torch_obs7(sim: BatchedSim, pid: int) -> np.ndarray:
     obs[1] = np.where(owner == me, fuse_norm, 0.0).astype(np.float32)
     obs[3] = np.where(owner == opp, fuse_norm, 0.0).astype(np.float32)
     obs[4] = (sim.wall[0] | sim.brick[0]).float().cpu().numpy()
-    # ch5 = 危险图（torch danger_map 同款，与 collect obs7_batch / jax make_obs 对齐）
+    # ch5 = 危险图（torch danger_map 同款：wall=永久墙挡火、brick 单独传，
+    # 与 obs.py / jax make_obs 同语义 —— 之前把 wall|brick 当 wall 传会让
+    # brick 双重挡火、危险图偏小）
     fuse_t = torch.tensor(fuse, dtype=torch.int32)
-    wall_t = (sim.wall[0] | sim.brick[0])
+    wall_t = sim.wall[0]
     b_t = torch.tensor(bomb_blast, dtype=torch.int32)
     blast_map = torch.where(b_t > 0, b_t, torch.tensor(BLAST))
     brick_t = sim.brick[0]
     danger = danger_map(fuse_t, wall_t, blast_map, FUSE, brick_t, MAX_CHAIN)
     obs[5] = danger.float().cpu().numpy()
     obs[6] = np.full((H, W), t / float(MAX_STEPS), np.float32)
+    obs[7] = sim.crate[0].float().cpu().numpy()
     return obs
 
 
 def make_initial_state():
-    """构造一个内容丰富（含泡/引信/不同威力/受伤/无敌/墙）的初始状态。"""
+    """构造一个内容丰富（含泡/引信/不同威力/受伤/无敌/墙/砖）的初始状态。"""
     fuse = np.zeros((H, W), np.int32)
     owner = np.full((H, W), -1, np.int32)
     bomb_blast = np.zeros((H, W), np.int32)
@@ -170,7 +203,15 @@ def make_initial_state():
     wall[4, 8] = True
     wall[3, 4] = True
     wall[6, 6] = True
-    return fuse, owner, bomb_blast, pos, wall, alive, hp, invuln
+    # 可炸墙（brick）：在泡的爆炸路径上 —— 验证 brick 挡火但被覆盖、炸掉后
+    # 变宝箱（crate |= brick & covered）。玩家移动避开不踩箱（crate_prob=0
+    # 下即使踩到也不命中，清箱两侧一致）。
+    brick = np.zeros((H, W), np.bool_)
+    brick[5, 6] = True       # 泡(5,5) 右侧一格，blast=3 覆盖
+    brick[5, 8] = True       # 泡(5,7) 右侧一格
+    brick[8, 8] = True
+    brick[9, 9] = True
+    return fuse, owner, bomb_blast, pos, wall, brick, alive, hp, invuln
 
 
 def compare_traces(a_path: str, b_path: str) -> None:
@@ -186,8 +227,8 @@ def compare_traces(a_path: str, b_path: str) -> None:
     fails = 0
     for tick in range(n):
         ra, rb = la[tick], lb[tick]
-        for k in ("pos", "fuse", "owner", "bomb_blast", "alive", "hp",
-                  "invuln", "t"):
+        for k in ("pos", "fuse", "owner", "bomb_blast", "brick", "crate",
+                  "alive", "hp", "invuln", "t"):
             va, vb = np.array(ra[k]), np.array(rb[k])
             if not (np.array_equal(va, vb) if k != "pos"
                     else np.allclose(va, vb, atol=1e-5)):
@@ -228,14 +269,15 @@ def main():
     if args.side == "both":
         return run_both(args)
 
-    fuse, owner, bomb_blast, pos, wall, alive, hp, invuln = make_initial_state()
+    fuse, owner, bomb_blast, pos, wall, brick, alive, hp, invuln = \
+        make_initial_state()
     rng = np.random.default_rng(args.seed)
     acts = [rng.integers([0, 0], [5, 2], size=(2, 2)) for _ in range(args.ticks)]
 
     if args.side == "torch":
         sim = BatchedSim(CFG, 1, device="cpu", seed=args.seed)
-        build_torch_state(sim, pos, fuse, owner, bomb_blast, wall, alive, hp,
-                          invuln, 0)
+        build_torch_state(sim, pos, fuse, owner, bomb_blast, wall, brick,
+                          alive, hp, invuln, 0, False)
         rows = []
         for tick in range(args.ticks):
             a_t = torch.tensor(acts[tick], dtype=torch.long).unsqueeze(0)
@@ -244,6 +286,8 @@ def main():
                 "pos": sim.pos[0].tolist(), "fuse": sim.fuse[0].tolist(),
                 "owner": sim.owner[0].tolist(),
                 "bomb_blast": sim.bomb_blast[0].tolist(),
+                "brick": sim.brick[0].tolist(),
+                "crate": sim.crate[0].tolist(),
                 "alive": sim.alive[0].tolist(), "hp": sim.hp[0].tolist(),
                 "invuln": sim.invuln[0].tolist(), "t": int(sim.t[0]),
                 "done": bool(done_any),
@@ -253,16 +297,20 @@ def main():
             if done_any:
                 break
     else:  # jax
-        js = build_jax_state(pos, fuse, owner, bomb_blast, wall, alive, hp,
-                             invuln, 0)
+        js = build_jax_state(pos, fuse, owner, bomb_blast, wall, brick,
+                             alive, hp, invuln, 0, False)
         rows = []
         for tick in range(args.ticks):
-            js, done_j = jax_step(js, jnp.array(acts[tick], jnp.int32), False)
+            # auto_reset=False + crate_prob=0/lost=0：key 只驱动零命中 RNG
+            js, done_j = jax_step(js, jnp.array(acts[tick], jnp.int32),
+                                  jax.random.PRNGKey(0), False)
             rows.append({
                 "pos": np.asarray(jax.device_get(js.pos)).tolist(),
                 "fuse": np.asarray(jax.device_get(js.fuse)).tolist(),
                 "owner": np.asarray(jax.device_get(js.owner)).tolist(),
                 "bomb_blast": np.asarray(jax.device_get(js.bomb_blast)).tolist(),
+                "brick": np.asarray(jax.device_get(js.brick)).tolist(),
+                "crate": np.asarray(jax.device_get(js.crate)).tolist(),
                 "alive": np.asarray(jax.device_get(js.alive)).tolist(),
                 "hp": np.asarray(jax.device_get(js.hp)).tolist(),
                 "invuln": np.asarray(jax.device_get(js.invuln)).tolist(),
@@ -283,11 +331,12 @@ def main():
 def run_both(args):
     """本机同时跑两侧（需 torch+jax 同环境），逐 tick 比较。"""
     sim = BatchedSim(CFG, 1, device="cpu", seed=args.seed)
-    fuse, owner, bomb_blast, pos, wall, alive, hp, invuln = make_initial_state()
-    build_torch_state(sim, pos, fuse, owner, bomb_blast, wall, alive, hp,
-                      invuln, 0)
-    js = build_jax_state(pos, fuse, owner, bomb_blast, wall, alive, hp,
-                         invuln, 0)
+    fuse, owner, bomb_blast, pos, wall, brick, alive, hp, invuln = \
+        make_initial_state()
+    build_torch_state(sim, pos, fuse, owner, bomb_blast, wall, brick,
+                      alive, hp, invuln, 0, False)
+    js = build_jax_state(pos, fuse, owner, bomb_blast, wall, brick,
+                         alive, hp, invuln, 0, False)
     rng = np.random.default_rng(args.seed)
     fails = 0
     for tick in range(args.ticks):
@@ -295,13 +344,16 @@ def run_both(args):
         a_t = torch.tensor(a, dtype=torch.long).unsqueeze(0)
         rew, done_any, _ = sim.step(a_t, auto_reset=False)
         done_t = bool(done_any)
-        js, done_j = jax_step(js, jnp.array(a, jnp.int32), False)
+        js, done_j = jax_step(js, jnp.array(a, jnp.int32),
+                              jax.random.PRNGKey(tick), False)
         checks = [
             ("pos", js.pos, sim.pos[0], 1e-5),
             ("fuse", js.fuse, sim.fuse[0], 0),
             ("owner", js.owner, sim.owner[0], 0),
             ("bomb_blast", js.bomb_blast, sim.bomb_blast[0], 0),
             ("wall", js.wall, sim.wall[0], 0),
+            ("brick", js.brick, sim.brick[0], 0),
+            ("crate", js.crate, sim.crate[0], 0),
             ("alive", js.alive, sim.alive[0], 0),
             ("hp", js.hp, sim.hp[0], 0),
             ("invuln", js.invuln, sim.invuln[0], 0),
@@ -345,7 +397,7 @@ def run_both(args):
             print(f"[info] tick={tick} 终局，停止", flush=True)
             break
     if fails == 0:
-        print(f"全部一致 ✔ ({args.ticks} tick，含墙/连锁/伤害/死亡/mask/obs7 双视角)")
+        print(f"全部一致 ✔ ({args.ticks} tick，含墙/砖/连锁/伤害/死亡/mask/obs7 双视角)")
     else:
         print(f"{fails} 处不一致 ✘")
 

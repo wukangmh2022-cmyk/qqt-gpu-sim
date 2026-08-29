@@ -63,9 +63,11 @@ def _impassable(
     idx = (row.clamp(0, h - 1) * w + col.clamp(0, w - 1)).unsqueeze(1)
     solid = blocked_flat.gather(1, idx).squeeze(1)
     # 碰撞盒当前已经覆盖这一格 → 放行（脚下自己刚放的泡）
-    r0, r1 = (y - rad).floor().long(), (y + rad).floor().long()
-    c0, c1 = (x - rad).floor().long(), (x + rad).floor().long()
-    inside = (row >= r0) & (row <= r1) & (col >= c0) & (col <= c1)
+    # 与 JS sim.js impassable 一致：下界 floor、上界 **ceil** + 严格小于
+    # （左闭右开）。盒右/下缘恰贴格边界（y+R=整数）时不覆盖下一格 → 防穿炮。
+    r0, r1 = (y - rad).floor().long(), (y + rad).ceil().long()
+    c0, c1 = (x - rad).floor().long(), (x + rad).ceil().long()
+    inside = (row >= r0) & (row < r1) & (col >= c0) & (col < c1)
     return oob | (solid & ~inside)
 
 
@@ -88,10 +90,10 @@ def _impassable_pair(
         row1.clamp(0, h - 1) * w + col1.clamp(0, w - 1),
     ], dim=-1)                                  # (N, 2)
     solid = blocked_flat.gather(1, idx)         # 一次 gather 两格
-    r0, r1 = (y - rad).floor().long(), (y + rad).floor().long()
-    c0, c1 = (x - rad).floor().long(), (x + rad).floor().long()
-    in0 = (row0 >= r0) & (row0 <= r1) & (col0 >= c0) & (col0 <= c1)
-    in1 = (row1 >= r0) & (row1 <= r1) & (col1 >= c0) & (col1 <= c1)
+    r0, r1 = (y - rad).floor().long(), (y + rad).ceil().long()
+    c0, c1 = (x - rad).floor().long(), (x + rad).ceil().long()
+    in0 = (row0 >= r0) & (row0 < r1) & (col0 >= c0) & (col0 < c1)
+    in1 = (row1 >= r0) & (row1 < r1) & (col1 >= c0) & (col1 < c1)
     return oob | (solid[:, 0] & ~in0) | (solid[:, 1] & ~in1)
 
 
@@ -173,11 +175,11 @@ def _impassable_pair_batch(
     ], dim=-1)                                                      # (N,K,2)
     solid = blocked_flat.gather(1, idx.reshape(n, -1)).reshape(n, k, 2)
     r0c = (yb - rad).floor().long()
-    r1c = (yb + rad).floor().long()
+    r1c = (yb + rad).ceil().long()
     c0c = (xb - rad).floor().long()
-    c1c = (xb + rad).floor().long()
-    in0 = (r0 >= r0c) & (r0 <= r1c) & (c0 >= c0c) & (c0 <= c1c)
-    in1 = (r1 >= r0c) & (r1 <= r1c) & (c1 >= c0c) & (c1 <= c1c)
+    c1c = (xb + rad).ceil().long()
+    in0 = (r0 >= r0c) & (r0 < r1c) & (c0 >= c0c) & (c0 < c1c)
+    in1 = (r1 >= r0c) & (r1 < r1c) & (c1 >= c0c) & (c1 < c1c)
     return oob | (solid[..., 0] & ~in0) | (solid[..., 1] & ~in1)
 
 
