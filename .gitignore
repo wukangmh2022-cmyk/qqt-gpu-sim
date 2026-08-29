@@ -9,6 +9,20 @@ ckpt/
 wheels/
 scripts/cron_dcu_watch.log
 
+# Remote node credentials and transient deployment state.
+10ssh.env
+deploy_10node/nodes*.txt
+deploy_10node/.run_*.env
+
 # 媒体/临时产物：不支持入库
 *.mp4
 res/r2v_refcheck/
+recordings/
+
+# 本地大文件 / 会话产物：不入库（node_modules 由 package.json 重建）
+node_modules/
+.zcode/
+ckpt_local/
+upload_2x8gpu/
+*.tar.gz
+*.bak

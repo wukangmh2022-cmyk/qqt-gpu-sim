@@ -13,7 +13,11 @@
 训练好的 MLP 模型（345K 参数）在浏览器里实时推理，原版 `res/` 素材渲染（角色精灵/炸弹/爆炸/场景皮肤/音效）。方向键/WASD 移动、空格放泡，可选地图（空场/走廊）、11 个场景皮肤、4 个已导出模型（按 ELO 排序），支持观战模式。
 
 - 本仓库已启用 GitHub Pages（分支部署 `main@/`），根目录 `index.html` 只是跳转到 `web/`（游戏本体在 `web/`，根目录保持干净）；**push 到 main 即自动上线**；
-- **转换工具链**（训练侧改完代码后一键更新游戏）：
+- **本地启动一条命令**（自动增量导出新模型 + 开服，端口可改）：
+  ```bash
+  bash scripts/serve_web.sh [端口]   # 默认 8080 → http://localhost:8080
+  ```
+- **手动转换工具链**（训练侧改完代码后更新游戏）：
   ```bash
   .venv/bin/python deploy/export_ckpt.py --verify   # ckpt/ → web/models/*.json（含前向自检）
   bash deploy/prep_assets.sh                        # res/ → web/assets/（原版素材）
@@ -30,7 +34,7 @@
 <br><sub>实况对打：纯进攻寻路 AI（hunter） vs CNN 模型 · 矿洞皮肤</sub>
 </div>
 
-*更多对局演示（open/corridor 多皮肤、人类录像回放、实况对打）见 `docs/demo_candidates/preview.html`。完整版见 `play/` 启动器（双模型对打 + 人类录像 + 回放）。*
+*更多对局演示（open/corridor 多皮肤、人类录像回放、实况对打）见 `docs/demo_candidates/preview.html`。当前展示入口是浏览器版 `web/`（双模型对打 + 观战 + 录像回放）。*
 
 ---
 
@@ -154,9 +158,11 @@
 | 环境 | 用途 | 实测 |
 |---|---|---|
 | **DCU（国产海光，DTK 26.04）** | **正式训练**（torch 后端，cuda 设备） | **36~41k sps**，12h ≈ 1.6B 步 ≈ 180 万局 |
+| **BW-1（SCNet，DTK 26.04 + DAS torch 2.5.1）** | **正式训练**（全 DCU 布局） | **N=16384 时 249k sps**，见 [docs/bw1_notes.md](docs/bw1_notes.md) |
 | 本地 MPS（macOS） | 开发/回归/验收对战 | ~2.2k sps，够跑 256 局验证 |
 
 DCU 注意事项：每个 ssh 会话要 `source /opt/dtk-26.04/env.sh` + 设 `OPENBLAS_NUM_THREADS`；训练用 `--backend torch --device cuda`。
+BW-1 注意事项：PyTorch 走 DAS wheel（非预装），环境搭建和配额实测见 [docs/bw1_notes.md](docs/bw1_notes.md)；最优配置是 sim+policy+update 全在 DCU（CPU 混合模式实测慢 5 倍，不推荐）。
 
 ---
 
@@ -188,8 +194,9 @@ python -m train.train --resume ckpt/course_1023m.pt --backend torch --device cud
   --fixed-opp-prob 0.4 --bot-opponents greedy,astar --fixed-bots astar \
   --combo-reward 0.10
 
-# 试玩（图形启动器，AI 下拉最上面可选规则 bot / 模型）：
-python -m play.launcher            # 人机对打 / AI vs AI 观战
+# 本地试玩（浏览器版启动器 web/；一条命令：自动增量导出模型 + 开服）：
+bash scripts/serve_web.sh              # http://localhost:8080
+# 或 CLI 直开 Python 对局：
 python -m play.duel --ckpt ckpt/duel_course_*.pt --opp-bot astar   # CLI 直开 vs 寻路 AI
 
 # 对战验收（corridor 70%，256 局/组）：
@@ -206,7 +213,7 @@ sim/           模拟器：config(规则常量) / torch_sim(BatchedSim) / blast(
                cuda/  CUDA kernel（未来提速选项，训练未用）
 train/         model.py(ActorCritic MLP/CNN) / ppo.py(PPO) / train.py(课程主循环)
                model_pool.py(池子+ELO) / curriculum.py(旧阶段表)
-play/          启动器 + 对局（选 bot/模型 对战·观战）
+play/          对局核心（duel.py CLI：人机/观战/录像回放 replay.py）
 web/           浏览器版游戏（sim.js 引擎移植 + MLP 权重 + 原版素材渲染），Pages 直接部署
 deploy/        部署工具链：export_ckpt.py(ckpt→web 权重) / prep_assets.sh(素材搬运)
                parity_ref.py+parity_sweep.py(对拍参考)
@@ -229,7 +236,7 @@ RULES.md       规则唯一权威定义（两个后端以此为准）
 
 ## 经验教训（踩坑记录）
 
-- **启动器人类交互层必须与测试逻辑同源**：duel.py 玩家帧级移动（60Hz 直接改 sim.pos）
+- **duel.py 人类交互层必须与测试逻辑同源**：玩家帧级移动（60Hz 直接改 sim.pos）
   曾让 AI 在真实对局里表现异常（看似"对静止对手自杀"）；合并玩家模式
   （P0/P1 各自可选 人类键盘/规则bot/模型，`--opp-bot idle` 静止靶对照）后现象消失
   —— 人类移动与 AI 决策分层清晰，AI 不再被私有逻辑喂到分布外的局面。

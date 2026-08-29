@@ -67,14 +67,16 @@ VIEW1_MAP5 = [1, 3, 0, 2, 4]    # pid1 视角前 5 通道
 
 
 def make_cfg() -> SimConfig:
-    """蒸馏收集环境：纯空场 50% + copy 变换 50%，全图满级、无宝箱。
+    """蒸馏收集环境：纯空场 50% + copy 变换 50%，带宝箱成长（全交互链）。
 
     - 地图变换参数与 copy 仓库（11B 训练环境）逐位一致：corridor 的
       random_wall_rows + wall_density 连续段、open 的 open_obstacle_max。
-    - 数值对齐 jax（speed=7.56/blast=7/1800 步），open/corridor 初始属性
-      全部拉满（= 上限）—— student 在 jax 里就是固定满级，动作空间一致。
-    - 宝箱后置：growth_crate_prob=0（炸砖不出箱）+ open_crate_cross=False
-      （不撒开局池）—— 纯地图结构，无成长交互。
+    - 数值对齐 jax（speed=7.56/blast=7/1800 步）；初始属性用 config 默认
+      （open 3/3/0.84、corridor 2/2/1.0，成长上限 10/7/2.1）—— 与 jax
+      student 同分布：开局炸墙/十字池吃箱成长，掉血扣属性回收。
+    - 宝箱全开：open_crate_cross=True（open 关开局中心十字池）+ 
+      growth_crate_prob=0.5（corridor 炸砖出箱）+ hit_attr_penalty=2
+      （掉血扣泡/威/速各 2 层、以宝箱随机回收，总量守恒）。
     """
     return SimConfig(
         height=H, width=W, n_players=P,
@@ -84,11 +86,11 @@ def make_cfg() -> SimConfig:
         open_obstacle_max=5,                 # copy open 变换：随机单障碍
         random_wall_rows=True,               # copy corridor 变换：顶/底墙行随机
         wall_density=0.45,                   # copy corridor 连续段
-        open_crate_cross=False,              # 宝箱后置
-        growth_crate_prob=0.0,               # 炸砖不出宝箱（后置）
-        # 全图满级（对齐 jax 固定满级：泡/威/速不随地图类型打折）
-        growth_bombs_start=10, growth_blast_start=7, growth_speed_start=1.0,
-        open_growth_bombs=10, open_growth_blast=7, open_growth_speed=1.0,
+        # 宝箱/成长全开（config 默认值，对齐 jax student 的成长链）
+        open_crate_cross=True,               # open 关开局中心十字宝箱池
+        growth_crate_prob=0.5,               # corridor 炸砖出箱爆率
+        growth_bombs_start=2, growth_blast_start=2, growth_speed_start=1.0,
+        open_growth_bombs=3, open_growth_blast=3, open_growth_speed=0.84,
         speed=7.56, blast=BLAST, max_steps=MAX_STEPS,
         invuln_ticks=30, max_hp=5, max_bombs=10,
     )
@@ -142,20 +144,21 @@ def _swap_player_channels(obs: torch.Tensor) -> torch.Tensor:
 
 
 def obs7_batch(sim: BatchedSim, obs14: torch.Tensor) -> torch.Tensor:
-    """从共享 obs14 + sim 状态批量组装 jax 7 通道双视角 (N,2,7,H,W)。
+    """从共享 obs14 + sim 状态批量组装 jax 8 通道双视角 (N,2,8,H,W)。
 
     ch5 = **危险图**（共享 obs 通道 5，torch danger_map 已算好 —— 与 jax
     make_obs ch5 同语义，网络直接读"火会烧到哪"）。
-    ch6 = 进度 t/MAX_STEPS（共享通道 6）。
+    ch6 = 进度 t/MAX_STEPS（共享通道 6）；ch7 = 宝箱（共享通道 7）。
     """
     n = sim.num_envs
     ch5 = obs14[:, 5:6]                                       # (N,1,H,W) 危险图
     ch6 = obs14[:, 6:7]                                       # (N,1,H,W) 进度
+    ch7 = obs14[:, 7:8]                                       # (N,1,H,W) 宝箱
     # pid0 视角：我=共享0/2、对手=共享1/3 → VIEW_MAP5；pid1 视角对调
     o7 = torch.stack([
-        torch.cat([obs14[:, VIEW_MAP5], ch5, ch6], dim=1),
-        torch.cat([obs14[:, VIEW1_MAP5], ch5, ch6], dim=1),
-    ], dim=1)                                                 # (N,2,7,H,W)
+        torch.cat([obs14[:, VIEW_MAP5], ch5, ch6, ch7], dim=1),
+        torch.cat([obs14[:, VIEW1_MAP5], ch5, ch6, ch7], dim=1),
+    ], dim=1)                                                 # (N,2,8,H,W)
     return o7
 
 
@@ -196,6 +199,7 @@ def run_batch(args, teacher: ActorCritic, opp_net, opp_bot, device,
         bm_acc.append(bm[alive].bool().cpu().numpy())           # (K,2,2)
         sim.step(torch.stack([a0.to(device), a1], dim=1),
                  auto_reset=True)
+        sim.flush_recycle()      # 掉血回收延迟结算（对齐 jax 即时回收的语义）
         if tick % 100 == 0 and tick:
             dt = time.time() - t0
             nf = sum(len(x) for x in obs_acc)

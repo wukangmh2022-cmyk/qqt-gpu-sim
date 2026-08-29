@@ -4,7 +4,7 @@
     方向键          按住持续移动；**最后按下的方向优先**（按住↑轻点← 切到←）
     空格            放一个泡泡（trigger，按一次放一个）
     R               重新开局
-    ESC             返回启动器（CLI 直开无启动器时 = 退出）
+    ESC             结束对局退出（无 Python 启动器了，浏览器版用 web/）
     Q               退出
 
 逻辑 10Hz（与训练一致），渲染 60fps + 位置插值 → 平滑滑动。
@@ -938,8 +938,7 @@ def run_game(*, ckpt: str = "ckpt/duel_rw_ckpt.pt", ckpt_b: str | None = None,
                 pygame.quit()
                 return "quit"
             if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
-                # 返回启动器：pygame **保持存活**（launcher 需要菜单窗口继续跑），
-                # run_game 直接返回 "menu"；CLI 直开无启动器时也由入口收尾退出。
+                # 结束当前对局：run_game 返回 "menu"（CLI 直开由入口收尾退出）。
                 finish_episode()
                 return "menu"
             if e.type == pygame.KEYDOWN and e.key == pygame.K_r:
@@ -1257,7 +1256,7 @@ def main() -> None:
                     choices=["open", "corridor", "ring"],
                     help="open = 纯空场；corridor = 左右可炸墙 + 顶部永久墙 + "
                          "宝箱成长；ring = 中间 7×7 永久墙山体 + 环带稀疏可炸墙"
-                         " + 宝箱 100%（四角出生）")
+                         " + 宝箱 100%%（四角出生）")
     ap.add_argument("--scene", default="比武",
                     help="场景（res/scenes.json）：比武/沙漠/雪地/… → 砖块图 + BGM")
     ap.add_argument("--hz", type=int, default=10, help="逻辑 tick 率（默认 10 = 训练一致）")
@@ -1265,8 +1264,8 @@ def main() -> None:
                     help="玩家侧的移动速度倍率（AI 恒为 1.0）。默认 1.0 = 全局同速；"
                          "试手速可调 1.3 之类")
     ap.add_argument("--open-growth-pct", type=float, default=0.8,
-                    help="open 图初始成长 = 上限百分比（默认 0.8 = 80%，与训练一致："
-                         "泡数/威力 6、速度倍率 1.68；可调 0.9 = 90%：泡数/威力 7、"
+                    help="open 图初始成长 = 上限百分比（默认 0.8 = 80%%，与训练一致："
+                         "泡数/威力 6、速度倍率 1.68；可调 0.9 = 90%%：泡数/威力 7、"
                          "速度倍率 1.89，速度上限已封顶 2.1 不再有 2.7）")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--auto-ticks", type=int, default=0,
@@ -1313,11 +1312,14 @@ def main() -> None:
 
 
 def entry() -> None:
-    """无参数 → 启动器（选场景/地图/初始属性/模式/checkpoint）；
-    挂了任何 CLI 参数 → 直进对局（原 main 行为）。"""
+    """无参数 → 提示走浏览器版启动器（web/，仓库当前展示入口）；
+    挂了任何 CLI 参数 → 直进对局。"""
     if len(sys.argv) == 1:
-        from .launcher import run_launcher   # 惰性导入，避免循环依赖
-        run_launcher()
+        print("对打入口已迁移到浏览器版启动器：", file=sys.stderr)
+        print("  一条命令:  bash scripts/serve_web.sh   →  http://localhost:8080", file=sys.stderr)
+        print("  （自动增量导出 ckpt → web/models 后开服；端口可传参）", file=sys.stderr)
+        print("  挂 CLI 参数（--ckpt/--opp-bot/--bot-mode …）可直开 Python 对局，见 --help", file=sys.stderr)
+        sys.exit(1)
     else:
         main()
 

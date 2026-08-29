@@ -186,9 +186,22 @@ def pack_tensors(tensors: dict[str, torch.Tensor]
     return b64, index
 
 
-def export_one(path: str, verify: bool) -> dict | None:
+def export_one(path: str, verify: bool, incremental: bool = False) -> dict | None:
     stem = os.path.splitext(os.path.basename(path))[0]
-    ck = torch.load(path, map_location="cpu", weights_only=False)
+    out = os.path.join(OUT_DIR, f"{stem}.json")
+    if incremental and os.path.exists(out) \
+            and os.path.getmtime(out) >= os.path.getmtime(path):
+        print(f"  [same] {stem}: 已是最新（跳过）")
+        return None
+    try:
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+    except ModuleNotFoundError as e:
+        print(f"  [skip] {stem}: 反序列化缺模块 {e.name!r}"
+              f"（训练环境专属，本地无此依赖）")
+        return None
+    except Exception as e:
+        print(f"  [skip] {stem}: 加载失败（{type(e).__name__}: {e}）")
+        return None
     arch = ck.get("arch", "cnn")
     obs_shape = tuple(int(x) for x in ck["obs_shape"])
     n_players = int(ck.get("n_players", 2))
@@ -372,10 +385,34 @@ def _verify_forward_cnn(ck: dict, tensors: dict, c: int, h: int, w: int) -> bool
         return True
 
 
+def scan_out_dir(out_dir: str = OUT_DIR) -> list[dict]:
+    """扫描 web/models/*.json（除 index.json）的 meta，重建完整模型列表。
+
+    index.json 永远由目录扫描生成（而不是只写"本次导出"的模型）——
+    否则增量导出时旧模型会从 index 里消失（8B 档单独被重新导出就把
+    列表覆盖成 1 个的 bug，2026-08-16 修复）。
+    """
+    metas = []
+    for f in sorted(os.listdir(out_dir)):
+        if not f.endswith(".json") or f == "index.json":
+            continue
+        try:
+            with open(os.path.join(out_dir, f)) as fp:
+                doc = json.load(fp)
+            if doc.get("meta"):
+                metas.append(doc["meta"])
+        except Exception:
+            continue                       # 半截 json：跳过不阻塞
+    return metas
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="ckpt → web/models JSON 转换")
     ap.add_argument("paths", nargs="*", help="指定 ckpt 文件；缺省 = 全部")
     ap.add_argument("--verify", action="store_true", help="导出后跑一次前向自检")
+    ap.add_argument("--incremental", action="store_true",
+                    help="只导出比 web/models/<stem>.json 新的 ckpt"
+                         "（serve_web.sh 自动调用）")
     ap.add_argument("--ckpt-dir", default=CKPT_DIR)
     args = ap.parse_args()
 
@@ -388,22 +425,29 @@ def main() -> None:
         print(f"没有找到 ckpt（{args.ckpt_dir}）")
         sys.exit(1)
 
-    metas = []
+    exported = 0
     for p in files:
         print(f"导出 {os.path.relpath(p, PROJ)}")
-        m = export_one(p, verify=args.verify)
+        m = export_one(p, verify=args.verify, incremental=args.incremental)
         if m:
-            metas.append(m)
+            exported += 1
 
+    # index.json 由目录扫描重建（增量/全量统一）——保证旧模型不丢
+    metas = scan_out_dir()
     if not metas:
+        if args.incremental:
+            print("web/models 下没有已导出的模型（可先全量跑一次）")
+            return
         print("没有可导出的 mlp/cnn 模型")
         sys.exit(1)
 
-    # 按 global_step 降序（最新训练排最前，页面默认选它）
-    metas.sort(key=lambda m: m["global_step"], reverse=True)
+    # 按 global_step 降序（最新训练排最前，页面默认选它）；transformer 档
+    # 的 meta 只有 it 没有 global_step，取 get 容错
+    metas.sort(key=lambda m: m.get("global_step") or m.get("it") or 0, reverse=True)
     with open(os.path.join(OUT_DIR, "index.json"), "w") as f:
         json.dump({"models": metas}, f, indent=1, ensure_ascii=False)
-    print(f"\n共导出 {len(metas)} 个模型 → {os.path.relpath(OUT_DIR, PROJ)}/")
+    verb = "本次新增" if args.incremental else "共导出"
+    print(f"\n{verb} {exported} 个模型，web/models 现共 {len(metas)} 个 → index.json")
 
 
 if __name__ == "__main__":
