@@ -136,9 +136,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 rm -rf /tmp/jaxbomb_24node && mkdir -p /tmp/jaxbomb_24node/scripts /tmp/jaxbomb_24node/web/assets/maps
 cp -r "$ROOT/jax_bomb" /tmp/jaxbomb_24node/
 cp "$ROOT/web/assets/maps/levels.json" /tmp/jaxbomb_24node/levels.json
-cp "$ROOT/web/assets/maps/levels.json" /tmp/jaxbomb_24node/web/assets/maps/levels.json
-cp "$ROOT/web/assets/maps/curriculum.json" /tmp/jaxbomb_24node/web/assets/maps/curriculum.json 2>/dev/null || true
-cp "$ROOT/web/assets/maps/curriculum.json" /tmp/jaxbomb_24node/curriculum.json 2>/dev/null || true
+cp "$ROOT/web/assets/maps/curriculum.json" /tmp/jaxbomb_24node/web/assets/maps/curriculum.json
+cp "$ROOT/web/assets/maps/curriculum.json" /tmp/jaxbomb_24node/curriculum.json
 for s in quick_check_levels.py quick_check_bush.py quick_check_crate_semantics.py \
          quick_check_obs_move.py quick_check_js_jax_move.py quick_check_anti_tunnel.py; do
   cp "$ROOT/scripts/$s" /tmp/jaxbomb_24node/scripts/ 2>/dev/null

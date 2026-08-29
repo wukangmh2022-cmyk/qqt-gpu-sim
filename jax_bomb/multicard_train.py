@@ -608,14 +608,15 @@ def main():
                 cur = (cur[0], cur[1], est, ekey)
                 ew_sum = int(np.sum(np.asarray(ew)))
                 el_sum = int(np.sum(np.asarray(el)))
-                wr = ew_sum / max(ew_sum + el_sum, 1)
+                total_games = ew_sum + el_sum
+                wr = ew_sum / max(total_games, 1)
                 print(f"[{rank}] [Curriculum Gate] Stage {cur_stage} 评估: "
-                      f"vs StageBaseline win={ew_sum} lose={el_sum} winrate={wr:.1%} "
+                      f"vs StageBaseline win={ew_sum} lose={el_sum} (总完局={total_games}) winrate={wr:.1%} "
                       f"(晋级门禁={args.curriculum_winrate_gate:.1%}, 已训={iters_in_stage} iters)", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                                     f"[Gate] Stage {cur_stage} vs Baseline "
-                                    f"winrate={wr:.1%} ({ew_sum}/{ew_sum + el_sum})"])
-                if wr >= args.curriculum_winrate_gate:
+                                    f"winrate={wr:.1%} ({ew_sum}/{total_games})"])
+                if total_games >= 30 and wr >= args.curriculum_winrate_gate:
                     winrate_passed = True
 
             if winrate_passed or step_fallback:

@@ -297,20 +297,31 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
                clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
                return_loss=False, adv_top_frac=0.25):
     """PPO 更新（支持 Top-Advantage Filtering 与 HL-Gauss 分布式价值头）。
-    axis_name 非 None 时（数据并行 pmap）对梯度做 pmean allreduce。
+def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
+               clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
+               return_loss=False, adv_top_frac=0.25):
+    """PPO 参数更新（Actor/Critic 解耦 + Batch 优势标准化 + HL-Gauss 价值头）。
+
+    Critic: 在 100% 全量样本分布上优化 HL-Gauss 价值预测，保证价值基线无偏且 GAE 不漂移；
+    Actor: 仅在 |Advantage| 排名前 adv_top_frac 的高信号决策帧上优化策略梯度，过滤冗余游走。
     """
     obs, state, acts, old_lps, advs, rets, masks = batch
     total = obs.shape[0] * obs.shape[1]
     adv_f = advs.reshape(-1)
 
-    # Top-Advantage Filtering: 仅保留 |Advantage| 排名前 adv_top_frac 的样本
+    # Batch 优势标准化 (Advantage Normalization)
+    adv_mean = jnp.mean(adv_f)
+    adv_std = jnp.std(adv_f)
+    adv_norm = (adv_f - adv_mean) / (adv_std + 1e-8)
+
+    # 计算 Actor 策略过滤掩码
     if 0.0 < adv_top_frac < 1.0:
         n_keep = int(total * adv_top_frac)
-        n_keep = max((n_keep // minibatch) * minibatch, minibatch)
-        _, top_idx = jax.lax.top_k(jnp.abs(adv_f), n_keep)
+        top_vals, _ = jax.lax.top_k(jnp.abs(adv_norm), n_keep)
+        adv_thresh = top_vals[-1]
+        top_mask_f = (jnp.abs(adv_norm) >= adv_thresh).astype(jnp.float32)
     else:
-        top_idx = jnp.arange(total)
-        n_keep = total
+        top_mask_f = jnp.ones((total,), jnp.float32)
 
     obs_q = (obs.dtype == jnp.uint8)
     obs_f = obs.reshape(total, *obs.shape[2:])   # 保持 uint8，body 内延迟反量化
@@ -323,15 +334,14 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
     bm_f = bm_f.reshape(total, -1)
 
     def one_epoch(params, opt_state, key):
-        perm = jrandom.permutation(key, n_keep)
-        shuffled_sample_idx = top_idx[perm]
-        idx = shuffled_sample_idx.reshape(-1, minibatch)
+        perm = jrandom.permutation(key, total)
+        idx = perm.reshape(-1, minibatch)
 
         def body(carry, mb):
             params, opt_state = carry
-            o, a, ol, ad, rt, mm, bm = (obs_f[mb], acts_f[mb], old_f[mb],
-                                        adv_f[mb], ret_f[mb], mm_f[mb],
-                                        bm_f[mb])
+            o, a, ol, ad, rt, mm, bm, tmask = (
+                obs_f[mb], acts_f[mb], old_f[mb], adv_norm[mb], ret_f[mb],
+                mm_f[mb], bm_f[mb], top_mask_f[mb])
             st = st_f[mb]
             if obs_q:
                 o = o.astype(jnp.float32) / 255.0   # 延迟反量化（minibatch 级）
@@ -339,7 +349,7 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
 
             loss_val, grads = jax.value_and_grad(
                 lambda p: _ppo_loss(p, arch, o, st, mm, bm, a, ol, ad, rt,
-                                    clip_eps, vf_coef, ent_coef))(params)
+                                    clip_eps, vf_coef, ent_coef, tmask))(params)
             if axis_name is not None:
                 grads = jax.lax.pmean(grads, axis_name)
             updates, opt_state = opt.update(grads, opt_state, params)
@@ -360,8 +370,8 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
 
 
 def _ppo_loss(p, arch, o, st, mm, bm, a, ol, ad, rt, clip_eps, vf_coef,
-              ent_coef):
-    """PPO loss（minibatch 级）——支持 HL-Gauss 分布式价值头。"""
+              ent_coef, top_mask=None):
+    """PPO loss（minibatch 级）——支持 HL-Gauss 分布式价值头与 Actor/Critic 解耦。"""
     mv, bm_, v_scalar, v_logits = net_forward(p, arch, o, st)
     mv = jnp.where(mm, mv, jnp.full_like(mv, -jnp.inf))
     bm_ = jnp.where(bm, bm_, jnp.full_like(bm_, -jnp.inf))
@@ -373,7 +383,12 @@ def _ppo_loss(p, arch, o, st, mm, bm, a, ol, ad, rt, clip_eps, vf_coef,
     ratio = jnp.exp(lp - ol)
     pg1 = -ad * ratio
     pg2 = -ad * jnp.clip(ratio, 1 - clip_eps, 1 + clip_eps)
-    pol = jnp.maximum(pg1, pg2).mean()
+    pg = jnp.maximum(pg1, pg2)
+    if top_mask is not None:
+        pol = (pg * top_mask).sum() / jnp.maximum(top_mask.sum(), 1.0)
+    else:
+        pol = pg.mean()
+    # Critic 评估全量 100% 状态分布，提供绝对稳定的价值基线
     val_l = hl_gauss_value_loss(v_logits, rt)
     pm = jnp.exp(lsm)
     pb = jnp.exp(lsb)
@@ -386,18 +401,24 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
                     clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
                     sync_k=128, bf16_sync=False, sync_state=False,
                     return_loss=False, adv_top_frac=0.25):
-    """Local SGD 版 PPO（支持 Top-Advantage Filtering 与 HL-Gauss）。"""
+    """Local SGD 版 PPO（Actor/Critic 解耦 + 优势归一化 + HL-Gauss）。"""
     obs, state, acts, old_lps, advs, rets, masks = batch
     total = obs.shape[0] * obs.shape[1]
     adv_f = advs.reshape(-1)
 
+    # Batch 优势标准化 (Advantage Normalization)
+    adv_mean = jnp.mean(adv_f)
+    adv_std = jnp.std(adv_f)
+    adv_norm = (adv_f - adv_mean) / (adv_std + 1e-8)
+
+    # 计算 Actor 策略过滤掩码
     if 0.0 < adv_top_frac < 1.0:
         n_keep = int(total * adv_top_frac)
-        n_keep = max((n_keep // minibatch) * minibatch, minibatch)
-        _, top_idx = jax.lax.top_k(jnp.abs(adv_f), n_keep)
+        top_vals, _ = jax.lax.top_k(jnp.abs(adv_norm), n_keep)
+        adv_thresh = top_vals[-1]
+        top_mask_f = (jnp.abs(adv_norm) >= adv_thresh).astype(jnp.float32)
     else:
-        top_idx = jnp.arange(total)
-        n_keep = total
+        top_mask_f = jnp.ones((total,), jnp.float32)
 
     obs_q = (obs.dtype == jnp.uint8)
     obs_f = obs.reshape(total, *obs.shape[2:])
@@ -411,8 +432,9 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
 
     def local_step(carry, mb):
         params, opt_state = carry
-        o, a, ol, ad, rt, mm, bm = (obs_f[mb], acts_f[mb], old_f[mb],
-                                    adv_f[mb], ret_f[mb], mm_f[mb], bm_f[mb])
+        o, a, ol, ad, rt, mm, bm, tmask = (
+            obs_f[mb], acts_f[mb], old_f[mb], adv_norm[mb], ret_f[mb],
+            mm_f[mb], bm_f[mb], top_mask_f[mb])
         st = st_f[mb]
         if obs_q:
             o = o.astype(jnp.float32) / 255.0
@@ -420,7 +442,7 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
 
         loss_val, grads = jax.value_and_grad(
             lambda p: _ppo_loss(p, arch, o, st, mm, bm, a, ol, ad, rt,
-                                clip_eps, vf_coef, ent_coef))(params)
+                                clip_eps, vf_coef, ent_coef, tmask))(params)
         updates, opt_state = opt.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
         return (params, opt_state), loss_val
@@ -457,8 +479,7 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
             idx_c = idx[:n_full * sync_k].reshape(n_full, sync_k, minibatch)
 
             def run_chunk(carry, idx_k):
-                """sync_k 个本地 minibatch + 一次全量同步（scan 内嵌套 scan，
-                同步在 chunk 边界执行 —— 不依赖 cond 内的 collective）。"""
+                """sync_k 个本地 minibatch + 一次全量同步。"""
                 (params, opt_state), losses = jax.lax.scan(
                     local_step, carry, idx_k)
                 params = _sync(params)
@@ -485,43 +506,37 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
 
 def ppo_update_gradsync(params, opt, opt_state, arch, batch, key, minibatch,
                         clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
-                        sync_k=128, bf16_sync=False, return_loss=False):
-    """梯度累积 + 周期同步（大 batch 实现）——"平均梯度之和"线性性的精确版：
-
-    每 sync_k 个 minibatch 拼成一个 sync_k× 大 minibatch，对其做一次
-    value_and_grad（∇(1/K Σᵢ lossᵢ) = (1/K) Σᵢ ∇lossᵢ，与"冻结参数逐
-    个累加梯度"数学同义）、一次 pmean 平均梯度、一次 opt.update。参数
-    任何时刻逐位一致（更新只发生在同步点、从同一平均梯度出发），零
-    漂移、零本地 Adam 分歧。代价：每迭代只有 n_mb/sync_k 次更新
-    （大 batch 效应）——K=128 → 8 次/迭代，K=256 → 4 次/迭代。
-
-    大 batch 实现比"scan 内逐 minibatch 累加梯度"快：后者在 DCU 上
-    实测比 baseline 慢 2.4×（小 GEMM + 累加链编译差），前者单次大
-    前向/反向（大 GEMM 效率更高）。激活内存随 batch 线性增长（64GB
-    卡实测 131K 样本 OOM 78GB），故 big=sync_k×minibatch 超过
-    GRAD_MAX_SAMPLES=65536 时直接报错：grad 模式限 K ≤ ~32-64
-    （视 minibatch），更大 K 请用 param 模式（无内存限制）。
-
-    sync_k=1 时与 ppo_update 逐位一致（big=minibatch，结构相同），
-    本函数是现状无损路径的严格超集。
-    """
+                        sync_k=128, bf16_sync=False, return_loss=False,
+                        adv_top_frac=0.25):
+    """梯度累积 + 周期同步（支持 Actor/Critic 解耦 + 优势归一化 + HL-Gauss）。"""
     obs, state, acts, old_lps, advs, rets, masks = batch
     total = obs.shape[0] * obs.shape[1]
+    adv_f = advs.reshape(-1)
+
+    # Batch 优势标准化 (Advantage Normalization)
+    adv_mean = jnp.mean(adv_f)
+    adv_std = jnp.std(adv_f)
+    adv_norm = (adv_f - adv_mean) / (adv_std + 1e-8)
+
+    # 计算 Actor 策略过滤掩码
+    if 0.0 < adv_top_frac < 1.0:
+        n_keep = int(total * adv_top_frac)
+        top_vals, _ = jax.lax.top_k(jnp.abs(adv_norm), n_keep)
+        adv_thresh = top_vals[-1]
+        top_mask_f = (jnp.abs(adv_norm) >= adv_thresh).astype(jnp.float32)
+    else:
+        top_mask_f = jnp.ones((total,), jnp.float32)
+
     obs_q = (obs.dtype == jnp.uint8)
     obs_f = obs.reshape(total, *obs.shape[2:])
     st_f = state.reshape(total, -1)
     acts_f = acts.reshape(total, -1)
     old_f = old_lps.reshape(-1)
-    adv_f = advs.reshape(-1)
     ret_f = rets.reshape(-1)
     mm_f, bm_f = masks
     mm_f = mm_f.reshape(total, -1)
     bm_f = bm_f.reshape(total, -1)
     big = sync_k * minibatch
-    # 大 batch 激活内存随样本数线性增长（64GB DCU 实测 131K 样本 OOM 78GB、
-    # 32K 样本 ~20GB）。拆 sub-batch 无济于事（scan 累加版慢 2.4×、Python
-    # 展开版不共享缓冲区），所以直接护栏：超限给清晰报错，大 K 请用 param
-    # 模式（无此限制）。
     GRAD_MAX_SAMPLES = 65536
     if big > GRAD_MAX_SAMPLES:
         raise SystemExit(
@@ -534,15 +549,16 @@ def ppo_update_gradsync(params, opt, opt_state, arch, batch, key, minibatch,
         """一个 sync_k×minibatch 的大批：单次 value_and_grad → pmean → update。
         mb 是 (big,) 的行下标（scan 内静态长度切片）。"""
         params, opt_state = carry
-        o, a, ol, ad, rt, mm, bm = (obs_f[mb], acts_f[mb], old_f[mb],
-                                    adv_f[mb], ret_f[mb], mm_f[mb], bm_f[mb])
+        o, a, ol, ad, rt, mm, bm, tmask = (
+            obs_f[mb], acts_f[mb], old_f[mb], adv_norm[mb], ret_f[mb],
+            mm_f[mb], bm_f[mb], top_mask_f[mb])
         st = st_f[mb]
         if obs_q:
             o = o.astype(jnp.float32) / 255.0
             st = st.astype(jnp.float32) / 255.0
         loss_val, g = jax.value_and_grad(
             lambda p: _ppo_loss(p, arch, o, st, mm, bm, a, ol, ad, rt,
-                                clip_eps, vf_coef, ent_coef))(params)
+                                clip_eps, vf_coef, ent_coef, tmask))(params)
         if axis_name is not None:
             if bf16_sync:
                 g = jax.tree.map(
