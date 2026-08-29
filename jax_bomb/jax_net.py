@@ -178,19 +178,17 @@ def _attn(q, k, v, mask=None):
 
 def init_transformer(key, c, h, w, embed=392, depth=4, heads=4, ff_factor=4,
                      patch=3, state_dim=24):
-    """ViT 风格。patch>1 时按 patch 切块（Average Joe patchify 机制）：
-    token 数 = (h//patch)²，attention 计算量 ∝ token²，patch 2/3 对 13×13
-    地图把 attention 降 10-100 倍（参数在 ffn，几乎不变）。
+    """ViT：patch 投影 + depth 个 Transformer block + 动作/价值头。
 
-    state_dim>0：论文式双序列 —— 全局状态向量（时长/血量/成长属性/存活）
-    经 state_w/_b 投影成第 n_tok+1 个 state token，与 patch tokens 一起过
-    attention（微操：格内分数坐标在 splat 通道、速度/血量在 state 向量）。
-    pos 扩到 n_tok+1（state token 自己的可学习位置编码）。"""
-    # 每 block 用 6 个 key 索引：k=keys[i:i+4]（q/k/v/proj）后 i+=4，
+    参数量受 embed/depth 支配。默认 (392, 4, 3) 约 7.5M 参数，patch=3
+    空间 Token 提升 56%（对齐 Average Joe ICML 2026 论文 ViT 架构）。
+    """
+    # 算子/参数 RNG 拆分：每个 block 需要 4 个线性层 key（q/k/v/proj）+
     # k2=split(keys[i])（ff1/ff2 seed）后 i+=2；头部再 1 个、state 再 1 个。
     keys = random.split(key, 6 * depth + 3)
-    gp = -(-h // patch)                  # ceil(h/patch)：13//2=6 不够，需 7
-    n_tok = gp * gp
+    gh = -(-h // patch)                  # ceil(h/patch)
+    gw = -(-w // patch)                  # ceil(w/patch)
+    n_tok = gh * gw
     patch_dim = c * patch * patch
     p = {}
     p["tok"] = _linear_init(keys[0], patch_dim, embed)   # 每 patch 投影
@@ -257,26 +255,23 @@ def transformer_forward(params, obs, state=None):
 
     patch 切块（Average Joe patchify）：obs (N, C, H, W) → 每 patch 展平
     (C*P*P) 经 tok 投影 → (N, n_tok, embed)。P=1 退化为逐格 token。
-    13×13 非 P 倍数 → pad 到 ceil(13/P)*P（右/下补零）。pad 量是 Python
-    静态量（H/W 是常量），scan 内不依赖 tracer。
+    支持非正方形地图 (H!=W)，分别计算高宽方向的 ceil(H/P) 与 ceil(W/P)。
     """
     n = obs.shape[0]
     c, h, w = obs.shape[1], obs.shape[2], obs.shape[3]
     bf = jnp.bfloat16
-    # patch 从 tok 权重 shape 反推（shape 恒静态，避免 jit 参数里 int 被
-    # 动态化——DCU 的 JAX 与本地行为不同，dict int 会被 tracer）
     pd = params["tok"][0].shape[0]
     P = int(round((pd / c) ** 0.5))
-    gp = -(-h // P)                     # ceil(h/P)：13//2=6 不够，需 7
-    n_tok = gp * gp
-    hp, wp = gp * P, gp * P
+    gh = -(-h // P)
+    gw = -(-w // P)
+    n_tok = gh * gw
+    hp, wp = gh * P, gw * P
     x = obs.astype(bf)
     if hp != h or wp != w:
-        # 静态 pad（Python 层求值：h/w/gp/P 都是编译期常量）
         x = jnp.pad(x, [(0, 0), (0, 0), (0, hp - h), (0, wp - w)])
-    # (N, C, gp, P, gp, P) -> (N, gp*gp, C*P*P)
-    x = x.reshape(n, c, gp, P, gp, P)
-    x = x.transpose(0, 2, 4, 1, 3, 5).reshape(n, gp * gp, c * P * P)
+    # (N, C, gh, P, gw, P) -> (N, gh*gw, C*P*P)
+    x = x.reshape(n, c, gh, P, gw, P)
+    x = x.transpose(0, 2, 4, 1, 3, 5).reshape(n, gh * gw, c * P * P)
     tok_w, tok_b = params["tok"]
     pos = params["pos"].astype(bf)                 # (1, n_tok+1, E)
     x = x @ tok_w.astype(bf) + tok_b.astype(bf) + pos[:, :n_tok]
@@ -311,8 +306,9 @@ def init_mlp_mixer(key, c, h, w, embed=256, depth=8, patch=2, ff_factor=4,
                    token_ratio=2):
     """patch 化 + depth 个 Mixer 层。token_ratio 控制 token-mixing 隐层宽
     （token 数少，太小没意义；默认 2×）。"""
-    gp = -(-h // patch)                  # ceil(13/patch)：2→7, 3→5
-    n_tok = gp * gp
+    gh = -(-h // patch)
+    gw = -(-w // patch)
+    n_tok = gh * gw
     patch_dim = c * patch * patch
     keys = random.split(key, 3 + depth * 8)
     p = {}
@@ -346,13 +342,14 @@ def mlp_mixer_forward(params, obs):
     bf = jnp.bfloat16
     pd = params["tok"][0].shape[0]
     P = int(round((pd / c) ** 0.5))      # shape 反推 patch（恒静态）
-    gp = -(-h // P)
-    hp, wp = gp * P, gp * P
+    gh = -(-h // P)
+    gw = -(-w // P)
+    hp, wp = gh * P, gw * P
     x = obs.astype(bf)
     if hp != h or wp != w:
         x = jnp.pad(x, [(0, 0), (0, 0), (0, hp - h), (0, wp - w)])
-    x = x.reshape(n, c, gp, P, gp, P)
-    x = x.transpose(0, 2, 4, 1, 3, 5).reshape(n, gp * gp, c * P * P)
+    x = x.reshape(n, c, gh, P, gw, P)
+    x = x.transpose(0, 2, 4, 1, 3, 5).reshape(n, gh * gw, c * P * P)
     tok_w, tok_b = params["tok"]
     x = x @ tok_w.astype(bf) + tok_b.astype(bf)          # (N, T, E)
 
