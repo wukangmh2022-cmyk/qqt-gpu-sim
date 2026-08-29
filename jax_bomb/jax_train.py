@@ -296,10 +296,6 @@ def compute_gae(rew, val, next_val, done, gamma, lam):
 def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
                clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
                return_loss=False, adv_top_frac=0.25):
-    """PPO 更新（支持 Top-Advantage Filtering 与 HL-Gauss 分布式价值头）。
-def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
-               clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
-               return_loss=False, adv_top_frac=0.25):
     """PPO 参数更新（Actor/Critic 解耦 + Batch 优势标准化 + HL-Gauss 价值头）。
 
     Critic: 在 100% 全量样本分布上优化 HL-Gauss 价值预测，保证价值基线无偏且 GAE 不漂移；
