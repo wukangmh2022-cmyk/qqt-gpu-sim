@@ -179,6 +179,7 @@
   // ------------------------------------------------------------ 状态
   let sim = null, modelList = [], res = null;
   let replayExporting = false;
+  let replayAnim = null;   // 视频导出中非 null：{moving:[pid0,pid1]} —— 行走动画按导出帧间位移驱动
   let rng = null;
   // 鼠标寻路：hover 周围九宫格，click 映射到四方向 Destination / IDLE
   let hoverCell = null;       // {r, c} 或 null
@@ -1036,6 +1037,7 @@
   }
 
   function startGame() {
+    if (replayExporting) return;   // 视频导出中：换全局 sim 会打断逐帧渲染，忽略 R/重新开局
     if (!res || !selectedLevel) return;      // 素材/地图未就绪由 logicTick 兜底等待
     gameSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
     sim = new Sim(gameSeed);
@@ -1418,11 +1420,29 @@
     selectedLevel = replayLevel;
     const savedRadius = CFG.radius;
     if (doc.meta.cfg && Number.isFinite(Number(doc.meta.cfg.radius))) CFG.radius = Number(doc.meta.cfg.radius);
+    const oldBanner = elBanner.innerHTML;
+    const oldFace = face.slice();
+    const lastPos = Float64Array.from(exportSim.pos);
+    const animMoving = [false, false];
     try {
+      elBanner.innerHTML = '⏳ 正在重放录制中…<span class="tip">按完整状态帧逐帧渲染，请勿切换标签页</span>';
       recorder.start();
       for (const frame of doc.frames) {
         exportSim.restoreReplay(frame);
         prevPos.set(exportSim.pos); curPos.set(exportSim.pos);
+        // 快照不含 sprite 状态：朝向/行走动画按本帧与上一帧的位移推断，
+        // 否则导出的视频角色锁朝向、腿部静止。
+        for (let pid = 0; pid < 2; pid++) {
+          const dy = exportSim.pos[pid * 2] - lastPos[pid * 2];
+          const dx = exportSim.pos[pid * 2 + 1] - lastPos[pid * 2 + 1];
+          animMoving[pid] = Math.abs(dy) > 1e-6 || Math.abs(dx) > 1e-6;
+          if (animMoving[pid]) {
+            if (Math.abs(dy) >= Math.abs(dx)) face[pid] = dy < 0 ? MOVE_UP : MOVE_DOWN;
+            else face[pid] = dx < 0 ? MOVE_LEFT : MOVE_RIGHT;
+          }
+        }
+        lastPos.set(exportSim.pos);
+        replayAnim = { moving: animMoving };
         dangerCache = exportSim.dangerMap();
         explosion = frame.covered ? new Uint8Array(frame.covered) : null;
         explosionTrig = frame.triggered ? new Uint8Array(frame.triggered) : null;
@@ -1441,6 +1461,9 @@
     } finally {
       CFG.radius = savedRadius;
       replayExporting = false;
+      replayAnim = null;
+      face[0] = oldFace[0]; face[1] = oldFace[1];
+      elBanner.innerHTML = oldBanner;
       sim = oldSim;
       selectedLevel = oldLevel;
       dangerCache = oldDanger;
@@ -1981,7 +2004,8 @@
       // 但控制箭头仍显示（记录位置供箭头绘制）
       const cx = gx * CELL, cy = gy * CELL;
       const row = MOVE_TO_SPRITE_ROW[face[pid]] != null ? MOVE_TO_SPRITE_ROW[face[pid]] : 0;
-      const frame = (humanMoveState(pid) ? Math.floor(nowS * 8) % 4 : 0);
+      const moving = replayAnim ? replayAnim.moving[pid] : humanMoveState(pid);
+      const frame = (moving ? Math.floor(nowS * 8) % 4 : 0);
       const s = rows[row][frame];
       const blitX = Math.round(cx - s.width / 2);
       // 精灵脚底对齐**碰撞盒底** (gy + radius)，不再是格底 (gy+0.5)：

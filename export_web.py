@@ -181,7 +181,12 @@ def main():
         if music:
             src = ROOT / music
             if src.exists():
-                name = src.name
+                # GitHub Pages 文件名大小写敏感：关卡数据沿用原版的 water.OGG/
+                # M15.OGG，mac 本地大小写不敏感能播，线上 fetch 404 → 静默无声。
+                # 引用一律取磁盘上的真实文件名，保证部署后命中。
+                actual = next((f.name for f in src.parent.iterdir()
+                               if f.name.lower() == src.name.lower()), None)
+                name = actual or src.name
                 if name not in music_done:
                     shutil.copy2(src, OUT_MUSIC / name)
                     music_done.add(name)
