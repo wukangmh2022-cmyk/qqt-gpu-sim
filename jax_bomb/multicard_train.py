@@ -220,6 +220,9 @@ def main():
     ap.add_argument("--fresh", action="store_true",
                     help="忽略已有检查点全新开始（默认自动接续；"
                          "也可删除检查点目录实现不接续）")
+    ap.add_argument("--init-params", default=os.environ.get("INIT_PARAMS", None),
+                    help="热启动初始模型权重路径（.pkl 文件，仅初始化网络参数，"
+                         "以继承预训练智慧开启全新 0~4 课程训练）")
     ap.add_argument("--levels", default=os.environ.get("LEVELS_FILE", None),
                     help="标准化关卡数据 levels.json 路径（241 张 QQ堂地图；"
                          "不设时自动探测 ./levels.json / ./web/assets/maps/"
@@ -447,10 +450,17 @@ def main():
             init_batch(jrandom.PRNGKey(args.seed * 1000 + rank * n_local + l),
                        envs_per)
             for l in range(n_local)])
-        pkey = jrandom.PRNGKey(args.seed + 9999)
-        params = init_net(pkey, args.arch, N_OBS_CH, H, W,
-                          embed=args.embed, depth=args.depth, patch=args.patch,
-                          heads=args.heads, ff_factor=args.ff_factor)
+        if args.init_params and os.path.isfile(args.init_params):
+            with open(args.init_params, "rb") as f:
+                raw_p = pickle.load(f)
+            params = raw_p.get("params", raw_p) if isinstance(raw_p, dict) else raw_p
+            params = jax.tree.map(jnp.asarray, params)
+            print(f"[{rank}] 🔥 成功从热启动初始权重加载: {args.init_params}（带着预训练智慧从 0 开始课程）", flush=True)
+        else:
+            pkey = jrandom.PRNGKey(args.seed + 9999)
+            params = init_net(pkey, args.arch, N_OBS_CH, H, W,
+                              embed=args.embed, depth=args.depth, patch=args.patch,
+                              heads=args.heads, ff_factor=args.ff_factor)
         opt_state = opt.init(params)
         keys = jrandom.split(jrandom.PRNGKey(args.seed * 7919 + rank), n_local)
         write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] RUN start: "
