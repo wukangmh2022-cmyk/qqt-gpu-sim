@@ -313,8 +313,8 @@ def main():
             """课程：把 active 图集切到 stage si，并设置该阶段的出生点最大距离限制。"""
             ids = curriculum['stages'][si]
             w = 1.0 / len(ids)
-            # 空间几何距离：Stage 1 贴脸(<=4) → Stage 2 近距破障(<=6) → Stage 3 中距迷宫(<=10) → Stage 4 全图无限制(0)
-            stage_dists = [4, 6, 10, 0]
+            # 空间几何距离：Stage 0 空场景(<=4) → Stage 1 贴脸(<=4) → Stage 2 近距破障(<=6) → Stage 3 中距迷宫(<=10) → Stage 4 全图无限制(0)
+            stage_dists = [4, 4, 6, 10, 0]
             max_d = stage_dists[si] if si < len(stage_dists) else 0
             _levels.set_active(levels_path,
                                weights=','.join(f"{i}={w:.8f}" for i in ids),
@@ -325,7 +325,7 @@ def main():
                 curriculum = json.load(f)
             _set_stage(0)
             cur_stage = 0
-            print(f"[{rank}] 课程模式: {args.curriculum_json} 初始 Stage1"
+            print(f"[{rank}] 课程模式: {args.curriculum_json} 初始 Stage 0 (纯空场景道场)"
                   f"（{len(curriculum['stages'][0])} 张）阈值"
                   f" {curriculum['thresholds']}", flush=True)
         else:
@@ -609,11 +609,11 @@ def main():
                 ew_sum = int(np.sum(np.asarray(ew)))
                 el_sum = int(np.sum(np.asarray(el)))
                 wr = ew_sum / max(ew_sum + el_sum, 1)
-                print(f"[{rank}] [Curriculum Gate] Stage {cur_stage + 1} 评估: "
+                print(f"[{rank}] [Curriculum Gate] Stage {cur_stage} 评估: "
                       f"vs StageBaseline win={ew_sum} lose={el_sum} winrate={wr:.1%} "
                       f"(晋级门禁={args.curriculum_winrate_gate:.1%}, 已训={iters_in_stage} iters)", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                                    f"[Gate] Stage {cur_stage + 1} vs Baseline "
+                                    f"[Gate] Stage {cur_stage} vs Baseline "
                                     f"winrate={wr:.1%} ({ew_sum}/{ew_sum + el_sum})"])
                 if wr >= args.curriculum_winrate_gate:
                     winrate_passed = True
@@ -624,10 +624,10 @@ def main():
                 stage_start_iter = i
                 stage_baseline_params = cur[0]  # 锁定当前学成的新模型作为下一阶段 Baseline
                 reason = f"胜率达标 (winrate={wr:.1%} >= {args.curriculum_winrate_gate:.1%})" if winrate_passed else f"步数兜底 (frac={step_frac:.4f})"
-                print(f"[{rank}] 🏆 课程晋级 → Stage {cur_stage + 1}（原因: {reason}，"
+                print(f"[{rank}] 🏆 课程晋级 → Stage {cur_stage}（原因: {reason}，"
                       f"{len(curriculum['stages'][cur_stage])} 张图）", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                                    f"PROMOTION -> Stage {cur_stage + 1} ({reason})"])
+                                    f"PROMOTION -> Stage {cur_stage} ({reason})"])
 
         alpha_fix = fixed_reward_alpha(
             i, steps_per_iter_g, shared_anneal_steps,
