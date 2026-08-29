@@ -208,20 +208,8 @@ class BatchedSim:
             z0 = torch.full((count,), self.cfg.blast, dtype=torch.float,
                             device=self.device)
             s0 = torch.full((count,), 1.0, dtype=torch.float, device=self.device)
-            self.bombs_cap[idx, 0] = self.cfg.max_bombs
-            self.blast_cap[idx, 0] = self.cfg.blast
-            self.spd_g[idx, 0] = 1.0
-            ob, oz, os = self._opp_start(idx, b0, z0, s0)
-            self.bombs_cap[idx, 1] = ob
-            self.blast_cap[idx, 1] = oz
-            self.spd_g[idx, 1] = os
+            self._set_initial_attrs(idx, b0, z0, s0)
             self._map_kind[idx] = 1                     # open
-            self._lo_bombs[idx, 0] = self.cfg.max_bombs
-            self._lo_blast[idx, 0] = self.cfg.blast
-            self._lo_spd[idx, 0] = 1.0
-            self._lo_bombs[idx, 1] = ob
-            self._lo_blast[idx, 1] = oz
-            self._lo_spd[idx, 1] = os
             spawns = torch.tensor(
                 self.cfg.spawn_pos(), dtype=torch.float32, device=self.device)
             self.pos[idx] = spawns.unsqueeze(0).expand(count, -1, -1)
@@ -274,22 +262,11 @@ class BatchedSim:
                                 dtype=torch.float, device=self.device)
                 s0 = torch.full((no,), float(self.cfg.open_growth_speed),
                                 dtype=torch.float, device=self.device)
-                self.bombs_cap[open_type_idx, 0] = self.cfg.open_growth_bombs
-                self.blast_cap[open_type_idx, 0] = self.cfg.open_growth_blast
-                self.spd_g[open_type_idx, 0] = self.cfg.open_growth_speed
-                ob, oz, os = self._opp_start(open_type_idx, b0, z0, s0)
-                self.bombs_cap[open_type_idx, 1] = ob
-                self.blast_cap[open_type_idx, 1] = oz
-                self.spd_g[open_type_idx, 1] = os
+                self._set_initial_attrs(
+                    open_type_idx, b0, z0, s0)
                 self.crate_prob[open_type_idx] = 1.0   # open 宝箱 100% 有东西（踩到必升）
                 self._is_open[open_type_idx] = True    # 标记：掉血惩罚 + 宝箱回收生效
                 self._map_kind[open_type_idx] = 1      # open
-                self._lo_bombs[open_type_idx, 0] = self.cfg.open_growth_bombs
-                self._lo_blast[open_type_idx, 0] = self.cfg.open_growth_blast
-                self._lo_spd[open_type_idx, 0] = self.cfg.open_growth_speed
-                self._lo_bombs[open_type_idx, 1] = ob
-                self._lo_blast[open_type_idx, 1] = oz
-                self._lo_spd[open_type_idx, 1] = os
                 # 中心十字开局池在 **crate 清零之后**统一撒（见下方
                 # _place_open_cross_crates 调用 —— 这里撒会被 self.crate[idx]=False 清掉）。
             if ring_idx.numel():
@@ -307,21 +284,9 @@ class BatchedSim:
                                 dtype=torch.float, device=self.device)
                 s0 = torch.full((nr,), float(self.cfg.growth_speed_start),
                                 dtype=torch.float, device=self.device)
-                self.bombs_cap[ring_idx, 0] = self.cfg.growth_bombs_start
-                self.blast_cap[ring_idx, 0] = self.cfg.growth_blast_start
-                self.spd_g[ring_idx, 0] = self.cfg.growth_speed_start
-                ob, oz, os = self._opp_start(ring_idx, b0, z0, s0)
-                self.bombs_cap[ring_idx, 1] = ob
-                self.blast_cap[ring_idx, 1] = oz
-                self.spd_g[ring_idx, 1] = os
+                self._set_initial_attrs(ring_idx, b0, z0, s0)
                 self.crate_prob[ring_idx] = self.cfg.ring_crate_prob
                 self._map_kind[ring_idx] = 2           # ring
-                self._lo_bombs[ring_idx, 0] = self.cfg.growth_bombs_start
-                self._lo_blast[ring_idx, 0] = self.cfg.growth_blast_start
-                self._lo_spd[ring_idx, 0] = self.cfg.growth_speed_start
-                self._lo_bombs[ring_idx, 1] = ob
-                self._lo_blast[ring_idx, 1] = oz
-                self._lo_spd[ring_idx, 1] = os
             if corr_idx.numel():
                 nc = int(corr_idx.numel())
                 # 随机顶/底墙行：top 每局独立掷一次，make_walls/make_bricks 共用
@@ -338,21 +303,9 @@ class BatchedSim:
                                 dtype=torch.float, device=self.device)
                 s0 = torch.full((nc,), float(self.cfg.growth_speed_start),
                                 dtype=torch.float, device=self.device)
-                self.bombs_cap[corr_idx, 0] = self.cfg.growth_bombs_start
-                self.blast_cap[corr_idx, 0] = self.cfg.growth_blast_start
-                self.spd_g[corr_idx, 0] = self.cfg.growth_speed_start
-                ob, oz, os = self._opp_start(corr_idx, b0, z0, s0)
-                self.bombs_cap[corr_idx, 1] = ob
-                self.blast_cap[corr_idx, 1] = oz
-                self.spd_g[corr_idx, 1] = os
+                self._set_initial_attrs(corr_idx, b0, z0, s0)
                 self.crate_prob[corr_idx] = self.cfg.growth_crate_prob
                 self._map_kind[corr_idx] = 0           # corridor
-                self._lo_bombs[corr_idx, 0] = self.cfg.growth_bombs_start
-                self._lo_blast[corr_idx, 0] = self.cfg.growth_blast_start
-                self._lo_spd[corr_idx, 0] = self.cfg.growth_speed_start
-                self._lo_bombs[corr_idx, 1] = ob
-                self._lo_blast[corr_idx, 1] = oz
-                self._lo_spd[corr_idx, 1] = os
 
             all_pos = torch.zeros(count, self.cfg.n_players, 2,
                                   dtype=torch.float32, device=self.device)
@@ -419,6 +372,25 @@ class BatchedSim:
         else:
             self._hazard[idx] = False
 
+    def _set_initial_attrs(self, rows: torch.Tensor, b0: torch.Tensor,
+                           z0: torch.Tensor, s0: torch.Tensor) -> None:
+        """Initialize learner and every opponent slot for a reset batch."""
+        self.bombs_cap[rows, 0] = b0.long()
+        self.blast_cap[rows, 0] = z0.long()
+        self.spd_g[rows, 0] = s0
+        self._lo_bombs[rows, 0] = b0.long()
+        self._lo_blast[rows, 0] = z0.long()
+        self._lo_spd[rows, 0] = s0
+        if self.cfg.n_players <= 1:
+            return
+        ob, oz, os = self._opp_start(rows, b0, z0, s0)
+        self.bombs_cap[rows, 1:] = ob[:, None]
+        self.blast_cap[rows, 1:] = oz[:, None]
+        self.spd_g[rows, 1:] = os[:, None]
+        self._lo_bombs[rows, 1:] = ob[:, None]
+        self._lo_blast[rows, 1:] = oz[:, None]
+        self._lo_spd[rows, 1:] = os[:, None]
+
     def set_opp_boost(self, v: int) -> None:
         """训练侧设置对手初始属性增强档（见 _opp_boost 注释：0 同起点 / 1 历史
         网络 ×opp_hist_mult / 2 规则 bot 80%）。所有 env 用同一档（1v1 单阶段
@@ -432,9 +404,11 @@ class BatchedSim:
 
     def _opp_start(self, idx: torch.Tensor, b0: torch.Tensor, z0: torch.Tensor,
                    s0: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """对手（pid 1）初始属性按 `_opp_boost[idx]` 三档向量化计算：
-        0 = 与 learner 同起点（b0/z0/s0）；1 = 历史网络 ×opp_hist_mult
-        （round + clamp 上限）；2 = 规则 bot opp_growth_*（80%）。"""
+        """对手初始属性按 `_opp_boost[idx]` 三档向量化计算。
+
+        The returned values are broadcast to every opponent slot by
+        `_set_initial_attrs`; all opponents share the same starting tier.
+        """
         cfg = self.cfg
         bo = self._opp_boost[idx]
         m = cfg.opp_hist_mult

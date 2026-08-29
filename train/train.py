@@ -25,6 +25,7 @@ import torch
 
 from sim.config import N_BOMB, N_MOVES, SimConfig, obs_extra
 from sim.factory import make_sim
+from sim.dev import resolve_device
 from sim.bots import make_bot
 
 from .curriculum import (CurriculumState, cnn_curriculum, default_curriculum,
@@ -275,8 +276,9 @@ def update_fixed_elo(fixed_elo: dict, name: str, learner_elo: float,
     return learner_elo + delta
 
 
-def eval_fixed_opponents(sim_cfg, learner, fixed_items, pcfg, device,
-                         backend: str = "torch", episodes: int = 128) -> dict:
+def eval_fixed_opponents(sim_cfg, learner, fixed_items, pcfg, train_device,
+                         sim_device=None, backend: str = "torch",
+                         episodes: int = 128) -> dict:
     """对每个固定对手跑一个小型评估（默认 128 局），返回 name → win_rate。
 
     训练主循环里跑在独立的小 sim 上，不污染主 buffer；周期调用，
@@ -286,7 +288,8 @@ def eval_fixed_opponents(sim_cfg, learner, fixed_items, pcfg, device,
     196 kernel —— 256 局 × 4 对手的评估能把训练节奏拖慢几分钟（实测
     course7 卡 >7min）。评估减半局数即可恢复正常节奏，主训练不受影响。
     """
-    sim = make_sim(sim_cfg, 128, backend=backend, device=device, seed=0)
+    sim = make_sim(sim_cfg, 128, backend=backend,
+                   device=sim_device or train_device, seed=0)
     out = {}
     for name, net in fixed_items:
         # 规则 bot（--fixed-bots，如 astar）**跳过**：BotWrapper 绑定主 sim 的
@@ -363,7 +366,16 @@ def main() -> None:
                          "死通道，学了白学；速度才真正影响躲避。正常关不受影响")
     ap.add_argument("--autocast", action="store_true",
                     help="PPO 更新用 fp16 autocast（GPU 上 GEMM 走 fp16，更新提速）")
-    ap.add_argument("--device", default=None)
+    ap.add_argument("--device", default=None,
+                    help="兼容参数：同时设置 train-device 和 sim-device")
+    ap.add_argument("--train-device", default=None,
+                    help="策略网络/PPO 的设备；BW-1 通常为 cuda")
+    ap.add_argument("--sim-device", default=None,
+                    help="Simulator 的设备；设为 cpu 可启用 CPU Simulator + DCU PPO")
+    ap.add_argument("--sim-threads", type=int, default=None,
+                    help="CPU Simulator 使用的 intra-op 线程数")
+    ap.add_argument("--measure-hybrid", action="store_true",
+                    help="记录 rollout 的 sim/transfer/policy 分段耗时")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--rollout-steps", type=int, default=128)
     ap.add_argument("--minibatches", type=int, default=PPOConfig.minibatches,
@@ -371,7 +383,7 @@ def main() -> None:
                          "minibatches 是峰值内存的主项，内存紧张就调大它")
     ap.add_argument("--bptt-window", type=int, default=0,
                     help="LSTM 架构的 BPTT 截断窗口（0 = 全序列反传；>0 只反传"
-                         "最近 W 步 —— truncated BPTT，910B 实测反向 -78%）")
+                         "最近 W 步 —— truncated BPTT，910B 实测反向 -78%%）")
     ap.add_argument("--max-mem-frac", type=float, default=0.55,
                     help="预估峰值内存占可用内存的比例上限，超了直接拒绝启动")
     ap.add_argument("--lr", type=float, default=1e-4)
@@ -392,7 +404,7 @@ def main() -> None:
     ap.add_argument("--cnn-course", action="store_true",
                     help="CNN 泛化专项课程（curriculum.cnn_curriculum）：resume "
                          "duel_cnn 后敌人/地图渐进，把对打寻路 AI（astar/hunter）"
-                         "胜率拉到 90%+。不加则走 default_curriculum（旧 1v1→1v2）")
+                         "胜率拉到 90%%+。不加则走 default_curriculum（旧 1v1→1v2）")
     ap.add_argument("--fixed-ckpt", action="append", default=[], metavar="NAME=PATH",
                     help="固定陪练 checkpoint（可重复指定）：启动时加载为冻结网络并"
                          "适配到当前观测，始终作为潜在对手。ELO 走 fixed_elo 字典"
@@ -461,23 +473,27 @@ def main() -> None:
     ap.add_argument("--explore-anneal-k", type=float, default=1.2,
                     help="退火斜率 k（α=1-tanh(k·2·击杀率)）。默认 1.2 同论文；"
                          "调小=退火更慢，危险惩罚/吃箱等塑形保持更久（2026-08-11 "
-                         "用户定：3B 版 α≈0.03 退过头，危险/吃箱信号被缩到 3%，"
+                         "用户定：3B 版 α≈0.03 退过头，危险/吃箱信号被缩到 3%%，"
                          "corridor 躲炸弹差+吃箱弱同源 → 本阶段用 0.6 慢退火）")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
     random.seed(args.seed)
-    if args.device:
-        device = torch.device(args.device)
-    else:
-        try:
-            import torch_npu  # noqa: F401
-            if torch.npu.is_available():
-                device = torch.device("npu:0")
-            else:
-                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        except ImportError:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    shared_device = args.device
+    train_device = resolve_device(args.train_device or shared_device)
+    sim_device = resolve_device(args.sim_device or shared_device or train_device)
+    if args.backend == "cuda" and sim_device.type != "cuda":
+        raise ValueError("backend=cuda requires a CUDA-compatible Simulator device")
+    if args.sim_threads is not None:
+        if args.sim_threads < 1:
+            raise ValueError("--sim-threads must be positive")
+        torch.set_num_threads(args.sim_threads)
+    device = train_device
+    hybrid = train_device != sim_device
+    if hybrid and args.backend != "torch":
+        raise ValueError("CPU/GPU hybrid mode requires --backend torch")
+    print(f"[device] train={train_device} sim={sim_device} backend={args.backend} "
+          f"hybrid={hybrid} torch_threads={torch.get_num_threads()}")
 
     if args.map_mode == "corridor":
         # corridor：左右可炸墙 + 顶部永久墙 + 时间成长。
@@ -601,7 +617,7 @@ def main() -> None:
     if len(pool) == 0:
         pool.add(learner, step=global_step, elo=elo)
     sim = make_sim(stage.cfg, args.num_envs, backend=args.backend,
-                   device=device, seed=args.seed)
+                   device=sim_device, seed=args.seed)
 
     # ---------------- 人类录像 BC 辅助（可选，--bc-data） ----------------
     # 每迭代从录像采样一批监督样本做 BC 更新（--bc-coef 权重），人类精准放炮/
@@ -661,7 +677,10 @@ def main() -> None:
                                   bot_prob=bot_prob)
     # 训练难度：对手初始属性按类型增强（历史网络 ×mult / 规则 bot 80%）
     apply_opp_boost(sim, nets, args.opp_boost)
-    runner = SelfPlayRunner(sim, learner, nets, pcfg, stage.opponent_handicap)
+    runner = SelfPlayRunner(sim, learner, nets, pcfg,
+                            stage.opponent_handicap,
+                            measure_timing=args.measure_hybrid)
+
 
     log_f = writer = None
     if args.log_csv:
@@ -709,6 +728,10 @@ def main() -> None:
                 stats.setdefault("bc", float("nan"))
             global_step += per_iter
             sps = per_iter / max(1e-6, time.time() - t0)
+            timing = runner.last_timing
+            if args.measure_hybrid:
+                print("    timing: " + " ".join(
+                    f"{k}={v:.1f}ms" for k, v in timing.items()), flush=True)
 
             wr = runner.win_rate()
             done_eps = runner.ep_stats["count"]
@@ -757,7 +780,8 @@ def main() -> None:
                     # 独立小 sim 上对每个固定陪练跑 256 局 → 绝对胜率
                     fwr = eval_fixed_opponents(
                         stage.cfg, learner, fixed_items, pcfg, device,
-                        backend=args.backend)
+                        sim_device=sim_device, backend=args.backend)
+
                     print("    fixed: " + "  ".join(
                         f"{n}={v:.3f}" for n, v in fwr.items()))
             if log_f:
@@ -805,7 +829,7 @@ def main() -> None:
                                 n_players=stage.cfg.n_players)
                 opt = torch.optim.Adam(learner.parameters(), lr=pcfg.lr, eps=1e-5)
                 sim = make_sim(stage.cfg, args.num_envs, backend=args.backend,
-                               device=device, seed=args.seed + it)
+                               device=sim_device, seed=args.seed + it)
                 # bot 绑定着旧 sim 的状态（放泡/位置），换图后必须重建；
                 # LSTM 课程每阶段指定 bot 组合（stage.bots 优先，空 = 沿用旧组合）
                 stage_bots = stage.bots or tuple(kind for kind, _ in bot_items)
@@ -829,7 +853,8 @@ def main() -> None:
                                               bot_prob=bot_prob)
                 apply_opp_boost(sim, nets, args.opp_boost)
                 runner = SelfPlayRunner(sim, learner, nets, pcfg,
-                                        stage.opponent_handicap)
+                                        stage.opponent_handicap,
+                                        measure_timing=args.measure_hybrid)
 
             if time.time() - start > args.time_budget:
                 print("[budget] 时间预算用尽，存盘退出（下个会话 --resume 接力）")

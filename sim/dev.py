@@ -1,23 +1,68 @@
-"""跨后端设备选择（MPS / CUDA / Ascend NPU / CPU）。
+"""设备探测与运行时能力检查。"""
 
-verify 系列脚本统一走这里：910B 上若不识别 NPU 会 fallback 到 cpu，而
-torch_sim 在装有 triton 的环境会自动启用 triton kernel（triton-ascend 在
-NPU 上执行），CPU 张量的 host 指针被当作 NPU 地址 → aivec 矢量核异常
-（aic error mask 0x6500020bd00028c，pc 落在用户态地址，见 HANDOFF_20260810）。
-"""
+from __future__ import annotations
+
 import torch
 
 
-def pick_device() -> str:
-    """按 mps → cuda → npu:0 → cpu 优先级挑设备名。"""
-    if torch.backends.mps.is_available():
-        return "mps"
-    if torch.cuda.is_available():
-        return "cuda"
+def _npu_available() -> bool:
     try:
         import torch_npu  # noqa: F401
-        if torch.npu.is_available():
-            return "npu:0"
-    except (ImportError, AttributeError):
-        pass
-    return "cpu"
+        return bool(torch.npu.is_available())
+    except (ImportError, AttributeError, RuntimeError):
+        return False
+
+
+def available(device: str | torch.device) -> bool:
+    """Return whether an explicitly requested device can be used now."""
+    dev = torch.device(device)
+    if dev.type == "cpu":
+        return dev.index in (None, 0)
+    if dev.type == "mps":
+        return dev.index in (None, 0) and bool(torch.backends.mps.is_available())
+    if dev.type == "cuda":
+        if not torch.cuda.is_available():
+            return False
+        return dev.index is None or 0 <= dev.index < torch.cuda.device_count()
+    if dev.type == "npu":
+        if not _npu_available():
+            return False
+        count = getattr(torch.npu, "device_count", lambda: 0)()
+        return dev.index is None or 0 <= dev.index < count
+    return False
+
+
+def resolve_device(spec: str | torch.device | None = None) -> torch.device:
+    """Resolve an explicit device or choose the best available accelerator.
+
+    Vendor DCUs exposed through the PyTorch CUDA API intentionally use
+    ``cuda`` here; no vendor package name is hard-coded into the project.
+    """
+    if spec is not None:
+        dev = torch.device(spec)
+        if not available(dev):
+            raise RuntimeError(f"requested device {dev} is not available")
+        return dev
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if _npu_available():
+        return torch.device("npu:0")
+    return torch.device("cpu")
+
+
+def synchronize(device: str | torch.device) -> None:
+    """Synchronize one supported accelerator, if its runtime exposes it."""
+    dev = torch.device(device)
+    if dev.type == "cuda":
+        torch.cuda.synchronize(dev)
+    elif dev.type == "mps":
+        torch.mps.synchronize()
+    elif dev.type == "npu" and _npu_available():
+        torch.npu.synchronize()
+
+
+def pick_device() -> str:
+    """Backward-compatible string form of :func:`resolve_device`."""
+    return str(resolve_device())

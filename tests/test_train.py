@@ -9,6 +9,8 @@ from __future__ import annotations
 import torch
 
 from sim.config import N_BOMB, N_MOVES, SimConfig, view_perm
+from sim.dev import available, resolve_device
+from sim.factory import make_sim
 from sim.torch_sim import BatchedSim
 from train.curriculum import CurriculumState, default_curriculum
 from train.model import ActorCritic
@@ -49,6 +51,45 @@ def test_masked_dist_never_picks_illegal():
     dist = ActorCritic.masked_dist(logits, mask)
     assert torch.all(dist.sample() == 2)
     assert torch.isfinite(dist.entropy()).all(), "全掩码之外不能出 NaN"
+
+
+def test_device_resolution_and_auto_backend_respect_cpu():
+    assert available("cpu")
+    assert resolve_device("cpu") == torch.device("cpu")
+    assert not available("cpu:1")
+    sim = make_sim(SimConfig(height=7, width=7), 2,
+                   backend="auto", device="cpu", seed=0)
+    assert isinstance(sim, BatchedSim)
+    assert sim.device == torch.device("cpu")
+
+
+def test_three_player_opponents_receive_initial_attributes():
+    cfg = SimConfig(height=9, width=9, n_players=3, map_mode="open")
+    sim = BatchedSim(cfg, 16, device="cpu", seed=0)
+    mmask, bmask = sim.legal_mask()
+    assert torch.all(sim.bombs_cap[:, 1:] > 0)
+    assert torch.all(sim.blast_cap[:, 1:] > 0)
+    assert torch.all(sim.spd_g[:, 1:] > 0)
+    assert torch.all(bmask[:, 1:, 1]), "每个对手开局都应可放第一颗泡"
+
+
+def test_hybrid_runner_cpu_sim_and_train_devices():
+    """Simulator may stay on CPU while rollout storage uses learner device."""
+    cfg = SimConfig(height=7, width=7, n_players=2, max_steps=40)
+    sim = BatchedSim(cfg, 8, device="cpu", seed=0)
+    learner = ActorCritic(cfg.obs_shape).to("cpu")
+    opp = clone_frozen(learner)
+    pcfg = PPOConfig(rollout_steps=8, epochs=1, minibatches=2)
+    runner = SelfPlayRunner(sim, learner, [opp], pcfg, measure_timing=True)
+    buf, last_val = runner.collect()
+    assert sim.device.type == "cpu"
+    assert buf.obs.device.type == "cpu"
+    assert last_val.device.type == "cpu"
+    assert buf.ptr == pcfg.rollout_steps
+    assert all(v >= 0.0 for v in runner.last_timing.values())
+    opt = torch.optim.Adam(learner.parameters(), lr=1e-3)
+    stats = ppo_update(learner, opt, buf, last_val, pcfg, pcfg.entropy_coef)
+    assert all(torch.isfinite(torch.tensor(v)) for v in stats.values())
 
 
 def test_ppo_iteration_runs_and_updates():
