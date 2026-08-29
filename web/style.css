@@ -100,7 +100,10 @@ canvas#game {
   padding: 14px 22px;
   font-size: 24px; font-weight: 700;
   text-align: center;
-  cursor: pointer;               /* 欢迎窗口可点击开始 */
+  cursor: pointer;               /* 欢迎与结算窗口可点击直接重新开局 */
+  user-select: none;
+  z-index: 10;
+  pointer-events: auto;
   min-width: 620px; max-width: 860px;
   box-shadow: 0 6px 24px rgba(0,0,0,.5);
 }

@@ -1198,6 +1198,13 @@
   }
 
   elRestart.addEventListener('click', startGame);
+  if (elBanner) {
+    elBanner.addEventListener('click', () => {
+      if (!elBanner.classList.contains('hidden') && !replayExporting) {
+        startGame();
+      }
+    });
+  }
   const elMapBtn = $('map-btn');
   if (elMapBtn) elMapBtn.addEventListener('click', openMapMenu);
   // 选图页由独立“点击进入”按钮确认，避免调滑块/展开分类时误开局。
