@@ -18,22 +18,82 @@ import jax.random as jrandom
 import numpy as np
 import optax
 
-from .jax_env import (H, W, MAX_STEPS, N_BOMB, N_MOVES, N_OBS_CH,
-                      init_batch, legal_mask, make_obs, step)
+from .jax_env import (H, W, MAX_HP, MAX_STEPS, N_BOMB, N_MOVES, N_OBS_CH,
+                      _danger_map, global_vec, init_batch, legal_mask,
+                      make_obs, step)
 from .jax_net import count_params, init_net, net_forward
 from .platform import device_summary, setup_platform
+
+# ---------------- 稠密奖励（对齐 torch config.py 生产值） ----------------
+# 前三项恒生效（真信号，不退火）：掉血/造成伤害 ±hit_reward、每 tick 步罚、
+# 终局击杀固定 win_bonus（超时血多者胜 × 退火系数，见 collect_rollout）。
+# danger_penalty/brick_reward/combo/place_bonus 暂缓（行为塑形，若补须乘
+# _explore_coef 退火到 0 —— 论文消融：塑形早期慢速提升、后期退化不稳定）。
+STEP_PENALTY = 0.001
+HIT_REWARD = 1.5
+WIN_BONUS = 10.0
+WIN_HP_SCALED = False          # 击杀给固定 ±WIN_BONUS；超时血多者胜 × 退火
+TIMEOUT_MAX_BONUS = 2.0        # 双方存活超时的最大血差 shaping，低于真击杀 +10
+TIMEOUT_PER_HP = TIMEOUT_MAX_BONUS / float(MAX_HP - 1)
+
+
+def novelty_transition(visited, cells, done):
+    """Return first-visit events and the next shared per-episode visit map.
+
+    `cells` is `(N, 2, 2)` in `[row, col]` order and must be from the physical
+    post-step state before auto-reset. The map is shared by both players: a
+    simultaneous arrival at the same fresh cell earns exactly one credit, with
+    P0 as the stable tie-breaker.
+    """
+    was_visited = jax.vmap(
+        lambda v, rc: v[rc[:, 0], rc[:, 1]])(visited, cells)
+    newly = ~was_visited
+    same_cell = ((cells[:, 0, 0] == cells[:, 1, 0])
+                 & (cells[:, 0, 1] == cells[:, 1, 1]))
+    newly = newly.at[:, 1].set(newly[:, 1] & ~same_cell)
+    next_visited = jax.vmap(
+        lambda v, rc: v.at[rc[:, 0], rc[:, 1]].set(True))(visited, cells)
+    next_visited = jnp.where(done[:, None, None],
+                             jnp.zeros_like(next_visited), next_visited)
+    return newly, next_visited
+
+
+def reward_from_events(dmg, alive_before, alive_after, hp_after, done,
+                       crate_grew, newly, walls_destroyed, crate_coef,
+                       explore_coef, brick_coef, timeout_alpha):
+    """Compute JAX PPO rewards from post-step events without reset-state leakage."""
+    dmg = dmg.astype(jnp.float32)
+    dealt = dmg.sum(axis=-1, keepdims=True) - dmg
+    rew = ((dealt - dmg) * HIT_REWARD
+           - STEP_PENALTY * alive_before.astype(jnp.float32))
+    rew = rew + crate_coef * crate_grew.astype(jnp.float32)
+    rew = rew + explore_coef * newly.astype(jnp.float32)
+    rew = rew + brick_coef * walls_destroyed.astype(jnp.float32)[:, None] / 2.0
+
+    n_alive = alive_after.sum(axis=-1)
+    death_done = done & (n_alive == 1)
+    win = death_done[:, None] & alive_after
+    lose = death_done[:, None] & ~alive_after
+    rew = rew + WIN_BONUS * (win.astype(jnp.float32) - lose.astype(jnp.float32))
+
+    all_alive = done & (n_alive == 2)
+    hp_f = hp_after.astype(jnp.float32)
+    diff = hp_f[:, :1] - hp_f[:, 1:]
+    timeout_diff = jnp.concatenate([diff, -diff], axis=-1)
+    return rew + (TIMEOUT_PER_HP * timeout_diff * all_alive[:, None]
+                  * timeout_alpha)
 
 
 # ---------------- policy head ----------------
 
 
-def sample_actions(params, arch, obs, masks, key):
+def sample_actions(params, arch, obs, masks, key, state=None):
     """obs (N,C,H,W)，masks = (move_mask (N,5), bomb_mask (N,2)) bool。
 
     返回 (act (N,2), logp (N,), val (N,))。非法动作 logits 置 -inf 后采样
-    （与 torch masked_dist 同语义：softmax 概率归零）。
-    """
-    mv, bm, v = net_forward(params, arch, obs)
+    （与 torch masked_dist 同语义：softmax 概率归零）。state (N,G) 为全局
+    状态向量（transformer 的 state token），None=无（旧路径/对拍）。"""
+    mv, bm, v = net_forward(params, arch, obs, state)
     mm, bmb = masks
     mv_m = jnp.where(mm, mv, jnp.full_like(mv, -jnp.inf))
     bm_m = jnp.where(bmb, bm, jnp.full_like(bm, -jnp.inf))
@@ -47,9 +107,16 @@ def sample_actions(params, arch, obs, masks, key):
 
 
 def both_perspectives(states):
-    """返回 (2N, C, H, W)：p0 视角 + p1 视角拼接。"""
-    obs0 = jax.vmap(lambda s: make_obs(s, 0))(states)
-    obs1 = jax.vmap(lambda s: make_obs(s, 1))(states)
+    """返回 (2N, C, H, W)：p0 视角 + p1 视角拼接。
+
+    危险图与视角无关 → 两个视角共享同一份（make_obs 传预计算 danger），
+    每 tick 的 danger_map 计算减半（collect_rollout 热点，实测 2 遍版本
+    每 iter 4.76s → 共享后 ≈2.4s）。
+    """
+    danger = jax.vmap(lambda s: _danger_map(s.fuse, s.wall, s.bomb_blast,
+                                            s.brick))(states)
+    obs0 = jax.vmap(lambda s, d: make_obs(s, 0, d))(states, danger)
+    obs1 = jax.vmap(lambda s, d: make_obs(s, 1, d))(states, danger)
     return jnp.concatenate([obs0, obs1], axis=0)
 
 
@@ -66,17 +133,122 @@ def both_masks(states):
     return (jnp.concatenate([m0, m1]), jnp.concatenate([b0, b1]))
 
 
+def both_states(states):
+    """返回 (2N, G) 全局状态向量，行序与 both_perspectives 对齐（p0 视角配
+    玩家 0 的全局量、p1 配玩家 1 的）。血量/成长属性/存活/进度 —— 论文式
+    双序列输入的第二路（transformer 的 state token）。"""
+    v0 = jax.vmap(lambda s: global_vec(s, 0))(states)
+    v1 = jax.vmap(lambda s: global_vec(s, 1))(states)
+    return jnp.concatenate([v0, v1], axis=0)
+
+
 # ---------------- rollout ----------------
 
 
-def collect_rollout(params, arch, states, key, num_steps, no_mask=False):
-    """自对弈：同一网络打两边。states (N, ...)。返回 (new_states, batch)。
+def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
+                    obs_quant=False, checkpoint=False, crate_coef=0.0,
+                    explore_coef=0.0, brick_coef=0.0, timeout_alpha=1.0):
+    """自对弈：同一网络打两边。states (N, ...)。返回 (new_states, batch, nov, kills)。
+
+    nov：每 env/玩家的 novelty 计数（未加权，与 batch.rew 同口径窗口累计）。
+    训练侧除以 num_steps × coef 即得"探索分/帧"，与 rew 均值直接对比——
+    探索分单局天然封顶 coef×可达格数（195 格地图 ≈ coef×195），coef=0.01 时
+    全图逛完 1.95 分，远低于单次伤害 1.5×N 与击杀 10，不会压过胜负信号。
 
     step 在终局后**就地重置**（对齐正式版 auto_reset），所以胜负判定用
     step 前的 alive 快照（重置后 alive 恒全 True，无法区分谁死）。
     batch 含每 tick 的 (move_mask, bomb_mask)——PPO loss 用它屏蔽非法动作。
     no_mask=True：mask 全放开（性能 A/B 用，行为=无 mask 旧版）。
+    obs_quant=True：obs buffer 存 uint8（×255 量化，PPO 反量化后进网络）。
+    obs 8 通道都是低精度值（二值/离散/0-1），uint8 精度 1/255 ≈ 0.4% 优于
+    bf16 尾数，buffer 从 fp32 45GB 降到 11GB（8192×512 OOM 的解法）。
+    checkpoint=True：scan body 用 jax.checkpoint 包裹——反向重算中间量，
+    不保留每 tick 的 obs/激活（8192×512 下 scan 中间量 44.8GB 是量化后
+    剩余瓶颈，checkpoint 可进一步降到 buffer 本身大小）。
+    crate_coef：开箱成长奖励系数（0=关）。关卡模式多数地图出生点被砖隔开，
+    前期无交战通道，正信号只有破砖吃箱——bootstrap 奖励（长退火）加速
+    前期学习；退火后只剩真胜负（参考实现 stage0 composite_reward 同款思路）。
+    explore_coef：探索 novelty 奖励系数（0=关）。每 tick 玩家中心格若是
+    **本局首次到达**（共享 visited 掩码，done 清零）→ +explore_coef。这是
+    "整局只走几格就重罚"的稠密版：走过的格不再给分，坐桩/困在出生点几乎
+    零探索分，破砖开路才拿分。与 crate 同款长退火。掩码在 scan carry 里，
+    不进 BombState/ckpt（断点接续零兼容问题）。传入 jnp 标量（随 iter 变化
+    不触发重编译）。
+    brick_coef：炸墙奖励系数（0=关）。每炸毁一块砖（含灌木）双方各
+    +brick_coef/2。治"出生点 3 格死锁"：crate 奖励的链路（炸→掷爆率→
+    吃到）太长太弱学不会，给"炸墙"本身即时正反馈，破墙开路才有后续探索/
+    吃箱/交手。同上乘统一退火（headless 实测 500 iter 模型在隔离图仍
+    放炮少，炸墙是冷启动关键）。
+    timeout_alpha：双方存活超时的血差 shaping 退火系数。最大血差 4 时才
+    +2/-2，远低于固定死亡击杀 +10/-10；设为 0 后超时不再给血差奖励。
+    返回 (final_states, batch, nov, kills)：nov 每 env/玩家 novelty 累计；
+    kills 每 env 窗口内击杀局数（death_done 累计）——动态退火 α=1-tanh(k·x)
+    的 x 来源（每局击杀率 = mean(kills)/n_episodes）。
     """
+    n = states.pos.shape[0]
+    ones_m = jnp.ones((2 * n, N_MOVES), jnp.bool_)
+    ones_b = jnp.ones((2 * n, N_BOMB), jnp.bool_)
+    visited0 = jnp.zeros((n, H, W), jnp.bool_)      # 探索掩码（scan carry）
+    nov0 = jnp.zeros((n, 2), jnp.float32)           # 每 env/玩家 未加权 novelty 累计
+    kills0 = jnp.zeros((n,), jnp.float32)           # 每 env 击杀局数（动态退火 x 来源）
+
+    def one_step(carry, _):
+        states, key, visited, nov, kills = carry
+        key, k0, k1, kstep = jrandom.split(key, 4)
+        obs = both_perspectives(states)               # (2N, C, H, W)
+        masks = (ones_m, ones_b) if no_mask else both_masks(states)
+        gv = both_states(states)                      # (2N, G) 全局状态向量
+        acts, lps, vals = sample_actions(params, arch, obs, masks, key,
+                                         state=gv)
+        a0, a1 = acts[:n], acts[n:]
+        env_acts = jnp.stack([a0, a1], axis=1)        # (N, 2, 2)
+        keys = jrandom.split(kstep, n)                # 每 env 一步的 RNG（地图/宝箱）
+        new_states, done, info = jax.vmap(
+            lambda s, a, kk: step(s, a, kk, return_info=True))(states, env_acts,
+                                                               keys)
+        # Use the physical post-step cells captured before auto-reset. On a
+        # terminal tick `new_states` is already the next episode's spawn map.
+        newly, new_visited = novelty_transition(visited, info["cell"], done)
+        # 稠密奖励（对齐 torch step 的 hit/step/win 段）：
+        #   - 掉 1 血 -HIT_REWARD / 造成 1 伤害 +HIT_REWARD（info.dmg 结算后快照，
+        #     auto_reset 前取值 —— 1v1 里对方掉血 = 我的泡干的）；
+        #   - 每 tick -STEP_PENALTY（防磨洋工；**用 step 前 alive0**，对齐 torch
+        #     死亡 tick 死者也扣步罚 —— info.alive 是结算后，死者已 False）；
+        #   - 终局：死亡（n_alive==1）击杀方 ±WIN_BONUS 固定值；超时全员存活
+        #     （n_alive==2）按血差 × TIMEOUT_PER_HP × timeout_alpha（退火）。
+        #     info.alive/hp 是结算后值，不受 auto_reset 重置污染。
+        rew = reward_from_events(
+            info["dmg"], states.alive, info["alive"], info["hp"], done,
+            info["crate"], newly, info["walls"], crate_coef, explore_coef,
+            brick_coef, timeout_alpha)
+        nov = nov + newly.astype(jnp.float32)       # 统计用：探索分/帧可监控
+        n_alive = info["alive"].sum(axis=-1)          # (N,)
+        death_done = done & (n_alive == 1)
+        kills = kills + death_done.astype(jnp.float32)   # 击杀局数（动态退火 x）
+        d = jnp.concatenate([done, done])
+        rew = jnp.concatenate([rew[:, 0], rew[:, 1]])
+        obs_s = (jnp.round(obs * 255.0).astype(jnp.uint8)
+                 if obs_quant else obs)
+        state_s = (jnp.round(gv * 255.0).astype(jnp.uint8)
+                   if obs_quant else gv)
+        data = (obs_s, state_s, acts, lps, vals, rew, d, masks)
+        return (new_states, key, new_visited, nov, kills), data
+    body = (jax.checkpoint(one_step) if checkpoint else one_step)
+    (final_states, _, _, nov, kills), data = jax.lax.scan(
+        body, (states, key, visited0, nov0, kills0), None, length=num_steps)
+    obs, state, acts, lps, vals, rew, done, masks = data
+    return final_states, (obs, state, acts, lps, vals, rew, done, masks), nov, kills
+
+
+def collect_rollout_two(params_a, params_b, arch, states, key, num_steps,
+                        no_mask=False, obs_quant=False):
+    """两策略自对弈 rollout（评估用）：p0 视角用 params_a、p1 用 params_b。
+
+    与 collect_rollout 同一环境语义（auto_reset/稠密奖励），但**不存 obs
+    buffer**（评估不训练），只返回胜率计数：
+      win_stats = (p0_wins, p0_losses) —— 终局击杀（死亡 tick 存活者胜）与
+    超时（血高者胜）各计一局；episode 就地重置，每个终局 tick 计一次。
+    p0 胜率 = p0_wins / (p0_wins + p0_losses)。"""
     n = states.pos.shape[0]
     ones_m = jnp.ones((2 * n, N_MOVES), jnp.bool_)
     ones_b = jnp.ones((2 * n, N_BOMB), jnp.bool_)
@@ -84,32 +256,37 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False):
     def one_step(carry, _):
         states, key = carry
         key, k0, k1, kstep = jrandom.split(key, 4)
-        obs = both_perspectives(states)               # (2N, C, H, W)
+        obs = both_perspectives(states)
         masks = (ones_m, ones_b) if no_mask else both_masks(states)
-        acts, lps, vals = sample_actions(params, arch, obs, masks, key)
-        a0, a1 = acts[:n], acts[n:]
-        env_acts = jnp.stack([a0, a1], axis=1)        # (N, 2, 2)
-        alive_prev = states.alive                     # 重置前快照
-        new_states, done = jax.vmap(step)(states, env_acts)
-        # 稀疏胜负奖励（终局 tick）：胜 +1 / 负 -1 / 双亡或超时平 0.5
-        me_alive, opp_alive = alive_prev[:, 0], alive_prev[:, 1]
-        w0 = jnp.where(me_alive & ~opp_alive, 1.0,
-                       jnp.where(~me_alive & opp_alive, 0.0, 0.5))
-        rew0 = jnp.where(done, w0, 0.0)
-        rew1 = jnp.where(done, 1.0 - w0, 0.0)
-        rew = jnp.concatenate([rew0, rew1])
-        d = jnp.concatenate([done, done])
-        data = (obs, acts, lps, vals, rew, d, masks)
-        return (new_states, key), data
+        gv = both_states(states)
+        # p0 帧（obs[:n]）用 params_a，p1 帧（obs[n:]）用 params_b
+        a0, _, _ = sample_actions(params_a, arch, obs[:n],
+                                  (masks[0][:n], masks[1][:n]), k0,
+                                  state=gv[:n])
+        a1, _, _ = sample_actions(params_b, arch, obs[n:],
+                                  (masks[0][n:], masks[1][n:]), k1,
+                                  state=gv[n:])
+        env_acts = jnp.stack([a0, a1], axis=1)
+        keys = jrandom.split(kstep, n)
+        new_states, done, info = jax.vmap(
+            lambda s, a, kk: step(s, a, kk, return_info=True))(states, env_acts,
+                                                               keys)
+        # 胜率计数（与 collect_rollout 的 win/lose 奖励同口径）
+        n_alive = info["alive"].sum(axis=-1)
+        death_done = done & (n_alive == 1)
+        p0_win = death_done & info["alive"][:, 0]
+        p0_lose = death_done & ~info["alive"][:, 0]
+        all_alive = done & (n_alive == 2)
+        hp_f = info["hp"]
+        p0_win = p0_win | (all_alive & (hp_f[:, 0] > hp_f[:, 1]))
+        p0_lose = p0_lose | (all_alive & (hp_f[:, 0] < hp_f[:, 1]))
+        return (new_states, key), (p0_win.sum(), p0_lose.sum())
 
-    (final_states, _), data = jax.lax.scan(one_step, (states, key), None,
-                                           length=num_steps)
-    obs, acts, lps, vals, rew, done, masks = data
-    return final_states, (obs, acts, lps, vals, rew, done, masks)
-
+    (final_states, _), (w, l) = jax.lax.scan(
+        one_step, (states, key), None, length=num_steps)
+    return final_states, (w.sum(), l.sum())
 
 # ---------------- GAE ----------------
-
 
 def compute_gae(rew, val, next_val, done, gamma, lam):
     def scan_fn(adv_prev, inputs):
@@ -128,10 +305,20 @@ def compute_gae(rew, val, next_val, done, gamma, lam):
 
 
 def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
-               clip_eps, vf_coef, ent_coef, epochs):
-    obs, acts, old_lps, advs, rets, masks = batch
+               clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
+               return_loss=False):
+    """PPO 更新。axis_name 非 None 时（数据并行 pmap）对梯度做 pmean
+    allreduce：每卡 minibatch 减半（等效全局 minibatch 不变 → 梯度步数
+    不变），梯度跨卡平均后各卡用相同更新量，参数保持逐卡一致。
+
+    return_loss=True 时返回 (params, opt_state, last_loss)，last_loss 为
+    最后 epoch 的平均 PPO loss（value_and_grad 顺带得到，零额外计算）。
+    """
+    obs, state, acts, old_lps, advs, rets, masks = batch
     total = obs.shape[0] * obs.shape[1]
-    obs_f = obs.reshape(total, *obs.shape[2:])
+    obs_q = (obs.dtype == jnp.uint8)
+    obs_f = obs.reshape(total, *obs.shape[2:])   # 保持 uint8，body 内延迟反量化
+    st_f = state.reshape(total, -1)              # 全局状态向量（同量化）
     acts_f = acts.reshape(total, -1)
     old_f = old_lps.reshape(-1)
     adv_f = advs.reshape(-1)
@@ -149,9 +336,13 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
             o, a, ol, ad, rt, mm, bm = (obs_f[mb], acts_f[mb], old_f[mb],
                                         adv_f[mb], ret_f[mb], mm_f[mb],
                                         bm_f[mb])
+            st = st_f[mb]
+            if obs_q:
+                o = o.astype(jnp.float32) / 255.0   # 延迟反量化（minibatch 级）
+                st = st.astype(jnp.float32) / 255.0
 
             def loss_fn(p):
-                mv, bm_, v = net_forward(p, arch, o)
+                mv, bm_, v = net_forward(p, arch, o, st)
                 # 非法动作 logits 置 -inf（与采样/rollout logp 同一分布）
                 mv = jnp.where(mm, mv, jnp.full_like(mv, -jnp.inf))
                 bm_ = jnp.where(bm, bm_, jnp.full_like(bm_, -jnp.inf))
@@ -172,17 +363,257 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
                        - (pb * jnp.where(pb > 0, lsb, 0.0)).sum(-1).mean())
                 return pol + vf_coef * val_l - ent_coef * ent
 
-            grads = jax.grad(loss_fn)(params)
+            # value_and_grad 与 grad 等价开销，顺带得到 loss 供监控日志
+            loss_val, grads = jax.value_and_grad(loss_fn)(params)
+            if axis_name is not None:
+                grads = jax.lax.pmean(grads, axis_name)
             updates, opt_state = opt.update(grads, opt_state, params)
             params = optax.apply_updates(params, updates)
-            return (params, opt_state), ()
+            return (params, opt_state), loss_val
 
-        (params, opt_state), _ = jax.lax.scan(body, (params, opt_state), idx)
-        return params, opt_state
+        (params, opt_state), losses = jax.lax.scan(
+            body, (params, opt_state), idx)
+        return params, opt_state, jnp.mean(losses)
 
+    last_loss = None
     for _ in range(epochs):
         key, ek = jrandom.split(key)
-        params, opt_state = one_epoch(params, opt_state, ek)
+        params, opt_state, last_loss = one_epoch(params, opt_state, ek)
+    if return_loss:
+        return params, opt_state, last_loss
+    return params, opt_state
+
+
+def _ppo_loss(p, arch, o, st, mm, bm, a, ol, ad, rt, clip_eps, vf_coef,
+              ent_coef):
+    """PPO loss（minibatch 级）——ppo_update / ppo_update_lsgd /
+    ppo_update_gradsync 共用同一实现，三种同步模式的数值路径一致。"""
+    mv, bm_, v = net_forward(p, arch, o, st)
+    mv = jnp.where(mm, mv, jnp.full_like(mv, -jnp.inf))
+    bm_ = jnp.where(bm, bm_, jnp.full_like(bm_, -jnp.inf))
+    lsm = jax.nn.log_softmax(mv)
+    lsb = jax.nn.log_softmax(bm_)
+    n = o.shape[0]
+    lp = (lsm[jnp.arange(n), a[:, 0]]
+          + lsb[jnp.arange(n), a[:, 1]])
+    ratio = jnp.exp(lp - ol)
+    pg1 = -ad * ratio
+    pg2 = -ad * jnp.clip(ratio, 1 - clip_eps, 1 + clip_eps)
+    pol = jnp.maximum(pg1, pg2).mean()
+    val_l = jnp.mean((v - rt) ** 2)
+    pm = jnp.exp(lsm)
+    pb = jnp.exp(lsb)
+    ent = (-(pm * jnp.where(pm > 0, lsm, 0.0)).sum(-1).mean()
+           - (pb * jnp.where(pb > 0, lsb, 0.0)).sum(-1).mean())
+    return pol + vf_coef * val_l - ent_coef * ent
+
+
+def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
+                    clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
+                    sync_k=128, bf16_sync=False, sync_state=False,
+                    return_loss=False):
+    """Local SGD 版 PPO：minibatch 循环内**零通信**（每卡用本地梯度更新），
+    每 sync_k 个 minibatch 做一次 pmean 全量同步（默认只平均参数，
+    sync_state=True 时连 Adam 动量/方差一起平均，防本地漂移但流量×3）。
+
+    通信量 = (总 minibatch 数 / sync_k) 次全模型同步。对比现状（每个
+    minibatch 一次 pmean 梯度：1024 步/迭代 → 20 卡 ~50GB/迭代/卡），
+    sync_k=256 降到 4 次/迭代 ~0.4GB、sync_k=128 8 次 ~0.7GB，
+    bf16_sync 再减半 —— 跨机 RCCL/TCP 从分钟级降到秒级。
+
+    与 ppo_update 的区别：后者每步平均"梯度再做优化步"（参数逐位一致）；
+    本函数每步用本地梯度更新、定期平均"参数"（含可选动量）。sync_k=1 时
+    两种语义也不等价，不保证与 ppo_update 逐位一致。axis_name=None 时
+    退化为纯本地训练（sync 全是 no-op，等价 K=∞）。
+    """
+    obs, state, acts, old_lps, advs, rets, masks = batch
+    total = obs.shape[0] * obs.shape[1]
+    obs_q = (obs.dtype == jnp.uint8)
+    obs_f = obs.reshape(total, *obs.shape[2:])   # 保持 uint8，body 内延迟反量化
+    st_f = state.reshape(total, -1)
+    acts_f = acts.reshape(total, -1)
+    old_f = old_lps.reshape(-1)
+    adv_f = advs.reshape(-1)
+    ret_f = rets.reshape(-1)
+    mm_f, bm_f = masks
+    mm_f = mm_f.reshape(total, -1)
+    bm_f = bm_f.reshape(total, -1)
+
+    def local_step(carry, mb):
+        """单个 minibatch 的本地更新（无任何通信）——与 ppo_update 的 body
+        一致，只是去掉 pmean。"""
+        params, opt_state = carry
+        o, a, ol, ad, rt, mm, bm = (obs_f[mb], acts_f[mb], old_f[mb],
+                                    adv_f[mb], ret_f[mb], mm_f[mb], bm_f[mb])
+        st = st_f[mb]
+        if obs_q:
+            o = o.astype(jnp.float32) / 255.0   # 延迟反量化（minibatch 级）
+            st = st.astype(jnp.float32) / 255.0
+
+        loss_val, grads = jax.value_and_grad(
+            lambda p: _ppo_loss(p, arch, o, st, mm, bm, a, ol, ad, rt,
+                                clip_eps, vf_coef, ent_coef))(params)
+        updates, opt_state = opt.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        return (params, opt_state), loss_val
+
+    def _sync(x):
+        """pmean 全量同步（可选 bf16 半精度传输）。axis_name=None 时 no-op。
+        bf16 只作用于 fp32 叶子；int 叶子（Adam 的 count）各副本本就相同，
+        直接透传（pmean 的 1/axis_size 缩放会把 int 变 float）。"""
+        if axis_name is None:
+            return x
+        if bf16_sync:
+            x = jax.tree.map(
+                lambda t: (t.astype(jnp.bfloat16)
+                           if t.dtype == jnp.float32 else t), x)
+        x = jax.tree.map(
+            lambda t: (jax.lax.pmean(t, axis_name)
+                       if t.dtype in (jnp.float32, jnp.bfloat16) else t), x)
+        if bf16_sync:
+            x = jax.tree.map(
+                lambda t: (t.astype(jnp.float32)
+                           if t.dtype == jnp.bfloat16 else t), x)
+        return x
+
+    last_loss = None
+    for _ in range(epochs):
+        key, ek = jrandom.split(key)
+        perm = jrandom.permutation(ek, total)
+        idx = perm.reshape(-1, minibatch)
+        n_mb = idx.shape[0]
+        n_full, rem = divmod(n_mb, sync_k)
+        chunk_means = []
+
+        if n_full > 0:
+            idx_c = idx[:n_full * sync_k].reshape(n_full, sync_k, minibatch)
+
+            def run_chunk(carry, idx_k):
+                """sync_k 个本地 minibatch + 一次全量同步（scan 内嵌套 scan，
+                同步在 chunk 边界执行 —— 不依赖 cond 内的 collective）。"""
+                (params, opt_state), losses = jax.lax.scan(
+                    local_step, carry, idx_k)
+                params = _sync(params)
+                if sync_state:
+                    opt_state = _sync(opt_state)
+                return (params, opt_state), jnp.mean(losses)
+
+            (params, opt_state), cl = jax.lax.scan(
+                run_chunk, (params, opt_state), idx_c)
+            chunk_means.append(cl)
+        if rem > 0:
+            # 末尾不足 sync_k 个的余段：本地更新完也同步一次
+            (params, opt_state), losses = jax.lax.scan(
+                local_step, (params, opt_state), idx[n_full * sync_k:])
+            params = _sync(params)
+            if sync_state:
+                opt_state = _sync(opt_state)
+            chunk_means.append(jnp.mean(losses)[None])
+        last_loss = jnp.mean(jnp.concatenate(chunk_means))
+    if return_loss:
+        return params, opt_state, last_loss
+    return params, opt_state
+
+
+def ppo_update_gradsync(params, opt, opt_state, arch, batch, key, minibatch,
+                        clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
+                        sync_k=128, bf16_sync=False, return_loss=False):
+    """梯度累积 + 周期同步（大 batch 实现）——"平均梯度之和"线性性的精确版：
+
+    每 sync_k 个 minibatch 拼成一个 sync_k× 大 minibatch，对其做一次
+    value_and_grad（∇(1/K Σᵢ lossᵢ) = (1/K) Σᵢ ∇lossᵢ，与"冻结参数逐
+    个累加梯度"数学同义）、一次 pmean 平均梯度、一次 opt.update。参数
+    任何时刻逐位一致（更新只发生在同步点、从同一平均梯度出发），零
+    漂移、零本地 Adam 分歧。代价：每迭代只有 n_mb/sync_k 次更新
+    （大 batch 效应）——K=128 → 8 次/迭代，K=256 → 4 次/迭代。
+
+    大 batch 实现比"scan 内逐 minibatch 累加梯度"快：后者在 DCU 上
+    实测比 baseline 慢 2.4×（小 GEMM + 累加链编译差），前者单次大
+    前向/反向（大 GEMM 效率更高）。激活内存随 batch 线性增长（64GB
+    卡实测 131K 样本 OOM 78GB），故 big=sync_k×minibatch 超过
+    GRAD_MAX_SAMPLES=65536 时直接报错：grad 模式限 K ≤ ~32-64
+    （视 minibatch），更大 K 请用 param 模式（无内存限制）。
+
+    sync_k=1 时与 ppo_update 逐位一致（big=minibatch，结构相同），
+    本函数是现状无损路径的严格超集。
+    """
+    obs, state, acts, old_lps, advs, rets, masks = batch
+    total = obs.shape[0] * obs.shape[1]
+    obs_q = (obs.dtype == jnp.uint8)
+    obs_f = obs.reshape(total, *obs.shape[2:])
+    st_f = state.reshape(total, -1)
+    acts_f = acts.reshape(total, -1)
+    old_f = old_lps.reshape(-1)
+    adv_f = advs.reshape(-1)
+    ret_f = rets.reshape(-1)
+    mm_f, bm_f = masks
+    mm_f = mm_f.reshape(total, -1)
+    bm_f = bm_f.reshape(total, -1)
+    big = sync_k * minibatch
+    # 大 batch 激活内存随样本数线性增长（64GB DCU 实测 131K 样本 OOM 78GB、
+    # 32K 样本 ~20GB）。拆 sub-batch 无济于事（scan 累加版慢 2.4×、Python
+    # 展开版不共享缓冲区），所以直接护栏：超限给清晰报错，大 K 请用 param
+    # 模式（无此限制）。
+    GRAD_MAX_SAMPLES = 65536
+    if big > GRAD_MAX_SAMPLES:
+        raise SystemExit(
+            f"grad 模式内存护栏：sync_k×minibatch = {big} 样本 > "
+            f"{GRAD_MAX_SAMPLES}（64GB DCU 实测 131K 样本 OOM）。"
+            f"请减小 --lsgd-k（本配置 K ≤ {GRAD_MAX_SAMPLES // minibatch}）"
+            f"或改用 param 模式（--lsgd-mode param，无此限制）")
+
+    def update_big(carry, mb):
+        """一个 sync_k×minibatch 的大批：单次 value_and_grad → pmean → update。
+        mb 是 (big,) 的行下标（scan 内静态长度切片）。"""
+        params, opt_state = carry
+        o, a, ol, ad, rt, mm, bm = (obs_f[mb], acts_f[mb], old_f[mb],
+                                    adv_f[mb], ret_f[mb], mm_f[mb], bm_f[mb])
+        st = st_f[mb]
+        if obs_q:
+            o = o.astype(jnp.float32) / 255.0
+            st = st.astype(jnp.float32) / 255.0
+        loss_val, g = jax.value_and_grad(
+            lambda p: _ppo_loss(p, arch, o, st, mm, bm, a, ol, ad, rt,
+                                clip_eps, vf_coef, ent_coef))(params)
+        if axis_name is not None:
+            if bf16_sync:
+                g = jax.tree.map(
+                    lambda t: (t.astype(jnp.bfloat16)
+                               if t.dtype == jnp.float32 else t), g)
+            g = jax.tree.map(
+                lambda t: (jax.lax.pmean(t, axis_name)
+                           if t.dtype in (jnp.float32, jnp.bfloat16) else t),
+                g)
+            if bf16_sync:
+                g = jax.tree.map(
+                    lambda t: (t.astype(jnp.float32)
+                               if t.dtype == jnp.bfloat16 else t), g)
+        updates, opt_state = opt.update(g, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        return (params, opt_state), loss_val
+
+    last_loss = None
+    for _ in range(epochs):
+        key, ek = jrandom.split(key)
+        perm = jrandom.permutation(ek, total)
+        idx = perm.reshape(-1, minibatch)      # (n_mb, minibatch)
+        n_mb = idx.shape[0]
+        n_full, rem = divmod(n_mb, sync_k)
+        chunk_means = []
+
+        if n_full > 0:
+            idx_big = idx[:n_full * sync_k].reshape(n_full, big)
+            (params, opt_state), cl = jax.lax.scan(
+                update_big, (params, opt_state), idx_big)
+            chunk_means.append(cl)
+        if rem > 0:
+            # 末尾不足 sync_k 个 minibatch：剩余样本拼成一个大批更新一次
+            idx_rem = idx[n_full * sync_k:].reshape(-1)
+            (params, opt_state), lv = update_big((params, opt_state), idx_rem)
+            chunk_means.append(lv[None])
+        last_loss = jnp.mean(jnp.concatenate(chunk_means))
+    if return_loss:
+        return params, opt_state, last_loss
     return params, opt_state
 
 
@@ -315,6 +746,16 @@ def load_params(path: str):
 # ---------------- one_iter（可复用，probe 直接测训练主循环） ----------------
 
 
+def _lsgd_updater(args):
+    """按 --lsgd-k/--lsgd-mode 选有损同步函数；--lsgd-k 0 = 返回 None
+    （现状无损路径：每个 minibatch pmean 梯度）。"""
+    if getattr(args, "lsgd_k", 0) <= 0:
+        return None
+    if getattr(args, "lsgd_mode", "param") == "grad":
+        return ppo_update_gradsync
+    return ppo_update_lsgd
+
+
 def build_one_iter(params, opt, opt_state, states, key, args):
     """返回 jitted one_iter：(params, opt_state, states, key) -> 同形四元组。
 
@@ -324,26 +765,98 @@ def build_one_iter(params, opt, opt_state, states, key, args):
     steps = args.num_steps
 
     def one_iter(params, opt_state, states, key):
-        states, batch = collect_rollout(params, args.arch, states, key, steps,
-                                        getattr(args, "no_mask", False))
-        obs, acts, lps, vals, rew, done, masks = batch
-        # bootstrap：rollout 尾部状态价值
+        states, batch, _nov, _kills = collect_rollout(
+            params, args.arch, states, key, steps,
+            getattr(args, "no_mask", False),
+            getattr(args, "obs_quant", False),
+            getattr(args, "checkpoint", False))
+        obs, state, acts, lps, vals, rew, done, masks = batch
+        # bootstrap：rollout 尾部状态价值（全局状态向量同步传入）
         fobs = both_perspectives(states)
         fmasks = both_masks(states)
+        fstate = both_states(states)
         fkey = jrandom.split(key)[0]
-        _, _, fval = sample_actions(params, args.arch, fobs, fmasks, fkey)
+        _, _, fval = sample_actions(params, args.arch, fobs, fmasks, fkey,
+                                    state=fstate)
         next_val = jnp.concatenate([vals[1:], fval[None]], axis=0)
         advs = compute_gae(rew, vals, next_val, done, args.gamma, args.lam)
         rets = advs + vals
-        params, opt_state = ppo_update(
-            params, opt, opt_state, args.arch,
-            (obs, acts, lps, advs, rets, masks),
-            key, args.minibatch, args.clip_eps, args.vf_coef, args.ent_coef,
-            args.epochs)
+        upd = _lsgd_updater(args)
+        if upd is None:
+            params, opt_state = ppo_update(
+                params, opt, opt_state, args.arch,
+                (obs, state, acts, lps, advs, rets, masks),
+                key, args.minibatch, args.clip_eps, args.vf_coef,
+                args.ent_coef, args.epochs)
+        else:
+            kw = dict(sync_k=args.lsgd_k,
+                      bf16_sync=getattr(args, "lsgd_bf16", False))
+            if upd is ppo_update_lsgd:
+                kw["sync_state"] = getattr(args, "lsgd_sync_state", False)
+            params, opt_state = upd(
+                params, opt, opt_state, args.arch,
+                (obs, state, acts, lps, advs, rets, masks),
+                key, args.minibatch, args.clip_eps, args.vf_coef,
+                args.ent_coef, args.epochs, **kw)
         key = jrandom.split(key)[0]
         return params, opt_state, states, key
 
     return jax.jit(one_iter)
+
+
+def build_dp_one_iter(params, opt, opt_state, states, key, args, n_dev):
+    """数据并行（DP）one_iter：每卡 envs 切片独立 collect，更新时梯度
+    pmean allreduce。n_dev 为卡数，states/key 首维须为 n_dev（pmap 切片）。
+
+    与 build_one_iter 逐位一致的条件：
+      - 每卡 minibatch = args.minibatch // n_dev（等效全局 minibatch 不变
+        → 梯度步数不变，样本不重叠）
+      - states 按卡切片后每卡独立 rollout（collect 侧零通信）
+      - 梯度 pmean 后每卡应用相同更新 → 参数逐卡一致
+    n_dev=1 时退化为 build_one_iter 语义（pmap 单设备）。
+    """
+    steps = args.num_steps
+    mb_local = args.minibatch // n_dev
+    assert mb_local >= 1, "minibatch 必须 >= 卡数"
+
+    def one_iter_shard(params, opt_state, states, key):
+        states, batch, _nov, _kills = collect_rollout(
+            params, args.arch, states, key, steps,
+            getattr(args, "no_mask", False),
+            getattr(args, "obs_quant", False),
+            getattr(args, "checkpoint", False))
+        obs, state, acts, lps, vals, rew, done, masks = batch
+        fobs = both_perspectives(states)
+        fmasks = both_masks(states)
+        fstate = both_states(states)
+        fkey = jrandom.split(key)[0]
+        _, _, fval = sample_actions(params, args.arch, fobs, fmasks, fkey,
+                                    state=fstate)
+        next_val = jnp.concatenate([vals[1:], fval[None]], axis=0)
+        advs = compute_gae(rew, vals, next_val, done, args.gamma, args.lam)
+        rets = advs + vals
+        upd = _lsgd_updater(args)
+        if upd is None:
+            params, opt_state = ppo_update(
+                params, opt, opt_state, args.arch,
+                (obs, state, acts, lps, advs, rets, masks),
+                key, mb_local, args.clip_eps, args.vf_coef, args.ent_coef,
+                args.epochs, axis_name="dev")
+        else:
+            kw = dict(sync_k=args.lsgd_k,
+                      bf16_sync=getattr(args, "lsgd_bf16", False))
+            if upd is ppo_update_lsgd:
+                kw["sync_state"] = getattr(args, "lsgd_sync_state", False)
+            params, opt_state = upd(
+                params, opt, opt_state, args.arch,
+                (obs, state, acts, lps, advs, rets, masks),
+                key, mb_local, args.clip_eps, args.vf_coef, args.ent_coef,
+                args.epochs, axis_name="dev", **kw)
+        key = jrandom.split(key)[0]
+        return params, opt_state, states, key
+
+    return jax.pmap(one_iter_shard, axis_name="dev",
+                    in_axes=(None, None, 0, 0))
 
 
 # ---------------- main ----------------
@@ -363,7 +876,8 @@ def main():
     ap.add_argument("--embed", type=int, default=192)
     ap.add_argument("--depth", type=int, default=4)
     ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--gamma", type=float, default=0.99)
+    ap.add_argument("--gamma", type=float, default=0.995,
+                    help="生产对齐：一局最长 1800 tick，折扣要够长才看得到终局奖励")
     ap.add_argument("--lam", type=float, default=0.95)
     ap.add_argument("--clip-eps", type=float, default=0.2)
     ap.add_argument("--vf-coef", type=float, default=0.5)
@@ -380,6 +894,34 @@ def main():
                     help="蒸馏后继续自对弈 PPO 微调（不传则蒸馏完即停）")
     ap.add_argument("--no-mask", action="store_true",
                     help="性能 A/B：mask 全放开（行为=无 mask 旧版）")
+    ap.add_argument("--obs-quant", action="store_true",
+                    help="obs buffer 存 uint8（×255 量化，反量化进网络）："
+                         "45GB→11GB，8192×512 OOM 的解法（精度 1/255 优于 "
+                         "bf16 尾数，低精度 obs 通道无损）")
+    ap.add_argument("--checkpoint", action="store_true",
+                    help="scan body 用 jax.checkpoint：反向重算中间量，"
+                         "配合 --obs-quant 让 8192×512 放下（省 scan "
+                         "中间量 44.8GB），代价是 collect 变慢（重算）")
+    # ---- Local SGD（有损同步，跨机降通信）----
+    ap.add_argument("--lsgd-k", type=int, default=0,
+                    help="Local SGD 同步周期：每 K 个 minibatch 同步一次参数"
+                         "（0=现状：每个 minibatch pmean 梯度，逐位一致）。"
+                         ">0 时 minibatch 循环内零通信、每 K 步 pmean 参数，"
+                         "通信量降到 ~1/K。20 卡（10 机×2 卡）下 K=256 ≈ "
+                         "4 次同步/迭代 ≈ 0.5-1.5s，K=128 ≈ 8 次 ≈ 1-3s")
+    ap.add_argument("--lsgd-mode", default="param",
+                    choices=["param", "grad"],
+                    help="Local SGD 同步对象：param=每 K 步平均参数（保持 "
+                         "1024 次更新/迭代，代价是 K 步本地漂移）；grad=冻结"
+                         "参数上累加 K 个梯度、一次平均梯度同步、一次更新"
+                         "（零漂移、参数始终逐位一致，代价是只有 1024/K 次"
+                         "更新/迭代；K=1 时与现状逐位一致）")
+    ap.add_argument("--lsgd-bf16", action="store_true",
+                    help="Local SGD 同步时用 bf16 半精度传输（流量减半，"
+                         "尾数损失可忽略）")
+    ap.add_argument("--lsgd-sync-state", action="store_true",
+                    help="Local SGD 同步时连 Adam 动量/方差一起平均"
+                         "（防本地漂移，流量×3）")
     # ---- checkpoint ----
     ap.add_argument("--load", default=None,
                     help="初始权重 pickle（蒸馏出的 student / 续跑）")
