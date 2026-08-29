@@ -1,8 +1,8 @@
 {
   "models": [
     {
-      "name": "params_it00000057_ema",
-      "display_name": "🔥 Stage0_Pass (704M · 98%胜率)",
+      "name": "params_it00000057",
+      "display_name": "⚡ Stage0_Real_RAW (717M · 真实训练权重)",
       "arch": "transformer",
       "obs_shape": [
         14,
@@ -14,7 +14,25 @@
       "depth": 4,
       "n_players": 2,
       "it": 57,
-      "global_step": 478150656,
+      "global_step": 717225984,
+      "source": "params_it00000057.pkl",
+      "generated_at": "2026-08-29 14:43 UTC"
+    },
+    {
+      "name": "params_it00000057_ema",
+      "display_name": "⚠️ Stage0_EMA (未热身·94.5%随机)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 57,
+      "global_step": 717225984,
       "source": "params_it00000057_ema.pkl",
       "generated_at": "2026-08-29 14:13 UTC"
     },
