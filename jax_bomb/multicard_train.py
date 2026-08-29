@@ -597,6 +597,9 @@ def main():
         # ---- 课程自适应胜率门禁提档 (Dynamic Winrate Gating) ----
         if curriculum is not None and cur_stage < len(curriculum['stages']) - 1:
             iters_in_stage = i - stage_start_iter
+            gate_thresh = (curriculum.get('winrate_gates', [])[cur_stage]
+                           if curriculum and 'winrate_gates' in curriculum and cur_stage < len(curriculum['winrate_gates'])
+                           else args.curriculum_winrate_gate)
 
             winrate_passed = False
             wr = 0.0
@@ -610,11 +613,11 @@ def main():
                 wr = ew_sum / max(total_games, 1)
                 print(f"[{rank}] [Curriculum Gate] Stage {cur_stage} 评估: "
                       f"vs StageBaseline win={ew_sum} lose={el_sum} (总完局={total_games}) winrate={wr:.1%} "
-                      f"(晋级门禁={args.curriculum_winrate_gate:.1%}, 已训={iters_in_stage} iters)", flush=True)
+                      f"(晋级门禁={gate_thresh:.1%}, 已训={iters_in_stage} iters)", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                                     f"[Gate] Stage {cur_stage} vs Baseline "
                                     f"winrate={wr:.1%} ({ew_sum}/{total_games})"])
-                if total_games >= 30 and wr >= args.curriculum_winrate_gate:
+                if total_games >= 30 and wr >= gate_thresh:
                     winrate_passed = True
 
             # 步数兜底：仅在未开启评估时使用全局步数比例；若开启评估，则仅在本阶段超长未晋级时触发超时兜底
@@ -630,7 +633,7 @@ def main():
                 _set_stage(cur_stage)
                 stage_start_iter = i
                 stage_baseline_params = cur[0]  # 锁定当前学成的新模型作为下一阶段 Baseline
-                reason = f"胜率达标 (winrate={wr:.1%} >= {args.curriculum_winrate_gate:.1%})" if winrate_passed else f"阶段超时兜底 (iters_in_stage={iters_in_stage})"
+                reason = f"胜率达标 (winrate={wr:.1%} >= {gate_thresh:.1%})" if winrate_passed else f"阶段超时兜底 (iters_in_stage={iters_in_stage})"
                 print(f"[{rank}] 🏆 课程晋级 → Stage {cur_stage}（原因: {reason}，"
                       f"{len(curriculum['stages'][cur_stage])} 张图）", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
