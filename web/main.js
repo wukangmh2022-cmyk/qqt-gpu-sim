@@ -1087,9 +1087,12 @@
       },
       actions: [],
       snapshots: [],
-      // 完整逻辑帧很重（每帧复制二十多个地图数组），只在明确开启录制时保存。
-      // 默认关闭必须保持零堆增长；普通 JSON 重放仍使用 actions + 周期 snapshots。
-      frames: elRecClip.checked ? [sim.snapshotReplay()] : [],
+      // 状态帧恒录（实测 ~7.6KB/帧 JSON、56µs/tick 含序列化，开销可忽略）：
+      // 「保存视频」永远有米，不再依赖剪片开关。
+      frames: [sim.snapshotReplay()],
+      // 60Hz 帧级位置轨迹 [t, p0y, p0x, p1y, p1x] —— 人类的移动发生在渲染帧
+      // （frameMove 直接改 sim.pos），10Hz step 动作记录不到，只体现在这里。
+      framePos: [],
     };
     clipFrames = [];
     lastClipCap = 0;
@@ -1211,20 +1214,19 @@
     const every = elModelLowfreq.checked ? 2 : 1;
     for (const m of modelCache.values()) if (m.inferEvery) m.inferEvery = every;
   });
-  // 「录制动图」开关：勾选启动动图采样+视频录制, 取消停止(零开销)
+  // 「录制剪片」开关：只管 GIF/剪片采样（canvas 20fps 环形缓冲 + MediaRecorder）。
+  // 状态帧与 60Hz 轨迹已恒录，保存视频无需此开关。
   elRecClip.addEventListener('change', () => {
     if (elRecClip.checked) {
       if (!mediaRec) startVideoRecorder();
       clipFrames = [];
-      if (replay && sim) replay.frames = [sim.snapshotReplay()];
-      recMsg('录制动图：已开启（保存 GIF/视频需此开关）');
+      recMsg('录制剪片：已开启（保存 GIF 用；保存视频无需此开关）');
     } else {
       stopVideoRecorder().finally(() => {
         mediaRec = null; mediaMime = ''; mediaChunks = [];
       });
       clipFrames = [];
-      if (replay) replay.frames = [];          // 立即释放完整状态帧，避免后续 GC 停顿
-      recMsg('录制动图：已关闭（零开销）');
+      recMsg('录制剪片：已关闭（零开销）');
     }
   });
   elEnemyAi.addEventListener('change', applyModel);   // 换敌人 AI → 应用并重开
@@ -1283,6 +1285,7 @@
       actions: replay.actions.map((a) => a.slice()),
       snapshots: replay.snapshots.map((s) => Object.assign({}, s)),
       frames: replay.frames.map((f) => f),
+      framePos: replay.framePos.map((f) => f.slice()),
     };
   }
 
@@ -1311,7 +1314,7 @@
 
   elSaveGif.addEventListener('click', () => {
     if (!clipFrames.length) {
-      recMsg('未录制画面：请先勾选「录制动图」再开局');
+      recMsg('未录制画面：请先勾选「录制剪片/GIF 采样」再开局');
       return;
     }
     if (!replay || !replay.actions.length) { recMsg('还没有可录的画面 —— 先开始一局再保存'); return; }
@@ -1405,7 +1408,11 @@
 
     const exportSim = new Sim(doc.meta.seed);
     exportSim.reset(replayLevel, { oldMode: !!doc.meta.oldMode });
-    const stream = canvas.captureStream(Number(doc.meta.tickHz || CFG.tickHz));
+    // 60Hz 帧级位置轨迹：新版录像恒录。有轨迹 → 60fps 平滑重放；
+    // 旧录像（无 framePos）退回每 tick 一帧。
+    const tickHz = Number(doc.meta.tickHz || CFG.tickHz);
+    const framePos = Array.isArray(doc.framePos) ? doc.framePos : [];
+    const stream = canvas.captureStream(framePos.length ? 60 : tickHz);
     const chunks = [];
     const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 1200000 });
     const stopped = new Promise((resolve, reject) => {
@@ -1413,7 +1420,7 @@
       recorder.onerror = (e) => reject(e.error || new Error('视频编码失败'));
       recorder.onstop = resolve;
     });
-    const frameDelay = 1000 / Number(doc.meta.tickHz || CFG.tickHz);
+    const frameDelay = 1000 / tickHz;    // 每 tick 真实时长（在其 n 个子帧内均分）
     replayExporting = true;
     running = false;
     sim = exportSim;
@@ -1427,28 +1434,57 @@
     try {
       elBanner.innerHTML = '⏳ 正在重放录制中…<span class="tip">按完整状态帧逐帧渲染，请勿切换标签页</span>';
       recorder.start();
+      let subPtr = 0;
+      let prevP0 = [exportSim.pos[0], exportSim.pos[1]];
+      let prevP1 = [exportSim.pos[2], exportSim.pos[3]];
       for (const frame of doc.frames) {
         exportSim.restoreReplay(frame);
-        prevPos.set(exportSim.pos); curPos.set(exportSim.pos);
-        // 快照不含 sprite 状态：朝向/行走动画按本帧与上一帧的位移推断，
-        // 否则导出的视频角色锁朝向、腿部静止。
-        for (let pid = 0; pid < 2; pid++) {
-          const dy = exportSim.pos[pid * 2] - lastPos[pid * 2];
-          const dx = exportSim.pos[pid * 2 + 1] - lastPos[pid * 2 + 1];
-          animMoving[pid] = Math.abs(dy) > 1e-6 || Math.abs(dx) > 1e-6;
-          if (animMoving[pid]) {
-            if (Math.abs(dy) >= Math.abs(dx)) face[pid] = dy < 0 ? MOVE_UP : MOVE_DOWN;
-            else face[pid] = dx < 0 ? MOVE_LEFT : MOVE_RIGHT;
-          }
+        // 该 tick 的 60Hz 子帧（人类帧级移动只记录在 framePos；旧录像没有）
+        const subs = [];
+        while (subPtr < framePos.length && framePos[subPtr][0] <= frame.t) {
+          if (framePos[subPtr][0] === frame.t) subs.push(framePos[subPtr]);
+          subPtr++;
         }
-        lastPos.set(exportSim.pos);
-        replayAnim = { moving: animMoving };
+        const n = Math.min(Math.max(subs.length, 1), 15);
+        const p0HasPath = subs.length > 1 &&
+          subs.some((s) => s[1] !== subs[0][1] || s[2] !== subs[0][2]);
+        // 每 tick 一次的火光/危险图状态
         dangerCache = exportSim.dangerMap();
         explosion = frame.covered ? new Uint8Array(frame.covered) : null;
         explosionTrig = frame.triggered ? new Uint8Array(frame.triggered) : null;
         explosionT = performance.now();
-        render(performance.now());
-        await new Promise((resolve) => setTimeout(resolve, Math.max(0, frameDelay)));
+        // 每 tick 的真实时长在 n 个子帧内均分 → 视频时长与对局一致
+        for (let i = 0; i < n; i++) {
+          const a01 = (i + 1) / n;
+          // P0：有 60Hz 轨迹用记录值（帧级转向/滑移的真实路径）；
+          // 静止或旧录像按 tick 间线性插值。P1 恒按 tick 间插值。
+          if (p0HasPath) {
+            exportSim.pos[0] = subs[i][1]; exportSim.pos[1] = subs[i][2];
+          } else {
+            exportSim.pos[0] = prevP0[0] + (frame.pos[0] - prevP0[0]) * a01;
+            exportSim.pos[1] = prevP0[1] + (frame.pos[1] - prevP0[1]) * a01;
+          }
+          exportSim.pos[2] = prevP1[0] + (frame.pos[2] - prevP1[0]) * a01;
+          exportSim.pos[3] = prevP1[1] + (frame.pos[3] - prevP1[1]) * a01;
+          prevPos.set(exportSim.pos); curPos.set(exportSim.pos);
+          // 快照不含 sprite 状态：朝向/行走动画按本渲染帧与上一帧的位移推断，
+          // 否则导出的视频角色锁朝向、腿部静止。
+          for (let pid = 0; pid < 2; pid++) {
+            const dy = exportSim.pos[pid * 2] - lastPos[pid * 2];
+            const dx = exportSim.pos[pid * 2 + 1] - lastPos[pid * 2 + 1];
+            animMoving[pid] = Math.abs(dy) > 1e-6 || Math.abs(dx) > 1e-6;
+            if (animMoving[pid]) {
+              if (Math.abs(dy) >= Math.abs(dx)) face[pid] = dy < 0 ? MOVE_UP : MOVE_DOWN;
+              else face[pid] = dx < 0 ? MOVE_LEFT : MOVE_RIGHT;
+            }
+          }
+          lastPos.set(exportSim.pos);
+          replayAnim = { moving: animMoving };
+          render(performance.now());
+          await new Promise((resolve) => setTimeout(resolve, Math.max(0, frameDelay / n)));
+        }
+        prevP0 = [frame.pos[0], frame.pos[1]];
+        prevP1 = [frame.pos[2], frame.pos[3]];
       }
       recorder.stop();
       await stopped;
@@ -1561,7 +1597,7 @@
     const snapshotMs = performance.now() - snapshotT0;
     const stepT0 = performance.now();
     const info = sim.step([a0, a1]);
-    if (replay && elRecClip.checked) replay.frames.push(sim.snapshotReplay(info));
+    if (replay) replay.frames.push(sim.snapshotReplay(info));
     curPos.set(sim.pos);
     const stepMs = performance.now() - stepT0;
     const eventT0 = performance.now();
@@ -2260,6 +2296,11 @@
       }
     }
     prof.inputLast = performance.now() - inputT0;
+    // 60Hz 帧级位置轨迹（不管对局是谁）：人类/观战下角色在渲染帧间的真实
+    // 位置只存在于这里，导出视频据此做 60fps 平滑重放。
+    if (replay && running && sim && !sim.done && !replayExporting) {
+      replay.framePos.push([sim.t, sim.pos[0], sim.pos[1], sim.pos[2], sim.pos[3]]);
+    }
     const frameDt = now - prevFrame;          // 真实帧间隔(ms, rAF 时间戳)
     prevFrame = now;
     if (!fpsT0) fpsT0 = now;
