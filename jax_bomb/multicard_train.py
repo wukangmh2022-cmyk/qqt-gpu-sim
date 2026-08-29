@@ -196,16 +196,16 @@ def main():
                          "（防本地漂移，流量×3）")
     ap.add_argument("--tolerate-inconsistent", action="store_true",
                     help="一致性校验失败时继续跑（诊断用），默认退出")
-    ap.add_argument("--ckpt-dir", default=os.environ.get("CKPT_DIR", None),
+    ap.add_argument("--ckpt-dir", default=os.environ.get("CKPT_DIR", "ckpt"),
                     help="检查点目录；不设=不存盘（benchmark 模式）。"
                          "真实训练设 ckpt/（自动接续最新检查点）")
     ap.add_argument("--ckpt-every", type=int,
                     default=int(os.environ.get("CKPT_EVERY", "60")),
                     help="周期存盘间隔（分钟）；0=仅在结束/收到信号时存")
     ap.add_argument("--ckpt-local-dir",
-                    default=os.environ.get("CKPT_LOCAL_DIR", None),
+                    default=os.environ.get("CKPT_LOCAL_DIR", "ckpt"),
                     help="rank0 轻量参数快照目录（供拉回本地/评估，params 仅 "
-                         "~25MB pickle，不拖速度）。不设=不存")
+                         "~25MB pickle，不拖速度）。")
     ap.add_argument("--ckpt-local-every", type=int,
                     default=int(os.environ.get("CKPT_LOCAL_EVERY", "30")),
                     help="参数快照间隔（分钟）；0=仅在结束/信号时存")
@@ -765,6 +765,20 @@ def main():
     ])
     if not ok and not args.tolerate_inconsistent:
         raise SystemExit("跨卡参数不一致 —— RCCL/pmean 异常，训练结果无效")
+
+    # ---- rank0 保存最终训练模型与 EMA 快照 ----
+    if rank == 0:
+        save_dir = args.ckpt_local_dir or args.ckpt_dir or "ckpt"
+        os.makedirs(save_dir, exist_ok=True)
+        final_pkl = os.path.join(save_dir, f"params_it{it_end:08d}.pkl")
+        final_ema_pkl = os.path.join(save_dir, f"params_it{it_end:08d}_ema.pkl")
+        cur_p_np = jax.tree.map(np.asarray, params)
+        with open(final_pkl, "wb") as f:
+            pickle.dump(cur_p_np, f)
+        with open(final_ema_pkl, "wb") as f:
+            pickle.dump(ema_params, f)
+        print(f"[{rank}] 💾 训练完成！已保存最终模型 -> {final_pkl} 以及 EMA 模型 -> {final_ema_pkl}", flush=True)
+        write_result(rank, [f"[{ts}] Saved final models: {final_pkl}, {final_ema_pkl}"])
 
 
 if __name__ == "__main__":
