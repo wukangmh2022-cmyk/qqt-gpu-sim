@@ -295,13 +295,8 @@ def compute_gae(rew, val, next_val, done, gamma, lam):
 
 def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
                clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
-               return_loss=False, adv_top_frac=0.25):
-    """PPO 参数更新（Scheme 1: Critic 均匀无偏抽样 + Actor Top-Advantage 抽样 + 优势标准化）。
-
-    Critic: 在均匀无偏的随机采样样本上优化 HL-Gauss 价值预测，0 选择偏差，价值基线稳定无漂移；
-    Actor: 在 |Advantage| 排名前 adv_top_frac 的高信噪比决策帧上优化策略梯度，过滤冗余游走；
-    计算量严格保持在 128 次 Minibatch 梯度更新，SPS 恢复至最高吞吐。
-    """
+               return_loss=False, adv_top_frac=1.0):
+    """标准全样本 PPO 参数更新。"""
     obs, state, acts, old_lps, advs, rets, masks = batch
     total = obs.shape[0] * obs.shape[1]
     adv_f = advs.reshape(-1)
@@ -310,17 +305,6 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
     adv_mean = jnp.mean(adv_f)
     adv_std = jnp.std(adv_f)
     adv_norm = (adv_f - adv_mean) / (adv_std + 1e-8)
-
-    mb_half = max(minibatch // 2, 1)
-
-    # 提取 Actor Top-Advantage 索引
-    if 0.0 < adv_top_frac < 1.0:
-        n_keep = int(total * adv_top_frac)
-        n_keep = max((n_keep // mb_half) * mb_half, mb_half)
-        _, actor_idx = jax.lax.top_k(jnp.abs(adv_norm), n_keep)
-    else:
-        actor_idx = jnp.arange(total)
-        n_keep = (total // mb_half) * mb_half
 
     obs_q = (obs.dtype == jnp.uint8)
     obs_f = obs.reshape(total, *obs.shape[2:])
@@ -332,19 +316,9 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
     mm_f = mm_f.reshape(total, -1)
     bm_f = bm_f.reshape(total, -1)
 
-    n_mb = n_keep // mb_half
-
     def one_epoch(params, opt_state, key):
-        ka, kc = jrandom.split(key)
-        perm_a = jrandom.permutation(ka, n_keep)
-        idx_a = actor_idx[perm_a].reshape(n_mb, mb_half)
-
-        # Critic 均匀无偏抽样（覆盖平静与激烈全分布，0 选择偏差）
-        critic_perm = jrandom.permutation(kc, total)[:n_keep]
-        idx_c = critic_perm.reshape(n_mb, mb_half)
-
-        # 拼成 (n_mb, minibatch)：前半段给 Actor，后半段给 Critic
-        idx = jnp.concatenate([idx_a, idx_c], axis=1)
+        perm = jrandom.permutation(key, total)
+        idx = perm.reshape(-1, minibatch)
 
         def body(carry, mb):
             params, opt_state = carry
@@ -380,38 +354,31 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
 
 def _ppo_loss(p, arch, o, st, mm, bm, a, ol, ad, rt, clip_eps, vf_coef,
               ent_coef):
-    """PPO loss：前半段优化 Actor（Top-Advantage），后半段优化 Critic（均匀无偏抽样）。"""
+    """标准 PPO loss（minibatch 全样本同时优化 Actor 和 Critic）。"""
     mv, bm_, v_scalar, v_logits = net_forward(p, arch, o, st)
+    mv = jnp.where(mm, mv, jnp.full_like(mv, -jnp.inf))
+    bm_ = jnp.where(bm, bm_, jnp.full_like(bm_, -jnp.inf))
+    lsm = jax.nn.log_softmax(mv)
+    lsb = jax.nn.log_softmax(bm_)
     n = o.shape[0]
-    nh = n // 2
-
-    # --- 1. Actor (前一半样本：来自 Top-Advantage 高信噪比决策帧) ---
-    mv_a = jnp.where(mm[:nh], mv[:nh], jnp.full_like(mv[:nh], -jnp.inf))
-    bm_a = jnp.where(bm[:nh], bm_[:nh], jnp.full_like(bm_[:nh], -jnp.inf))
-    lsm_a = jax.nn.log_softmax(mv_a)
-    lsb_a = jax.nn.log_softmax(bm_a)
-    lp_a = (lsm_a[jnp.arange(nh), a[:nh, 0]]
-            + lsb_a[jnp.arange(nh), a[:nh, 1]])
-    ratio = jnp.exp(lp_a - ol[:nh])
-    pg1 = -ad[:nh] * ratio
-    pg2 = -ad[:nh] * jnp.clip(ratio, 1 - clip_eps, 1 + clip_eps)
+    lp = (lsm[jnp.arange(n), a[:, 0]] + lsb[jnp.arange(n), a[:, 1]])
+    ratio = jnp.exp(lp - ol)
+    pg1 = -ad * ratio
+    pg2 = -ad * jnp.clip(ratio, 1 - clip_eps, 1 + clip_eps)
     pol = jnp.maximum(pg1, pg2).mean()
-    pm = jnp.exp(lsm_a)
-    pb = jnp.exp(lsb_a)
-    ent = (-(pm * jnp.where(pm > 0, lsm_a, 0.0)).sum(-1).mean()
-           - (pb * jnp.where(pb > 0, lsb_a, 0.0)).sum(-1).mean())
-
-    # --- 2. Critic (后一半样本：来自全量状态无偏均匀抽样) ---
-    val_l = hl_gauss_value_loss(v_logits[nh:], rt[nh:])
-
+    pm = jnp.exp(lsm)
+    pb = jnp.exp(lsb)
+    ent = (-(pm * jnp.where(pm > 0, lsm, 0.0)).sum(-1).mean()
+           - (pb * jnp.where(pb > 0, lsb, 0.0)).sum(-1).mean())
+    val_l = hl_gauss_value_loss(v_logits, rt)
     return pol + vf_coef * val_l - ent_coef * ent
 
 
 def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
                     clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
                     sync_k=128, bf16_sync=False, sync_state=False,
-                    return_loss=False, adv_top_frac=0.25):
-    """Local SGD 版 PPO（Scheme 1: Critic 均匀无偏抽样 + Actor Top-Advantage + 优势归一化）。"""
+                    return_loss=False, adv_top_frac=1.0):
+    """Local SGD 版标准全样本 PPO。"""
     obs, state, acts, old_lps, advs, rets, masks = batch
     total = obs.shape[0] * obs.shape[1]
     adv_f = advs.reshape(-1)
@@ -420,17 +387,6 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
     adv_mean = jnp.mean(adv_f)
     adv_std = jnp.std(adv_f)
     adv_norm = (adv_f - adv_mean) / (adv_std + 1e-8)
-
-    mb_half = max(minibatch // 2, 1)
-
-    # 提取 Actor Top-Advantage 索引
-    if 0.0 < adv_top_frac < 1.0:
-        n_keep = int(total * adv_top_frac)
-        n_keep = max((n_keep // mb_half) * mb_half, mb_half)
-        _, actor_idx = jax.lax.top_k(jnp.abs(adv_norm), n_keep)
-    else:
-        actor_idx = jnp.arange(total)
-        n_keep = (total // mb_half) * mb_half
 
     obs_q = (obs.dtype == jnp.uint8)
     obs_f = obs.reshape(total, *obs.shape[2:])
@@ -441,8 +397,6 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
     mm_f, bm_f = masks
     mm_f = mm_f.reshape(total, -1)
     bm_f = bm_f.reshape(total, -1)
-
-    n_mb = n_keep // mb_half
 
     def local_step(carry, mb):
         params, opt_state = carry
@@ -462,9 +416,6 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
         return (params, opt_state), loss_val
 
     def _sync(x):
-        """pmean 全量同步（可选 bf16 半精度传输）。axis_name=None 时 no-op。
-        bf16 只作用于 fp32 叶子；int 叶子（Adam 的 count）各副本本就相同，
-        直接透传（pmean 的 1/axis_size 缩放会把 int 变 float）。"""
         if axis_name is None:
             return x
         if bf16_sync:
@@ -493,7 +444,6 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
             idx_c = idx[:n_full * sync_k].reshape(n_full, sync_k, minibatch)
 
             def run_chunk(carry, idx_k):
-                """sync_k 个本地 minibatch + 一次全量同步。"""
                 (params, opt_state), losses = jax.lax.scan(
                     local_step, carry, idx_k)
                 params = _sync(params)
@@ -505,7 +455,6 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
                 run_chunk, (params, opt_state), idx_c)
             chunk_means.append(cl)
         if rem > 0:
-            # 末尾不足 sync_k 个的余段：本地更新完也同步一次
             (params, opt_state), losses = jax.lax.scan(
                 local_step, (params, opt_state), idx[n_full * sync_k:])
             params = _sync(params)
@@ -521,8 +470,8 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
 def ppo_update_gradsync(params, opt, opt_state, arch, batch, key, minibatch,
                         clip_eps, vf_coef, ent_coef, epochs, axis_name=None,
                         sync_k=128, bf16_sync=False, return_loss=False,
-                        adv_top_frac=0.25):
-    """梯度累积 + 周期同步（Scheme 1: Critic 均匀无偏抽样 + Actor Top-Advantage + 优势归一化）。"""
+                        adv_top_frac=1.0):
+    """梯度累积 + 周期同步标准全样本 PPO。"""
     obs, state, acts, old_lps, advs, rets, masks = batch
     total = obs.shape[0] * obs.shape[1]
     adv_f = advs.reshape(-1)
@@ -532,17 +481,6 @@ def ppo_update_gradsync(params, opt, opt_state, arch, batch, key, minibatch,
     adv_std = jnp.std(adv_f)
     adv_norm = (adv_f - adv_mean) / (adv_std + 1e-8)
 
-    mb_half = max(minibatch // 2, 1)
-
-    # 提取 Actor Top-Advantage 索引
-    if 0.0 < adv_top_frac < 1.0:
-        n_keep = int(total * adv_top_frac)
-        n_keep = max((n_keep // mb_half) * mb_half, mb_half)
-        _, actor_idx = jax.lax.top_k(jnp.abs(adv_norm), n_keep)
-    else:
-        actor_idx = jnp.arange(total)
-        n_keep = (total // mb_half) * mb_half
-
     obs_q = (obs.dtype == jnp.uint8)
     obs_f = obs.reshape(total, *obs.shape[2:])
     st_f = state.reshape(total, -1)
@@ -551,6 +489,7 @@ def ppo_update_gradsync(params, opt, opt_state, arch, batch, key, minibatch,
     ret_f = rets.reshape(-1)
     mm_f, bm_f = masks
     mm_f = mm_f.reshape(total, -1)
+    bm_f = bm_f.reshape(total, -1)
     bm_f = bm_f.reshape(total, -1)
     big = sync_k * minibatch
     GRAD_MAX_SAMPLES = 65536

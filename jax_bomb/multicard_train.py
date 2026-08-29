@@ -634,20 +634,18 @@ def main():
                 if total_games >= 30 and wr >= gate_thresh:
                     winrate_passed = True
 
-            # 步数兜底：仅在未开启评估时使用全局步数比例；若开启评估，则仅在本阶段超长未晋级时触发超时兜底
+            # 严格门禁：开启评估时，必须在真实对决中完局>=30局且胜率达到门禁阈值，杜绝任何超时放行
             step_fallback = False
             if eval_fn is None:
                 step_frac = curriculum_gs / max(1, steps_per_iter_g * args.iters)
                 step_fallback = (step_frac >= curriculum['thresholds'][cur_stage]) if cur_stage < len(curriculum['thresholds']) else False
-            elif iters_in_stage >= 100:
-                step_fallback = True
 
             if winrate_passed or step_fallback:
                 cur_stage += 1
                 _set_stage(cur_stage)
                 stage_start_iter = i
                 stage_baseline_params = cur[0]  # 锁定当前学成的新模型作为下一阶段 Baseline
-                reason = f"胜率达标 (winrate={wr:.1%} >= {gate_thresh:.1%})" if winrate_passed else f"阶段超时兜底 (iters_in_stage={iters_in_stage})"
+                reason = f"胜率达标 (winrate={wr:.1%} >= {gate_thresh:.1%}, 完局={total_games}局)" if winrate_passed else f"步数达标 (step_frac={step_frac:.1%})"
                 print(f"[{rank}] 🏆 课程晋级 → Stage {cur_stage}（原因: {reason}，"
                       f"{len(curriculum['stages'][cur_stage])} 张图）", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
