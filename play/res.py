@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import random
 
 import numpy as np
 import pygame
@@ -75,6 +76,9 @@ class Res:
         # 色块人形没有 → None。无敌光晕按它居中（罩住人物，不是贴脚底）。
         self.body_centers: list[list[tuple[int, int]]] | None = None
         self._fill_body_centers()
+        # 局外随机一次：本次对局的我方炸弹统一使用红或蓝 custom。
+        # run_game 在创建 Res 前已按 seed 初始化 random，回放仍可复现。
+        self.player_bomb_style = random.randrange(2)
         self.bomb_default = self._load_bomb_frames(
             cell, "bomb-default",
             ("bomb1_stand_0_0.png", "bomb1_stand_0_1.png",
@@ -260,6 +264,10 @@ class Res:
             except (FileNotFoundError, pygame.error):
                 img = pygame.Surface((40, 40), pygame.SRCALPHA)
                 pygame.draw.circle(img, (70, 150, 235), (20, 20), 13)
+            box = _content_box(img)
+            if box is not None:
+                x0, y0, x1, y1 = box
+                img = img.subsurface((x0, y0, x1 - x0 + 1, y1 - y0 + 1)).copy()
             w0, h0 = img.get_size()
             k = min(cell / max(1, w0), cell / max(1, h0))
             scaled = pygame.transform.smoothscale(

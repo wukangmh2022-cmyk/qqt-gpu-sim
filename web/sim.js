@@ -164,6 +164,8 @@
       // 消耗模拟 RNG（不改变对局轨迹与可复现性）。
       this.bombStyle = new Int8Array(N);
       this.bombStyle.fill(-1);
+      // 局外（reset 时）随机一次，整局所有我方炸弹共用红或蓝 custom。
+      this.playerBombStyle = (Math.imul(this.seed, 0x9e3779b1) >>> 0) & 1;
       this.blastLinger = new Int8Array(N);
       this.pos = new Float64Array(4);
       this.alive = [true, true];
@@ -264,6 +266,7 @@
         owner: arr(this.owner),
         bombBlast: arr(this.bombBlast),
         bombStyle: arr(this.bombStyle),
+        playerBombStyle: this.playerBombStyle,
         blastLinger: arr(this.blastLinger),
         pushable: arr(this.pushable),
         pushT: arr(this.pushT),
@@ -308,6 +311,7 @@
         this[name] = new old.constructor(frame[name]);
       }
       if (frame.bombStyle == null) this.bombStyle.fill(0);
+      if (frame.playerBombStyle != null) this.playerBombStyle = frame.playerBombStyle & 1;
       if (frame.blastLinger == null) this.blastLinger.fill(0);
       if (frame.crateType != null) this.crateType = new Int8Array(frame.crateType);
       this.pushBoxes = (frame.pushBoxes || []).map((b) => ({
@@ -485,10 +489,8 @@
           this.fuse[i] = CFG.fuse;
           this.owner[i] = p;
           this.bombBlast[i] = this.blastCap[p];
-          // 稳定伪随机：由种子、格子和放置 tick 决定，不推进 sim.rng。
-          const h = Math.imul(i ^ (this.seed >>> 0), 0x9e3779b1) ^
-            Math.imul(this.t + 1, 0x85ebca6b);
-          this.bombStyle[i] = p === 0 ? (h & 1) : -1;
+          // 我方样式在 reset 时已随机一次，整局固定；数组保留用于录像兼容。
+          this.bombStyle[i] = p === 0 ? this.playerBombStyle : -1;
           placed[p] = true;
         }
       }

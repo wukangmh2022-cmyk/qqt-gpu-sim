@@ -536,18 +536,37 @@
     elSkin.value = '海王子';
     const wudi = premulAlpha(await loadImage('assets/无敌.PNG'));
     // 炸弹序列帧：每组 4 帧，1s 均匀播放（每帧 0.25s），3s 引信循环三组。
-    // 敌方固定 default；我方在红/蓝 custom 中按放置格稳定伪随机选择。
+    // 敌方固定 default；我方在每局开始时从红/蓝 custom 随机选一组并固定。
     async function loadBombFrames(dir, names) {
       return Promise.all(names.map(async (name) => {
         const src = await loadImage(`assets/${dir}/${name}`);
         // 各帧原图尺寸略有差异，统一放入 CELL×CELL 画布并底边对齐，
-        // 避免动画过程中因透明留白造成炸弹上下跳动。
+        // 先裁掉透明边距，避免蓝色冰泡泡因原图留白看起来偏小。
         const c = document.createElement('canvas');
         c.width = CELL; c.height = CELL;
-        const k = Math.min(CELL / Math.max(1, src.width), CELL / Math.max(1, src.height));
-        const w = Math.max(1, Math.round(src.width * k));
-        const h = Math.max(1, Math.round(src.height * k));
-        c.getContext('2d').drawImage(src, Math.round((CELL - w) / 2), CELL - h, w, h);
+        let sx = 0, sy = 0, sw = src.width, sh = src.height;
+        try {
+          const probe = document.createElement('canvas');
+          probe.width = src.width; probe.height = src.height;
+          const pg = probe.getContext('2d');
+          pg.drawImage(src, 0, 0);
+          const d = pg.getImageData(0, 0, src.width, src.height).data;
+          let x0 = src.width, y0 = src.height, x1 = -1, y1 = -1;
+          for (let y = 0; y < src.height; y++) for (let x = 0; x < src.width; x++) {
+            if (d[(y * src.width + x) * 4 + 3] > 8) {
+              if (x < x0) x0 = x; if (x > x1) x1 = x;
+              if (y < y0) y0 = y; if (y > y1) y1 = y;
+            }
+          }
+          if (x1 >= x0 && y1 >= y0) {
+            sx = x0; sy = y0; sw = x1 - x0 + 1; sh = y1 - y0 + 1;
+          }
+        } catch (e) { /* 透明边界探测失败时使用原图 */ }
+        const k = Math.min(CELL / Math.max(1, sw), CELL / Math.max(1, sh));
+        const w = Math.max(1, Math.round(sw * k));
+        const h = Math.max(1, Math.round(sh * k));
+        c.getContext('2d').drawImage(src, sx, sy, sw, sh,
+                                     Math.round((CELL - w) / 2), CELL - h, w, h);
         return c;
       }));
     }
@@ -2123,7 +2142,10 @@
       const age = Math.max(0, CFG.fuse - sim.fuse[i]);
       const frame = Math.floor((age / CFG.tickHz) * 4) % 4;
       const owner = sim.owner[i];
-      const custom = owner === 0 && sim.bombStyle ? (sim.bombStyle[i] & 1) : 0;
+      const custom = owner === 0
+        ? (sim.playerBombStyle != null ? (sim.playerBombStyle & 1)
+                                       : (sim.bombStyle[i] & 1))
+        : 0;
       const frames = owner === 0 ? res.bombFrames.custom[custom] : res.bombFrames.default;
       items.push([r * Z_ROW_STRIDE + (Z_ROW_STRIDE - 1), frames[frame], c * CELL, r * CELL]);
     }

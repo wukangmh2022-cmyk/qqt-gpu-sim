@@ -540,9 +540,8 @@ def draw_grid(screen, res: Res, sim, obs, rpos, face, anim_frame,
 
     # 泡泡：去掉额外上下呼吸位移，按引信年龄播放四帧序列。
     # 每 1s 均匀播放一组（每帧 0.25s），3s 引信循环三组；敌方用 default，我方红/蓝 custom
-    # 按格子与放置 tick 稳定伪随机选择，保证渲染帧之间不会跳色。
+    # 每局开始时随机选择一组并固定，保证渲染帧之间不会跳色。
     now = pygame.time.get_ticks() / 1000.0
-    tick_now = int(sim.t[0]) if sim.t is not None else 0
     bob = int(round(math.sin(now * 2 * math.pi) * 3))
     for r, c in zip(*_rcache["bomb_idx"]):
         r, c = int(r), int(c)
@@ -550,11 +549,8 @@ def draw_grid(screen, res: Res, sim, obs, rpos, face, anim_frame,
         fuse_rc = int(fuse[r, c])
         age = max(0, cfg.fuse - fuse_rc)
         frame_idx = ((age * 4) // max(1, cfg.tick_hz)) % 4
-        placed_tick = tick_now - age
-        style_hash = ((r * 73856093) ^ (c * 19349663) ^
-                      (placed_tick * 83492791)) & 1
         if owner_rc == 0:
-            bomb_surf = res.bomb_custom[style_hash][frame_idx]
+            bomb_surf = res.bomb_custom[res.player_bomb_style][frame_idx]
         else:
             bomb_surf = res.bomb_default[frame_idx]
         bx = c * CELL
