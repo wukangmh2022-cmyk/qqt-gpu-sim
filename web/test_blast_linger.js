@@ -54,4 +54,36 @@ info = sim.step([[4, 0], [4, 0]]);
 assert.strictEqual(sim.hp[1], 4);
 assert.strictEqual(sim.dangerMap()[bomb], 0);
 
+// 被炸砖在余威窗口内仍挡路：爆炸 tick 后连续 3 个 tick 保持碰撞，
+// 余威结算结束后才允许下一 tick 穿过。
+for (let i = 0; i < sim.wall.length; i++) {
+  sim.wall[i] = 0; sim.brick[i] = 0; sim.fuse[i] = 0;
+  sim.owner[i] = -1; sim.bombBlast[i] = 0;
+  sim.blastLinger[i] = 0; sim.brickLinger[i] = 0;
+}
+sim.pos[0] = 6.5; sim.pos[1] = 6.5;
+sim.pos[2] = 10.5; sim.pos[3] = 10.5;
+sim.hp = [5, 5]; sim.alive = [true, true]; sim.invuln = [0, 0];
+const brick = 6 * 15 + 7;
+sim.brick[brick] = 1;
+sim.fuse[bomb] = 1;
+sim.owner[bomb] = 0;
+sim.bombBlast[bomb] = 1;
+
+sim.step([[4, 0], [4, 0]]);
+assert.strictEqual(sim.brick[brick], 1);
+assert.strictEqual(sim.brickLinger[brick], 3);
+sim.step([[4, 0], [4, 0]]);
+assert.strictEqual(sim.brick[brick], 1);
+assert.strictEqual(sim.brickLinger[brick], 2);
+sim.step([[4, 0], [4, 0]]);
+assert.strictEqual(sim.brick[brick], 1);
+assert.strictEqual(sim.brickLinger[brick], 1);
+sim.step([[4, 0], [4, 0]]);
+assert.strictEqual(sim.brick[brick], 0);
+assert.strictEqual(sim.brickLinger[brick], 0);
+const xBefore = sim.pos[1];
+sim.step([[3, 0], [4, 0]]);
+assert(sim.pos[1] > xBefore, '砖残威消失后应允许通行');
+
 console.log('blast linger test passed');

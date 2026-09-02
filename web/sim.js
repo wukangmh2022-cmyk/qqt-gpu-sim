@@ -167,6 +167,9 @@
       // 局外（reset 时）随机一次，整局所有我方炸弹共用红或蓝 custom。
       this.playerBombStyle = (Math.imul(this.seed, 0x9e3779b1) >>> 0) & 1;
       this.blastLinger = new Int8Array(N);
+      // 被炸砖体的残骸计时：砖外观可在爆炸时进入 _die，但碰撞要等余威结束。
+      // 与 blastLinger 分开，避免把普通地面火区错误地当成墙体。
+      this.brickLinger = new Int8Array(N);
       this.pos = new Float64Array(4);
       this.alive = [true, true];
       this.hp = [CFG.maxHp, CFG.maxHp];
@@ -268,6 +271,7 @@
         bombStyle: arr(this.bombStyle),
         playerBombStyle: this.playerBombStyle,
         blastLinger: arr(this.blastLinger),
+        brickLinger: arr(this.brickLinger),
         pushable: arr(this.pushable),
         pushT: arr(this.pushT),
         pushBoxAt: arr(this.pushBoxAt),
@@ -304,7 +308,7 @@
       this.loBlast = frame.loBlast.slice();
       this.loSpeed = frame.loSpeed.slice();
       for (const name of ['wall', 'brick', 'cover', 'bush', 'crate', 'superCrate',
-        'recycle', 'fuse', 'owner', 'bombBlast', 'bombStyle', 'blastLinger', 'pushable', 'pushT', 'pushBoxAt',
+        'recycle', 'fuse', 'owner', 'bombBlast', 'bombStyle', 'blastLinger', 'brickLinger', 'pushable', 'pushT', 'pushBoxAt',
         'pushSprite']) {
         const old = this[name];
         if (frame[name] == null) continue;
@@ -313,6 +317,7 @@
       if (frame.bombStyle == null) this.bombStyle.fill(0);
       if (frame.playerBombStyle != null) this.playerBombStyle = frame.playerBombStyle & 1;
       if (frame.blastLinger == null) this.blastLinger.fill(0);
+      if (frame.brickLinger == null) this.brickLinger.fill(0);
       if (frame.crateType != null) this.crateType = new Int8Array(frame.crateType);
       this.pushBoxes = (frame.pushBoxes || []).map((b) => ({
         o: b.o, cells: b.cells.slice(), eid: b.eid, dead: !!b.dead,
@@ -540,6 +545,7 @@
                   this.pushable[ci] = 0; this.pushable[ti] = 1;
                   this.pushBoxAt[ci] = -1; this.pushBoxAt[ti] = bi;
                   this.pushSprite[ti] = this.pushSprite[ci]; this.pushSprite[ci] = -1;
+                  this.brickLinger[ci] = 0; this.brickLinger[ti] = 0;
                 }
                 box.cells = targetCells;
                 box.o = targetCells[0];
@@ -566,9 +572,16 @@
       this.lastReplayTriggered = triggered;
       // 炸掉的砖 → 宝箱（按地图爆率 crate_rate 判定；摧毁砖）
       // 灌木(bush)：可通行 + **可炸毁** —— 被火焰覆盖即摧毁（不给宝箱）
+      const destroyedBrick = new Uint8Array(N);
+      const coveredBrick = new Uint8Array(N);
       for (let i = 0; i < N; i++) {
         if (covered[i] && this.brick[i]) {
-          this.brick[i] = 0;
+          coveredBrick[i] = 1;
+          // 砖在余威期间仍保留为碰撞体；外观/宝箱事件照常在本 tick 触发。
+          // brickLinger 到期后才清掉 brick，防止玩家穿过残骸火区。
+          // 已在残威中的砖若再次被覆盖只刷新计时，不重复生成宝箱/死亡特效。
+          if (this.brickLinger[i] > 0) continue;
+          destroyedBrick[i] = 1;
           // 被炸的可推箱: 整箱移除(足迹清空)
           const biX = this.pushBoxAt[i];
           if (biX >= 0 && !this.pushBoxes[biX].dead) {
@@ -580,7 +593,8 @@
               this.pushSprite[cell] = -1;
             }
           }
-          if (this.rng() < this.crateRate && !this._crateBlocked(i)) {
+          // brick 尚未清除，不能复用 _crateBlocked；永久墙仍不可生成宝箱。
+          if (this.rng() < this.crateRate && !this.wall[i]) {
             this.crate[i] = 1;
             this.superCrate[i] = this.rng() < this.superFraction ? 1 : 0;
             this.crateType[i] = Math.floor(this.rng() * 3);   // 吃到啥在炸开时定
@@ -616,6 +630,16 @@
       for (let i = 0; i < N; i++) {
         if (this.blastLinger[i] > 0) this.blastLinger[i]--;
         if (covered[i]) this.blastLinger[i] = CFG.blastLingerTicks;
+
+        // 墙砖残骸与爆炸余威使用同一 3 tick 窗口：
+        // 爆炸 tick 记为 3，后续 tick 依次为 2/1/0；归零时才开放通行。
+        const oldBrickLinger = this.brickLinger[i];
+        let nextBrickLinger = oldBrickLinger > 0 ? oldBrickLinger - 1 : 0;
+        if (coveredBrick[i]) nextBrickLinger = CFG.blastLingerTicks;
+        this.brickLinger[i] = nextBrickLinger;
+        if (oldBrickLinger > 0 && nextBrickLinger === 0 && !coveredBrick[i]) {
+          this.brick[i] = 0;
+        }
       }
 
       // 6. 清场（引爆的泡归还额度）

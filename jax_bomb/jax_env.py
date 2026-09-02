@@ -7,6 +7,7 @@
     威力按放泡时刻快照（BLAST=8）存进 bomb_blast
   - 引信 FUSE=30，爆炸与连锁 max_chain=16（泡挡火、每颗泡自己的威力）
   - 伤害：中心格着火扣 1 血（HP=5），爆炸后余威 0.3s 允许进入火区受伤；
+    被炸砖在同一余威窗口内仍作为碰撞体，余威结束后才开放通行
     无敌期 INVULN=30 tick，血归 0 死亡
   - 终局：n_alive <= 1 或 t >= MAX_STEPS(1800)，done 后就地重置（auto_reset）
 观测 = 正式版 2P+3=7 通道视角（view_perm）：自己位置/自己泡剩余时间/
@@ -123,6 +124,7 @@ class BombState(NamedTuple):
     owner: jnp.ndarray     # (H, W) int32 -1 无，0/1 玩家
     bomb_blast: jnp.ndarray  # (H, W) int32 每颗泡自己的威力（放泡时快照）
     blast_linger: jnp.ndarray  # (H, W) int8 爆炸余威剩余 tick；不改变本 tick 爆炸事件
+    brick_linger: jnp.ndarray  # (H, W) int8 被炸砖残骸剩余 tick；到期才开放通行
     wall: jnp.ndarray      # (H, W) bool 永久墙（不可通行不可炸）
     brick: jnp.ndarray     # (H, W) bool 可炸墙（挡火、被覆盖即摧毁→宝箱）
     pushable: jnp.ndarray  # (H, W) bool 可推箱（推箱子关；必 ⊆ brick，被炸整箱消失）
@@ -294,6 +296,7 @@ def _fresh(key) -> BombState:
         owner = -jnp.ones((H, W), jnp.int32)
         bomb_blast = jnp.zeros((H, W), jnp.int32)
         blast_linger = jnp.zeros((H, W), jnp.int8)
+        brick_linger = jnp.zeros((H, W), jnp.int8)
         alive = jnp.ones((2,), jnp.bool_)
         hp = jnp.full((2,), MAX_HP, jnp.int32)
         invuln = jnp.zeros((2,), jnp.int32)
@@ -305,7 +308,7 @@ def _fresh(key) -> BombState:
         items = jnp.zeros((2, 4), jnp.int8)
         gametype = jnp.zeros((), jnp.int8)
         t = jnp.zeros((), jnp.int32)
-        return BombState(s.pos, fuse, owner, bomb_blast, blast_linger, s.wall, s.brick,
+        return BombState(s.pos, fuse, owner, bomb_blast, blast_linger, brick_linger, s.wall, s.brick,
                          s.pushable, jnp.zeros((H, W), jnp.float32), s.bush,
                          jnp.where(s.crate, 7, 0).astype(jnp.int8), s.rec,
                          alive, hp, invuln, bombs_cap, blast_cap, spd_g, buffs,
@@ -315,6 +318,7 @@ def _fresh(key) -> BombState:
     owner = -jnp.ones((H, W), jnp.int32)
     bomb_blast = jnp.zeros((H, W), jnp.int32)
     blast_linger = jnp.zeros((H, W), jnp.int8)
+    brick_linger = jnp.zeros((H, W), jnp.int8)
     bush = jnp.zeros((H, W), jnp.bool_)   # 过程式生成无灌木
     crate = jnp.where(is_open & OPEN_CRATE_CROSS, _cross_crates(),
                       jnp.zeros((H, W), jnp.bool_)).astype(jnp.int8) * 7
@@ -335,7 +339,7 @@ def _fresh(key) -> BombState:
     t = jnp.zeros((), jnp.int32)
     pushable = jnp.zeros((H, W), jnp.bool_)  # 过程式无可推墙
     push_t = jnp.zeros((H, W), jnp.float32)  # 推箱计时
-    return BombState(pos, fuse, owner, bomb_blast, blast_linger, wall, brick, pushable, push_t,
+    return BombState(pos, fuse, owner, bomb_blast, blast_linger, brick_linger, wall, brick, pushable, push_t,
                      bush, crate, rec_crate, alive, hp, invuln, bombs_cap,
                      blast_cap, spd_g, buffs, debuffs, items, gametype,
                      is_open, t, jnp.int32(-1))
@@ -864,7 +868,7 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     auto_reset=True（训练/收集默认）：终局就地重置为新局（随机新地图）。
     False（对拍用）：终局保留原状态。Python 静态分支，jit 折叠，无运行时开销。
     """
-    (pos, fuse, owner, bomb_blast, blast_linger, wall, brick, pushable, push_t, bush, crate,
+    (pos, fuse, owner, bomb_blast, blast_linger, brick_linger, wall, brick, pushable, push_t, bush, crate,
      rec_crate, alive, hp, invuln, bombs_cap, blast_cap, spd_g, _buffs,
      _debuffs, _items, _gametype, is_open, t, level_id) = state
     dirs, bombs = actions[:, 0], actions[:, 1]
@@ -931,6 +935,10 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
             jnp.where(do_move, False, pushable[pr, pc]))
         pushable = pushable.at[tr, tc].set(
             jnp.where(do_move, True, pushable[tr, tc]))
+        brick_linger = brick_linger.at[pr, pc].set(
+            jnp.where(do_move, 0, brick_linger[pr, pc]))
+        brick_linger = brick_linger.at[tr, tc].set(
+            jnp.where(do_move, 0, brick_linger[tr, tc]))
         # 箱子移走 → 原格计时清零；新格计时清零（Web: pushT[box.o]=0，箱随人走计时归零）
         push_t = push_t.at[pr, pc].set(jnp.where(do_move, 0.0, push_t[pr, pc]))
         push_t = push_t.at[tr, tc].set(jnp.where(do_move, 0.0, push_t[tr, tc]))
@@ -953,7 +961,10 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     else:
         rate_b = jnp.where(is_open, 1.0, CRATE_PROB)
         super_f = jnp.zeros((), jnp.float32)        # 过程式无超级道具
-    destroy = (brick | bush) & covered
+    covered_brick = brick & covered
+    # 同一砖在残威期间再次被覆盖只刷新计时，不重复掉落宝箱。
+    destroyed_brick = covered_brick & (brick_linger <= 0)
+    destroy = destroyed_brick | (bush & covered)
     # 与 Web 一致（sim.js:349-359）：crate_rate 判定掉落 → superFraction 判定
     # 超级（+4档）→ floor(rng*3) 定种类（0=泡 1=威 2=速）。编码：
     # 1/2/3 = 泡/威/速 +1；4/5/6 = 超级泡/威/速 +4
@@ -963,7 +974,15 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     kind = (jax.random.uniform(k2, (H, W)) * 3).astype(jnp.int32)
     crate = jnp.where(drop, (1 + kind + is_super.astype(jnp.int32) * 3)
                            .astype(jnp.int8), crate)
-    brick = brick & ~destroy
+    # 被炸砖保留为碰撞体，直到与爆炸余威相同的 3 tick 窗口结束；
+    # 灌木仍在本 tick 直接清除（本来就是可通行物）。
+    old_brick_linger = brick_linger
+    next_brick_linger = jnp.maximum(old_brick_linger.astype(jnp.int16) - 1, 0)
+    brick_expired = (old_brick_linger > 0) & (next_brick_linger == 0)
+    brick_linger = jnp.where(covered_brick,
+                             jnp.int8(BLAST_LINGER_TICKS),
+                             next_brick_linger.astype(jnp.int8))
+    brick = brick & ~(brick_expired & ~covered_brick)
     bush = bush & ~destroy
     pushable = pushable & ~destroy   # 可推箱被炸 → 箱子消失（brick 同步清）
     push_t = jnp.where(destroy, 0.0, push_t)  # 箱子没了 → 该格计时一并清零
@@ -1073,7 +1092,7 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     t = t + 1
     n_alive = alive_new.sum()
     done = (n_alive <= 1) | (t >= MAX_STEPS)
-    new_state = BombState(newpos, fuse, owner, bomb_blast, blast_linger, wall, brick,
+    new_state = BombState(newpos, fuse, owner, bomb_blast, blast_linger, brick_linger, wall, brick,
                           pushable, push_t, bush, crate, rec_crate, alive_new,
                           hp_new, invuln, bombs_cap, blast_cap, spd_g, _buffs,
                           _debuffs, _items, _gametype, is_open, t, level_id)
@@ -1108,7 +1127,7 @@ def legal_mask(state: BombState) -> tuple[jnp.ndarray, jnp.ndarray]:
     特殊分支）。放泡掩码：存活 & 不在墙/砖格 & 脚下无泡 & 未超成长上限；
     bomb=0（不放）恒合法，死亡角色 bomb=1 也放开。
     """
-    (pos, fuse, owner, _bb, _linger, wall, brick, pushable, _pt, _bush, _crate, _rc, alive,
+    (pos, fuse, owner, _bb, _linger, _brick_linger, wall, brick, pushable, _pt, _bush, _crate, _rc, alive,
      _hp, _invuln, bombs_cap, _blast_cap, spd_g, _buff, _debuff, _item, _gtype,
      _is_open, _t, _level_id) = state
     # 推箱格豁免：mask 把朝可推箱方向标记为合法（模型才会选这个方向去推），
@@ -1221,7 +1240,7 @@ def make_obs(state: BombState, pid: int, danger=None) -> jnp.ndarray:
     both_perspectives 用）；None 时内部现算（单视角调用/对拍用）。
     血量和成长属性等时间序列标量不进格子通道，走 global_vec（state token）。
     """
-    (pos, fuse, owner, bomb_blast, blast_linger, wall, brick, pushable, _pt, bush, crate, _rc,
+    (pos, fuse, owner, bomb_blast, blast_linger, _brick_linger, wall, brick, pushable, _pt, bush, crate, _rc,
      alive, _hp, _invuln, _bombs_cap, _blast_cap, _spd_g, _buff, _debuff,
      _item, _gtype, _is_open, t, _level_id) = state
     me, opp = pid, 1 - pid

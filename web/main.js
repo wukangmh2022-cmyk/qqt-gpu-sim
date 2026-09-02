@@ -1570,7 +1570,12 @@
           const nowMs = performance.now();
           let pushDone = false;
           for (let i = 0; i < N; i++) {
-            if (prevFrame.brick[i] === 1 && frame.brick[i] === 0 && l1 && l1[i]) {
+            // 新语义下砖在余威期间仍保留为碰撞体，因此用本 tick 的 covered
+            // 事件识别炸毁；兼容旧录像仍保留 brick 由 1→0 的判断。
+            const newlyBurned = (frame.covered && frame.covered[i] &&
+              (!prevFrame.brickLinger || prevFrame.brickLinger[i] === 0)) ||
+              frame.brick[i] === 0;
+            if (prevFrame.brick[i] === 1 && newlyBurned && l1 && l1[i]) {
               dieFx.set(i, { eid: Math.abs(l1[i]), until: nowMs + 350 });
             }
             if (prevFrame.bush && prevFrame.bush[i] === 1 && frame.bush[i] === 0 && l0 && l0[i]) {
@@ -1760,6 +1765,7 @@
     }
     prevPos.set(sim.pos);
     const prevBrick = sim.brick.slice();      // 砖快照（找被炸毁的格）
+    const prevBrickLinger = sim.brickLinger.slice();
     const prevBush = sim.bush ? sim.bush.slice() : null;
     const hpBefore = sim.hp.slice();          // 血量快照（找掉血玩家）
     const prevCrate = sim.crate.slice();      // 宝箱快照（找新回收箱）
@@ -1792,7 +1798,11 @@
       const l1 = sim.level.layers[1];
       const l0 = sim.level.layers[0];
       for (let i = 0; i < N; i++) {
-        if (prevBrick[i] === 1 && sim.brick[i] === 0 && l1[i]) {
+        // 砖的碰撞体要等余威结束才清除，所以炸毁特效以本 tick 的
+        // lastCovered 事件为准；同时兼容没有该事件掩码的旧路径。
+        const newlyBurned = (sim.lastCovered && sim.lastCovered[i] &&
+          prevBrickLinger[i] === 0) || sim.brick[i] === 0;
+        if (prevBrick[i] === 1 && newlyBurned && l1[i]) {
           dieFx.set(i, { eid: Math.abs(l1[i]), until: performance.now() + 350 });
         }
         if (prevBush && prevBush[i] === 1 && sim.bush[i] === 0 && l0[i]) {
@@ -2006,7 +2016,7 @@
     const hideCells = new Set();   // 角色进入果冻结构 → 足迹内角色隐藏（render 作用域）
 
     // 结构精灵（L1 墙/砖 + L0 头顶装饰）：负值延续格跳过，多格元件整体在原点
-    // 画一次；L1 由 sim 状态驱动（砖炸掉即消失）；角色中心进入结构足迹 →
+    // 画一次；L1 由 sim 状态驱动（砖在余威结束后消失）；角色中心进入结构足迹 →
     // 结构抬到角色之上（挡在前面）+ 进入果冻扭动动画。Z 排序见 tileZ。
     if (sim.level && sim.level.layers) {
       const nowMs = performance.now();
