@@ -2046,7 +2046,7 @@
       const age = (now - explosionT) / 1000;
       if (age <= 0.4 && explosionTrig) {
         const blast = explosion;
-        const maxBlast = 7;   // 成长上限，与 duel.py 的 res_blast 一致（含 open 关）
+        const maxBlast = 8;   // 成长上限，与 sim/jax_env.py / 地图数据一致
         // 引爆源格画中心图
         for (let i = 0; i < N; i++) {
           if (!explosionTrig[i]) continue;
@@ -2615,8 +2615,8 @@
            <div class="mm-stats" id="mm-stats">
              <div class="mm-stat"><span>初始泡泡 <output id="mm-bombs-v"></output></span><input id="mm-bombs" type="range" min="1" max="10" step="1"></div>
              <div class="mm-stat"><span>最大泡泡 <output id="mm-bombs-max-v"></output></span><input id="mm-bombs-max" type="range" min="1" max="10" step="1"></div>
-             <div class="mm-stat"><span>初始威力 <output id="mm-blast-v"></output></span><input id="mm-blast" type="range" min="1" max="7" step="1"></div>
-             <div class="mm-stat"><span>最大威力 <output id="mm-blast-max-v"></output></span><input id="mm-blast-max" type="range" min="1" max="7" step="1"></div>
+             <div class="mm-stat"><span>初始威力 <output id="mm-blast-v"></output></span><input id="mm-blast" type="range" min="1" max="8" step="1"></div>
+             <div class="mm-stat"><span>最大威力 <output id="mm-blast-max-v"></output></span><input id="mm-blast-max" type="range" min="1" max="8" step="1"></div>
              <div class="mm-stat"><span>初始速度 <output id="mm-speed-v"></output></span><input id="mm-speed" type="range" min="0.5" max="2.3" step="0.05"></div>
              <div class="mm-stat"><span>最大速度 <output id="mm-speed-max-v"></output></span><input id="mm-speed-max" type="range" min="0.5" max="2.3" step="0.05"></div>
            </div>
