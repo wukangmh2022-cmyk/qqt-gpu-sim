@@ -254,7 +254,7 @@ class Res:
                 out[r].append(t)
         return out
 
-    # ---------------- 炸弹：四帧序列，统一画布并底边对齐 ----------------
+    # ---------------- 炸弹：四帧序列，按原图比例缩放并底边对齐 ----------------
     def _load_bomb_frames(self, cell: int, subdir: str,
                           names: tuple[str, ...]) -> list[pygame.Surface]:
         out = []
@@ -269,12 +269,14 @@ class Res:
                 x0, y0, x1, y1 = box
                 img = img.subsurface((x0, y0, x1 - x0 + 1, y1 - y0 + 1)).copy()
             w0, h0 = img.get_size()
-            k = min(cell / max(1, w0), cell / max(1, h0))
+            # 保留原图像素比例（40px 原图 → 60px 格子）；高于 40px 的帧
+            # 允许向格子顶部溢出，和人物精灵一样只对齐底边。
+            k = cell / 40.0
             scaled = pygame.transform.smoothscale(
                 img, (max(1, round(w0 * k)), max(1, round(h0 * k))))
-            frame = pygame.Surface((cell, cell), pygame.SRCALPHA)
-            frame.blit(scaled, ((cell - scaled.get_width()) // 2,
-                                cell - scaled.get_height()))
+            # 不裁成 cell×cell：高于 40px 的原图帧要完整保留并向上溢出。
+            frame = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
+            frame.blit(scaled, (0, 0))
             out.append(frame)
         return out
 

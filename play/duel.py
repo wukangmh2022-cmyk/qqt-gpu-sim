@@ -553,8 +553,10 @@ def draw_grid(screen, res: Res, sim, obs, rpos, face, anim_frame,
             bomb_surf = res.bomb_custom[res.player_bomb_style][frame_idx]
         else:
             bomb_surf = res.bomb_default[frame_idx]
-        bx = c * CELL
-        by = r * CELL
+        # 炸弹帧按原图尺寸渲染：横向居中，底边贴在格子底线；
+        # 高于一格的透明/可见部分自然向上溢出，和人物渲染规则一致。
+        bx = int(c * CELL + (CELL - bomb_surf.get_width()) / 2)
+        by = (r + 1) * CELL - bomb_surf.get_height()
         items.append((r, bx, by, bomb_surf))
 
     # 宝箱（砖被炸掉后变）：三张道具图轮流展示，上下浮动；底部同样贴格底线。

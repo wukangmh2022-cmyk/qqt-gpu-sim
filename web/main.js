@@ -540,10 +540,9 @@
     async function loadBombFrames(dir, names) {
       return Promise.all(names.map(async (name) => {
         const src = await loadImage(`assets/${dir}/${name}`);
-        // 各帧原图尺寸略有差异，统一放入 CELL×CELL 画布并底边对齐，
+        // 保留原始帧尺寸 × SCALE（40px 原图 → 60px 格子）：42px 高帧
+        // 应渲染为 63px，允许像人物一样从格子顶部上溢，底边仍贴格底。
         // 先裁掉透明边距，避免蓝色冰泡泡因原图留白看起来偏小。
-        const c = document.createElement('canvas');
-        c.width = CELL; c.height = CELL;
         let sx = 0, sy = 0, sw = src.width, sh = src.height;
         try {
           const probe = document.createElement('canvas');
@@ -2132,8 +2131,8 @@
     }
 
     // 泡泡：去掉伪呼吸位移，按引信年龄播放 4 帧序列。
-    // 每 1s 完整播放一组（每帧 0.25s），3s 引信循环三组；画布统一
-    // CELL×CELL、底边贴格底线。
+    // 每 1s 完整播放一组（每帧 0.25s），3s 引信循环三组；按原图 × SCALE
+    // 绘制，底边贴格底线，超过一格的高度允许向上溢出。
     for (let i = 0; i < N; i++) {
       if (sim.fuse[i] <= 0) continue;
       // 泡泡在任何果冻遮挡结构(房子/灌木/拱门等)上 → 隐藏（visible=false）
@@ -2147,7 +2146,10 @@
                                        : (sim.bombStyle[i] & 1))
         : 0;
       const frames = owner === 0 ? res.bombFrames.custom[custom] : res.bombFrames.default;
-      items.push([r * Z_ROW_STRIDE + (Z_ROW_STRIDE - 1), frames[frame], c * CELL, r * CELL]);
+      const img = frames[frame];
+      const bx = c * CELL + (CELL - img.width) / 2;
+      const by = (r + 1) * CELL - img.height;
+      items.push([r * Z_ROW_STRIDE + (Z_ROW_STRIDE - 1), img, bx, by]);
     }
 
     // 宝箱：三张道具图轮流展示 + 呼吸（底部贴格底线）
