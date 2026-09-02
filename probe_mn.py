@@ -1,0 +1,20 @@
+import torch
+d = "cuda"
+x = torch.rand(100, 5, device=d)
+g = torch.Generator(device=d).manual_seed(99)
+def st():
+    return torch.cuda.get_rng_state()
+s0 = st().clone()
+torch.multinomial(x, 1, generator=g)
+torch.cuda.synchronize()
+s1 = st().clone()
+torch.multinomial(x, 1, generator=g)
+torch.cuda.synchronize()
+s2 = st().clone()
+print("after mn1 equal to s0:", torch.equal(s0, s1))
+print("after mn2 equal to s1:", torch.equal(s1, s2))
+r0 = st().clone()
+torch.rand(1000, device=d)
+torch.cuda.synchronize()
+r1 = st().clone()
+print("rand1000 equal:", torch.equal(r0, r1))

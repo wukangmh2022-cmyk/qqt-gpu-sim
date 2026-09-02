@@ -18,15 +18,18 @@
 import os
 import sys
 
-if "CKPT_DIR" not in os.environ:
+_HAS_CONFIG = any(a == "--config" or a.startswith("--config=")
+                  for a in sys.argv[1:])
+
+if "CKPT_DIR" not in os.environ and not _HAS_CONFIG:
     os.environ["CKPT_DIR"] = "ckpt"
-if "CKPT_EVERY" not in os.environ:
+if "CKPT_EVERY" not in os.environ and not _HAS_CONFIG:
     os.environ["CKPT_EVERY"] = "60"
-if "CKPT_LOCAL_DIR" not in os.environ:
+if "CKPT_LOCAL_DIR" not in os.environ and not _HAS_CONFIG:
     os.environ["CKPT_LOCAL_DIR"] = "ckpt_local"
-if "CKPT_LOCAL_EVERY" not in os.environ:
+if "CKPT_LOCAL_EVERY" not in os.environ and not _HAS_CONFIG:
     os.environ["CKPT_LOCAL_EVERY"] = "30"
-if not any(a.startswith("--iters") for a in sys.argv[1:]):
+if not any(a.startswith("--iters") for a in sys.argv[1:]) and not _HAS_CONFIG:
     sys.argv.append("--iters")
     sys.argv.append(os.environ.get("ITERS", "2000"))
 

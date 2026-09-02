@@ -45,7 +45,7 @@ def rays(src, wall, bombed, brick, blast, b_max):
     return covered
 
 
-def resolve(fuse, owner, wall, bomb_blast, brick, max_chain=16, b_max=7):
+def resolve(fuse, owner, wall, bomb_blast, brick, max_chain=16, b_max=8):
     """爆炸与连锁。返回 (covered, triggered)。固定轮（无同步），与固定轮 torch 一致。"""
     triggered = (fuse == 0) & (owner >= 0)
     live = fuse > 0

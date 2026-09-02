@@ -24,7 +24,7 @@
   }
   function applyRadius() {
     const r = Math.max(RADIUS_MIN, Math.min(RADIUS_MAX, Number(elRadius.value)));
-    CFG.radius = Number.isFinite(r) ? r : 0.36;
+    CFG.radius = Number.isFinite(r) ? r : 0.42;
     elRadius.value = CFG.radius.toFixed(2);
     setRadiusLabel();
   }
@@ -561,11 +561,11 @@
             sx = x0; sy = y0; sw = x1 - x0 + 1; sh = y1 - y0 + 1;
           }
         } catch (e) { /* 透明边界探测失败时使用原图 */ }
-        const k = Math.min(CELL / Math.max(1, sw), CELL / Math.max(1, sh));
-        const w = Math.max(1, Math.round(sw * k));
-        const h = Math.max(1, Math.round(sh * k));
-        c.getContext('2d').drawImage(src, sx, sy, sw, sh,
-                                     Math.round((CELL - w) / 2), CELL - h, w, h);
+        const w = Math.max(1, Math.round(sw * SCALE));
+        const h = Math.max(1, Math.round(sh * SCALE));
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(src, sx, sy, sw, sh, 0, 0, w, h);
         return c;
       }));
     }
@@ -1189,7 +1189,22 @@
 
   async function loadModelList() {
     const resp = await fetch('models/index.json');
-    modelList = (await resp.json()).models;
+    modelList = (await resp.json()).models || [];
+    // 按时间倒序排列（最新导出的模型排在最前）
+    modelList.sort((a, b) => {
+      const parseTime = (str) => {
+        if (!str) return 0;
+        const norm = str.replace(' UTC', 'Z').replace(' ', 'T');
+        const t = Date.parse(norm);
+        return isNaN(t) ? 0 : t;
+      };
+      const ta = parseTime(a.generated_at);
+      const tb = parseTime(b.generated_at);
+      if (tb !== ta && ta > 0 && tb > 0) return tb - ta;
+      const sa = a.global_step != null ? a.global_step : (a.it || 0);
+      const sb = b.global_step != null ? b.global_step : (b.it || 0);
+      return sb - sa;
+    });
     // 敌人 AI 下拉 + 观战「我方：」下拉：都列全部模型 + 规则 Hunter
     fillAiSelect(elEnemyAi, true);
     fillAiSelect(elP0Ai, true);
@@ -1238,13 +1253,15 @@
   }
 
   elRestart.addEventListener('click', startGame);
-  if (elBanner) {
-    elBanner.addEventListener('click', () => {
-      if (!elBanner.classList.contains('hidden') && !replayExporting) {
-        startGame();
-      }
-    });
-  }
+  // 黑屏横幅不再"点击任意位置开局"：选图菜单就挂在横幅里，点分类/滑块/空白
+  // 都会冒泡到这里误开局 —— 开局只认选图菜单的「点击进入」按钮（mm-enter-btn）。
+  // if (elBanner) {
+  //   elBanner.addEventListener('click', () => {
+  //     if (!elBanner.classList.contains('hidden') && !replayExporting) {
+  //       startGame();
+  //     }
+  //   });
+  // }
   const elMapBtn = $('map-btn');
   if (elMapBtn) elMapBtn.addEventListener('click', openMapMenu);
   // 选图页由独立“点击进入”按钮确认，避免调滑块/展开分类时误开局。

@@ -1,0 +1,120 @@
+# ============================================================================
+# 实验：Iter68 Scheme1 / K32（历史正常版参数归档）
+# 继承网络：ViT-Transformer，14ch，embed=392，depth=4，heads=4，FF=4，Patch=3
+# 继承价值头：HL-Gauss 128 bins（本次实际量程 [-20,20]、sigma=1.5）
+# 继承采样：Actor |Advantage| Top25% 过滤，Critic 全量无偏采样
+# 继承训练骨架：num_envs=16384，steps=256，minibatch=16384，epochs=2，lr=3e-4
+# 继承环境：13×15、radius=0.36、16 replicas（8 节点×2 卡）、标准 levels.json
+# 本版独有奖励：命中 ±1.5、每 tick -0.001、击杀 +10/-10、超时血差×alpha
+# 本版独有同步：Local-SGD param 模式，K=32；这是奖励改造前的实际运行版本
+# 辅助奖励：crate=0.5 且 30B 步线性退火；explore=0；brick=0；动态退火 K=0
+# 终点：iters=68；以下完整字段来自 checkpoint cfg、启动命令和会话 diff
+# ============================================================================
+
+[run]
+name = "repro_it68_scheme1_actor_top25_critic_all_patch3_k32_global16k"
+iters = 68                         # [终点][证据] 最终训练 iteration
+seed = 0                            # [证据]
+fresh = true
+
+[model]
+arch = "transformer"                # [证据]
+embed = 392                          # [证据]
+depth = 4                            # [证据]
+patch = 3                            # [证据]
+heads = 4                            # [证据]
+ff_factor = 4                        # [证据]
+obs_channels = 14                    # [证据] 带 14ch
+ema_decay = 0.999                    # [历史默认]
+
+[rollout]
+num_envs = 16384                     # [证据][多卡] 16 replica × 1024/卡
+num_steps = 256                      # [证据]
+minibatch = 16384                    # [证据][多卡]
+epochs = 2                           # [证据]
+
+[optimizer]
+lr = 0.0003                          # [证据]
+gamma = 0.995                        # [证据] 实际 Scheme1 启动命令
+lam = 0.95                           # [历史默认]
+clip_eps = 0.2                      # [历史默认]
+vf_coef = 0.5                       # [历史默认]
+ent_coef = 0.01                     # [历史默认]
+
+[reward]
+# [历史实现][已确认] 实际这个 checkpoint 使用的是奖励改造前的
+# dense-win 版本，不是 Git HEAD 中后来整理出的纯零和版本：
+#   rew = (dealt - damage_taken) * 1.5 - 0.001 * alive_before
+#   终局击杀：胜者 +10，败者 -10
+#   超时：血量差 × (2 / (MAX_HP-1)) × timeout_alpha
+profile = "dense_win10_symmetric_pre_asym"
+step_penalty = 0.001                 # [历史实现]
+hit_reward = 1.5                     # [历史实现]
+win_bonus = 10.0                     # [历史实现] 胜者 +10
+lose_bonus_start = 10.0              # [历史实现] 败者 -10（对称旧版）
+lose_bonus_floor = 10.0              # [历史实现] 当时没有 -6→-3 退火
+timeout_mode = "hp_diff_scaled"     # [历史实现]
+timeout_max_bonus = 2.0              # [历史实现]
+timeout_per_hp = 0.5                 # [历史实现] MAX_HP=5：2/(5-1)
+timeout_alpha_mode = "shared_linear_anneal"
+timeout_lead_bonus = 0.0             # 不适用；旧版不是固定 +2/-1
+timeout_trail_penalty = 0.0
+timeout_draw_bonus = 0.0
+adv_top_frac = 0.25                  # [证据] Actor Top25%；Critic 全量
+crate_reward_coef = 0.5              # [证据]
+crate_reward_anneal_steps = 30000000000 # [证据]
+explore_reward_coef = 0.0            # [证据]
+explore_reward_anneal_steps = 0      # [证据]
+brick_reward_coef = 0.0              # [证据]
+reward_anneal_k = 0.0                # [证据] 关闭动态退火
+reward_anneal_step_offset = 0        # [证据]
+
+[value]
+# [历史实现][实际启动脚本证据] 这次 Scheme1 工作区采用的是校准后的
+# HL-Gauss-128 量程，而不是 2087fae/7eaa997 原始 [-1,1] 量程。
+head = "hl_gauss"
+num_bins = 128
+v_min = -20.0
+v_max = 20.0
+sigma = 1.5
+
+[distributed]
+world_size = 8                       # [证据][多卡] 8 机器 × 2 卡
+local_gpus = 2
+lsgd_k = 32                          # [证据][多卡]
+lsgd_mode = "param"                 # [证据]
+lsgd_bf16 = false                    # [证据]
+lsgd_sync_state = false              # [证据]
+
+[environment]
+levels = "levels.json"               # [证据]
+level_weights = "empty=0.05,功夫=0.1,比武=0.15"
+curriculum_json = ""
+radius = 0.36                        # [证据]
+n_total = 16                         # [证据]
+map = "13x15"                        # [证据]
+
+[runtime]
+no_mask = false                      # [历史默认]
+obs_quant = false                    # [历史默认]
+legacy_obs13 = false                 # 14ch
+checkpoint = true
+tolerate_inconsistent = false
+
+[evaluation]
+eval_vs = ""
+eval_every = 0
+
+[checkpoint]
+# 原始远端目录；周期由实际启动命令确认，未写入 checkpoint cfg。
+ckpt_dir = "runs/repro_it68_scheme1_actor_top25_critic_all_patch3_k32_global16k/ckpt"
+ckpt_every = 15                       # [证据] 实际启动命令（分钟）
+ckpt_local_dir = "runs/repro_it68_scheme1_actor_top25_critic_all_patch3_k32_global16k/ckpt_local"
+ckpt_local_every = 5                  # [证据] 实际启动命令（分钟）
+
+[provenance]
+# checkpoint cfg 本身缺少 gamma、奖励常量和值域；以下证据用于补齐它们。
+git_algorithm_commit = "2087fae"
+git_workspace_head = "4565b0c"
+codex_session_log = "/Users/a1-6/.codex/sessions/2026/09/01/rollout-2026-09-01T10-07-12-01a059bf-753c-74a2-8ebd-13541d096536_01a05ab8-7098-7d82-9204-428e49e94ef4.jsonl"
+evidence = "session lines 2611, 2933-2935, 5950-5956"

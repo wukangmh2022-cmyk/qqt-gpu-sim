@@ -8,7 +8,7 @@ QQ堂关卡富化: 墙体统计 / 宝箱爆率 / 音乐 / 底图 / 元件PNG 编
 新增键:
   meta.brick_count      可炸毁墙体数 W (每个被炸的墙 -> 一个宝箱)
   meta.crate_rate       墙体爆率 p = min(1, TARGET/W): 每个墙炸开变宝箱的概率
-  meta.crate_needed     需求宝箱数(默认 57 = 2人x150% 单人满属性 = 300%)
+  meta.crate_needed     需求宝箱数(默认 60 = 2人x150% 单人满属性 = 300%)
   meta.crate_coverage   实际覆盖率 p*W/TARGET (墙体不够时 < 100%)
   meta.crate_attr       宝箱开出三属性的概率 + 每次增量:
                         {bombs: +1, blast: +1, speed: +0.15} 各 1/3
@@ -19,14 +19,14 @@ QQ堂关卡富化: 墙体统计 / 宝箱爆率 / 音乐 / 底图 / 元件PNG 编
   sprite_count         元件PNG数量
 
 宝箱数值设定(可 CLI 覆盖):
-  泡数: 初始2 -> 上限10 (+1/次)       威力: 初始2 -> 上限7 (+1/次)
+  泡数: 初始2 -> 上限10 (+1/次)       威力: 初始2 -> 上限8 (+1/次)
   速度: 初始1.2 -> 上限2.1 (+0.15/次, 即 (2.1-1.2)/0.15 = 6 次)
-  单人满属性 = 8+5+6 = 19 单位;  地图目标 = 2人 x 150% = 300% = 57 单位
-  墙体爆率 p = 57/W;  W<57 时 p=1(墙体不够, 无法改变单箱增量)
+  单人满属性 = 8+6+6 = 20 单位;  地图目标 = 2人 x 150% = 300% = 60 单位
+  墙体爆率 p = 60/W;  W<60 时 p=1(墙体不够, 无法改变单箱增量)
 
 用法:
     python3 qqt_level_enrich.py --levels qqt-gpu-sim-copy/levels_qqt
-        [--bombs-max 10 --blast-max 7 --speed-max 2.1 --speed-start 1.2 ...]
+        [--bombs-max 10 --blast-max 8 --speed-max 2.1 --speed-start 1.2 ...]
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ import torch
 # ---------- 模拟器数值上限(与 sim/config.py 对齐, 可 CLI 覆盖) ----------
 DEFAULTS = dict(
     bombs_start=2, bombs_max=10,
-    blast_start=2, blast_max=7,
+    blast_start=2, blast_max=8,
     speed_start=1.3, speed_max=2.1, speed_step=0.8 / 7,  # 7档: (2.1-1.3)/7=0.1143
     target_mult=3.0,          # 300% 单人满属性
 )
@@ -235,11 +235,11 @@ def enrich(path: Path, mapdesc: dict, cfg: dict) -> dict | None:
     md = mapdesc.get(src, {})
     theme = theme_from_md(md, d)
 
-    # 比武图实际可操控空间更小: 泡/威上限降为 7(起点 3), 配置标准化进地图文件
+    # 比武图实际可操控空间更小: 起点为 3，但威力上限统一为 8，配置标准化进地图文件
     mcfg = dict(cfg)
     if "比武" in d.get("game_mode", ""):
         mcfg["bombs_start"], mcfg["bombs_max"] = 3, 7
-        mcfg["blast_start"], mcfg["blast_max"] = 3, 7
+        mcfg["blast_start"], mcfg["blast_max"] = 3, 8
     d["bombs_max"] = mcfg["bombs_max"]
     d["blast_max"] = mcfg["blast_max"]
 
@@ -400,7 +400,11 @@ def main():
         "bombs": [cfg["bombs_start"], cfg["bombs_max"]],
         "blast": [cfg["blast_start"], cfg["blast_max"]],
         "speed": [cfg["speed_start"], cfg["speed_max"], cfg["speed_step"]],
-        "per_player_units": 19, "target_units": cfg["crate_needed"],
+        "per_player_units": ((cfg["bombs_max"] - cfg["bombs_start"])
+                             + (cfg["blast_max"] - cfg["blast_start"])
+                             + round((cfg["speed_max"] - cfg["speed_start"])
+                                     / cfg["speed_step"])),
+        "target_units": cfg["crate_needed"],
         "target_desc": f"{cfg['target_mult']:.1f}x 单人满属性",
     }
 
@@ -461,7 +465,7 @@ def main():
     print(f"爆率范围: {rates[0]:.4f} ~ {rates[-1]:.4f}")
     print(f"墙体不够(覆盖率<100%): {len(low)} 张")
     for d in low:
-        print(f"  {d['source']}: 砖 {d['meta']['brick_count']} < 57, "
+        print(f"  {d['source']}: 砖 {d['meta']['brick_count']} < 60, "
               f"覆盖率 {d['meta']['crate_coverage']:.1%}")
 
 

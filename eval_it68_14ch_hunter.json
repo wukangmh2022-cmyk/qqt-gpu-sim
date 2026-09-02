@@ -1,0 +1,136 @@
+{
+ "params_it00000068_repro14ch|hunter": {
+  "all": {
+   "a": {
+    "n": 128,
+    "wins": 4,
+    "draws": 109,
+    "losses": 15,
+    "winRate": 0.03125,
+    "suicideRate": 0.0625,
+    "ticks": 766.1640625,
+    "explore": 0.7762820512820505,
+    "bombs": 139.296875,
+    "hits": 1.4609375,
+    "walls": 0,
+    "crates": 42.3359375,
+    "moveRate": 0.8799128142076063
+   },
+   "b": {
+    "n": 128,
+    "wins": 15,
+    "draws": 109,
+    "losses": 4,
+    "winRate": 0.1171875,
+    "suicideRate": 0.0078125,
+    "ticks": 766.1640625,
+    "explore": 0.653125,
+    "bombs": 34.1328125,
+    "hits": 3.5625,
+    "walls": 0,
+    "crates": 13.1015625,
+    "moveRate": 0.6954143710713032
+   },
+   "p0": {
+    "n": 128,
+    "wins": 4,
+    "draws": 109,
+    "losses": 15,
+    "winRate": 0.03125,
+    "suicideRate": 0.0625,
+    "ticks": 766.1640625,
+    "explore": 0.7762820512820505,
+    "bombs": 139.296875,
+    "hits": 1.4609375,
+    "walls": 0,
+    "crates": 42.3359375,
+    "moveRate": 0.8799128142076063
+   },
+   "p1": {
+    "n": 128,
+    "wins": 15,
+    "draws": 109,
+    "losses": 4,
+    "winRate": 0.1171875,
+    "suicideRate": 0.0078125,
+    "ticks": 766.1640625,
+    "explore": 0.653125,
+    "bombs": 34.1328125,
+    "hits": 3.5625,
+    "walls": 0,
+    "crates": 13.1015625,
+    "moveRate": 0.6954143710713032
+   }
+  },
+  "isolated": {
+   "a": {
+    "n": 0,
+    "wins": 0,
+    "draws": 0,
+    "losses": 0,
+    "winRate": 0,
+    "suicideRate": 0,
+    "ticks": 0,
+    "explore": 0,
+    "bombs": 0,
+    "hits": 0,
+    "walls": 0,
+    "crates": 0,
+    "moveRate": 0
+   },
+   "b": {
+    "n": 0,
+    "wins": 0,
+    "draws": 0,
+    "losses": 0,
+    "winRate": 0,
+    "suicideRate": 0,
+    "ticks": 0,
+    "explore": 0,
+    "bombs": 0,
+    "hits": 0,
+    "walls": 0,
+    "crates": 0,
+    "moveRate": 0
+   },
+   "p0": {
+    "n": 0,
+    "wins": 0,
+    "draws": 0,
+    "losses": 0,
+    "winRate": 0,
+    "suicideRate": 0,
+    "ticks": 0,
+    "explore": 0,
+    "bombs": 0,
+    "hits": 0,
+    "walls": 0,
+    "crates": 0,
+    "moveRate": 0
+   },
+   "p1": {
+    "n": 0,
+    "wins": 0,
+    "draws": 0,
+    "losses": 0,
+    "winRate": 0,
+    "suicideRate": 0,
+    "ticks": 0,
+    "explore": 0,
+    "bombs": 0,
+    "hits": 0,
+    "walls": 0,
+    "crates": 0,
+    "moveRate": 0
+   }
+  }
+ },
+ "_meta": {
+  "maps": 1,
+  "isolated": 0,
+  "epPerMap": 128,
+  "maxTick": 800,
+  "seed": 42,
+  "elapsedSec": "404.6"
+ }
+}

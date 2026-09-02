@@ -185,7 +185,7 @@ class SimConfig:
     growth_blast_start: int = 2
     growth_speed_start: float = 1.0   # corridor/ring 初始速度倍率（对打/启动器可调）
     growth_bombs_max: int = 10        # corridor/ring 泡数成长上限（7 → 10：与 max_bombs 对齐）
-    growth_blast_max: int = 7
+    growth_blast_max: int = 8       # 所有地图统一威力成长上限
     growth_speed_max: float = 2.1     # 速度上限倍率：base 3.0 × 2.1 = 6.3 格/秒（0.63 格/tick）
     growth_speed_step: float = 0.15   # 每次成功 +0.15 → 更快到上限，速度感知更明显
 
@@ -198,7 +198,7 @@ class SimConfig:
     # 训练时网络看不到地图类型（观测无标记），靠状态差异自然学会适配。
     open_fraction: float = 0.0        # 每局 open 关占比（其余 = corridor）；训练用 0.5
     open_growth_bombs: int = 3        # open 关初始泡数上限（= 上限 7 的 ~40%）
-    open_growth_blast: int = 3        # open 关初始威力（= 上限 7 的 ~40%）
+    open_growth_blast: int = 3        # open 关初始威力（= 上限 8 的 ~38%）
     open_growth_speed: float = 0.84   # open 关初始速度倍率（= 新上限 2.1 的 40%）
     open_crate_cross: bool = True     # open 关开局**中心十字宝箱**（横竖各 2 排，
                                       # ≈46 格，100% 有东西，踩到必升一属性）—— 属性是
@@ -224,8 +224,8 @@ class SimConfig:
                                   # 默认 False（对打/测试双方同起点，行为不变）。
     opp_hist_mult: float = 1.3    # 历史网络初始属性增强倍数（1.0 = 不增强；取 30%，
                                   # 低起点（2泡/1.0速）也有一层/一档的可见提升）
-    opp_growth_bombs: int = 6     # 规则 bot 初始泡数上限（= 上限 7 的 ~80%）
-    opp_growth_blast: int = 6     # 规则 bot 初始威力（= 上限 7 的 ~80%）
+    opp_growth_bombs: int = 6     # 规则 bot 初始泡数上限（= 上限 10 的 60%）
+    opp_growth_blast: int = 6     # 规则 bot 初始威力（= 上限 8 的 75%）
     opp_growth_speed: float = 1.68# 规则 bot 初始速度倍率（= 上限 2.1 的 80%）
     recycle_crate_prob: float = 1.0  # **掉血回收箱爆率 100%**（用户定）：hit_attr_penalty
                                      # 掉血随机生成的宝箱踩到**必升一属性** —— 掉多少层

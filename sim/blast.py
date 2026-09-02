@@ -88,16 +88,16 @@ def rays(
     seed = sources & not_wall & ~brick_t
     covered = seed.clone()
     # **距离缓冲传播（2026-08-16，与 danger 阶段 B 同结构）**：原版按 blast 档
-    # 分组，每档 b 跑 4×b 次 pad（总 4×Σb；b_max=7 时 112 次），空档（无 seed
+    # 分组，每档 b 跑 4×b 次 pad（总 4×Σb；b_max=8 时 128 次），空档（无 seed
     # 的档位）也照付。改成单张量距离缓冲：fd=剩余传播距离（seed 格 = 自己的
     # blast 档），每方向统一 b_max 步、每步递减、耗尽即停 —— pad 数降到
-    # 4×b_max（b_max=7 → 28）。档位混合（成长玩法 3~7）也照样只跑一档。
-    # **int8**：blast 值域 ≤ growth_blast_max=7，int8 够用；int64（_blast_map
+    # 4×b_max（b_max=8 → 32）。档位混合（成长玩法 3~8）也照样只跑一档。
+    # **int8**：blast 值域 ≤ growth_blast_max=8，int8 够用；int64（_blast_map
     # 的 .long()）的 pad/运算在 CPU 上慢 5 倍（实测），int8 与 bool 同速。
     # 等价性：每颗炮的传播距离固定，覆盖先于挡火（泡/brick 记录后不穿透），
     # 与档位传播顺序无关 —— 与 danger 阶段 B 同一套逐炮参考 PASS 的论证。
     # graph 捕获安全：零 host 同步、零设备 RNG，kernel 序列固定。
-    # clamp 防御：blast 值域正常 ≤ growth_blast_max=7；自定义超大 blast 时
+    # clamp 防御：blast 值域正常 ≤ growth_blast_max=8；自定义超大 blast 时
     # 截到 127（int8 上限）保证覆盖不因回绕出错 —— 传播距离被 cap 是安全的
     # （多跑的空步结果逐位不变，同 blast_max_hint 论证）。
     fd = seed.to(torch.int8) * blast_cell.clamp(max=127).to(torch.int8)

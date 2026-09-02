@@ -124,7 +124,7 @@ def test_ndev2(cfg, n_total, iters):
         # 各自梯度（minibatch 减半；这里直接全量 loss，仅验证 pmean 更新语义）
         def loss(p, b):
             obs, acts, lps, advs, rets, masks = b
-            mv, bm_, v = net_forward(p, cfg.arch, obs.reshape(-1, *obs.shape[2:]))
+            mv, bm_, v, _ = net_forward(p, cfg.arch, obs.reshape(-1, *obs.shape[2:]))
             mm, bm = masks
             mm = mm.reshape(-1, 5)
             bm = bm.reshape(-1, 2)
@@ -172,7 +172,7 @@ def test_grad_equiv(cfg, mb, n_dev=2):
     bm = jnp.ones((mb * n_dev, 2), bool)
 
     def loss_for(p, ob, ac, ol, ad, rt, m, b):
-        mv, bv, v = net_forward(p, cfg.arch, ob)
+        mv, bv, v, _ = net_forward(p, cfg.arch, ob)
         mv = jnp.where(m, mv, jnp.full_like(mv, -jnp.inf))
         bv = jnp.where(b, bv, jnp.full_like(bv, -jnp.inf))
         lsm = jax.nn.log_softmax(mv)

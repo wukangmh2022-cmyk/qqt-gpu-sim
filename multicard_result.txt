@@ -1,0 +1,59 @@
+[2026-08-29 23:11:49] RUN start: world=1 rank=0 n_total=1 arch=transformer embed=64 depth=1 patch=3 envs=4 steps=8 minibatch=4 epochs=2 iters=3 lsgd_k=2 lsgd_mode=param lsgd_bf16=False lsgd_sync_state=False adv_top_frac=0.25 params=53,639
+[2026-08-29 23:12:30] iter 1/3 0.307s (0.314s avg) 208 sps (avg 204) loss=1.9415 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=0 ep_len=nan
+[2026-08-29 23:13:52] RUN start: world=1 rank=0 n_total=1 arch=transformer embed=64 depth=1 patch=3 envs=4 steps=8 minibatch=4 epochs=2 iters=4 lsgd_k=2 lsgd_mode=param lsgd_bf16=False lsgd_sync_state=False adv_top_frac=0.25 params=53,639
+[2026-08-29 23:14:35] iter 1/4 0.439s (0.441s avg) 146 sps (avg 145) loss=1.9415 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=0 ep_len=nan
+[2026-08-29 23:15:01] [Gate] Stage 0 vs Baseline winrate=0.0% (0/0)
+[2026-08-29 23:15:01] PROMOTION -> Stage 1 (步数兜底 (frac=0.2500))
+[2026-08-29 23:15:17] iter 2/4 41.650s (21.048s avg) 2 sps (avg 3) loss=1.7601 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=64 ep_len=nan
+[2026-08-29 23:15:23] [Gate] Stage 1 vs Baseline winrate=0.0% (0/0)
+[2026-08-29 23:15:23] PROMOTION -> Stage 2 (步数兜底 (frac=0.5000))
+[2026-08-29 23:15:23] iter 3/4 6.646s (16.248s avg) 10 sps (avg 4) loss=1.6203 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=128 ep_len=nan
+[2026-08-29 23:15:23] [Gate] Stage 2 vs Baseline winrate=0.0% (0/0)
+[2026-08-29 23:15:23] PROMOTION -> Stage 3 (步数兜底 (frac=0.7500))
+[2026-08-29 23:15:23] iter 4/4 0.093s (12.209s avg) 685 sps (avg 5) loss=1.4209 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=192 ep_len=nan
+[2026-08-29 23:15:23] ckpt saved iter 4
+[2026-08-29 23:15:23] params & EMA snapshot iter 4
+[2026-08-29 23:15:23] RUN end: dt=12.210 s/iter × 4 sps=5 (2×4×8 frames/iter) iter=4/4
+[2026-08-29 23:15:23] consistency=PASS n_total=1 digest=1.62494354248046875e+02
+[2026-08-29 23:17:21] RUN start: world=1 rank=0 n_total=1 arch=transformer embed=64 depth=1 patch=3 envs=4 steps=8 minibatch=4 epochs=2 iters=4 lsgd_k=2 lsgd_mode=param lsgd_bf16=False lsgd_sync_state=False adv_top_frac=0.25 params=53,639
+[2026-08-29 23:17:32] iter 1/4 0.097s (0.098s avg) 657 sps (avg 656) loss=1.9415 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=0 ep_len=nan
+[2026-08-29 23:17:39] [Gate] Stage 1 vs Baseline winrate=0.0% (0/0)
+[2026-08-29 23:17:39] PROMOTION -> Stage 2 (步数兜底 (frac=0.2500))
+[2026-08-29 23:17:51] iter 2/4 19.385s (9.743s avg) 3 sps (avg 7) loss=1.7601 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=64 ep_len=nan
+[2026-08-29 23:17:59] [Gate] Stage 2 vs Baseline winrate=0.0% (0/0)
+[2026-08-29 23:17:59] PROMOTION -> Stage 3 (步数兜底 (frac=0.5000))
+[2026-08-29 23:17:59] iter 3/4 7.727s (9.071s avg) 8 sps (avg 7) loss=1.6203 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=128 ep_len=nan
+[2026-08-29 23:17:59] [Gate] Stage 3 vs Baseline winrate=0.0% (0/0)
+[2026-08-29 23:17:59] PROMOTION -> Stage 4 (步数兜底 (frac=0.7500))
+[2026-08-29 23:17:59] iter 4/4 0.093s (6.827s avg) 687 sps (avg 9) loss=1.4209 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=192 ep_len=nan
+[2026-08-29 23:17:59] ckpt saved iter 4
+[2026-08-29 23:17:59] params & EMA snapshot iter 4
+[2026-08-29 23:17:59] RUN end: dt=6.828 s/iter × 4 sps=9 (2×4×8 frames/iter) iter=4/4
+[2026-08-29 23:17:59] consistency=PASS n_total=1 digest=1.62494354248046875e+02
+[2026-08-30 09:36:18] RUN start: world=1 rank=0 n_total=1 arch=transformer embed=64 depth=1 patch=4 envs=4 steps=8 minibatch=4 epochs=2 iters=3 lsgd_k=2 lsgd_mode=param lsgd_bf16=False lsgd_sync_state=False params=51,080
+[2026-08-30 09:36:28] iter 1/3 0.113s (0.113s avg) 564 sps (avg 564) loss=-0.1045 rew=0.015 explore=0.000 kill=0.000 α=1.00 gs=0 ep_len=nan
+[2026-08-30 09:36:38] iter 2/3 9.874s (4.995s avg) 6 sps (avg 13) loss=-0.0055 rew=0.007 explore=0.000 kill=0.000 α=1.00 gs=64 ep_len=nan
+[2026-08-30 09:36:38] iter 3/3 0.034s (3.341s avg) 1,909 sps (avg 19) loss=-0.0874 rew=0.015 explore=0.000 kill=0.000 α=1.00 gs=128 ep_len=nan
+[2026-08-30 09:36:38] ckpt saved iter 3
+[2026-08-30 09:36:38] params snapshot iter 3
+[2026-08-30 09:36:38] RUN end: dt=3.342 s/iter × 3 sps=19 (2×4×8 frames/iter) iter=3/3
+[2026-08-30 09:36:38] consistency=PASS n_total=1 digest=1.57801910400390625e+02
+[2026-08-30 10:36:27] RUN start: world=1 rank=0 n_total=1 arch=transformer embed=64 depth=1 patch=4 envs=8 steps=16 minibatch=8 epochs=2 iters=4 lsgd_k=256 lsgd_mode=param lsgd_bf16=False lsgd_sync_state=False params=51,080
+[2026-08-30 10:36:39] iter 1/4 0.202s (0.202s avg) 1,269 sps (avg 1,269) loss=0.0121 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=0 ep_len=nan
+[2026-08-30 10:36:50] iter 2/4 10.975s (5.589s avg) 23 sps (avg 46) loss=0.2431 rew=0.003 explore=0.000 kill=0.000 α=1.00 gs=256 ep_len=nan
+[2026-08-30 10:36:50] iter 3/4 0.109s (3.763s avg) 2,339 sps (avg 68) loss=0.0097 rew=0.002 explore=0.000 kill=0.000 α=0.99 gs=512 ep_len=nan
+[2026-08-30 10:36:50] iter 4/4 0.110s (2.850s avg) 2,332 sps (avg 90) loss=0.1652 rew=0.002 explore=0.000 kill=0.000 α=0.99 gs=768 ep_len=nan
+[2026-08-30 10:36:50] ckpt saved iter 4
+[2026-08-30 10:36:50] params snapshot iter 4
+[2026-08-30 10:36:50] RUN end: dt=2.851 s/iter × 4 sps=90 (2×8×16 frames/iter) iter=4/4
+[2026-08-30 10:36:50] consistency=PASS n_total=1 digest=1.58818176269531250e+02
+[2026-08-30 16:45:01] RUN start: world=1 rank=0 n_total=1 arch=transformer embed=64 depth=1 patch=4 envs=8 steps=16 minibatch=8 epochs=2 iters=3 lsgd_k=2 lsgd_mode=param lsgd_bf16=True lsgd_sync_state=False adv_top_frac=0.25 params=59,335
+[2026-08-30 16:45:44] RUN start: world=1 rank=0 n_total=1 arch=transformer embed=64 depth=1 patch=4 envs=8 steps=16 minibatch=8 epochs=2 iters=3 lsgd_k=2 lsgd_mode=param lsgd_bf16=True lsgd_sync_state=False adv_top_frac=0.25 params=59,335
+[2026-08-30 16:45:56] iter 1/3 0.142s (0.142s avg) 1,802 sps (avg 1,798) loss=1.6731 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=0 ep_len=nan
+[2026-08-30 16:46:06] iter 2/3 10.357s (5.251s avg) 25 sps (avg 49) loss=1.5756 rew=0.000 explore=0.000 kill=0.000 α=1.00 gs=256 ep_len=nan
+[2026-08-30 16:46:06] iter 3/3 0.071s (3.524s avg) 3,621 sps (avg 73) loss=1.3955 rew=0.002 explore=0.000 kill=0.000 α=0.99 gs=512 ep_len=nan
+[2026-08-30 16:46:06] ckpt saved iter 3
+[2026-08-30 16:46:06] params & EMA snapshot iter 3
+[2026-08-30 16:46:06] RUN end: dt=3.526 s/iter × 3 sps=73 (2×8×16 frames/iter) iter=3/3
+[2026-08-30 16:46:06] consistency=PASS n_total=1 digest=1.50190353393554688e+02
+[2026-08-30 16:46:06] Saved final models: ckpt_local/params_it00000003.pkl, ckpt_local/params_it00000003_ema.pkl

@@ -1,0 +1,77 @@
+# Iter68 单变量复现实验：相对 k64 版本只改 LSGD_K=32。
+# 奖励、网络、14ch、地图、全局 batch 和终点 iteration 均保持一致。
+
+[run]
+name = "repro_it68_asym_timeout_k32_global16k"
+iters = 68                         # [终点] 最终训练 iteration
+seed = 0
+fresh = true
+
+[model]
+arch = "transformer"
+embed = 392
+depth = 4
+patch = 3
+heads = 4
+ff_factor = 4
+obs_channels = 14
+
+[rollout]
+num_envs = 16384                   # [多卡] 全局 env 数；16 replica→1024/卡
+num_steps = 256
+minibatch = 16384                  # [多卡] 与 K64 实验保持一致
+epochs = 2
+
+[optimizer]
+lr = 0.0003
+gamma = 0.995
+lam = 0.95
+clip_eps = 0.2
+vf_coef = 0.5
+ent_coef = 0.01
+
+[reward]
+win_bonus = 10.0
+lose_bonus_start = 6.0
+lose_bonus_floor = 3.0
+timeout_lead_bonus = 2.0
+timeout_trail_penalty = 1.0
+timeout_draw_bonus = 0.0
+adv_top_frac = 0.25
+crate_reward_coef = 0.5
+crate_reward_anneal_steps = 30000000000
+explore_reward_coef = 0.0
+explore_reward_anneal_steps = 0
+brick_reward_coef = 0.0
+reward_anneal_k = 0.0
+reward_anneal_step_offset = 0
+
+[distributed]
+world_size = 8
+local_gpus = 2
+lsgd_k = 32                         # [多卡] 本实验相对 K64 唯一优化器变量
+lsgd_mode = "param"
+lsgd_bf16 = false
+lsgd_sync_state = false
+
+[environment]
+levels = "levels.json"
+level_weights = "empty=0.05,功夫=0.1,比武=0.15"
+curriculum_json = ""
+
+[runtime]
+no_mask = false
+obs_quant = false
+legacy_obs13 = false
+checkpoint = true
+tolerate_inconsistent = false
+
+[evaluation]
+eval_vs = ""
+eval_every = 0
+
+[checkpoint]
+ckpt_dir = "runs/repro_it68_asym_timeout_k32_global16k/ckpt"
+ckpt_every = 15
+ckpt_local_dir = "runs/repro_it68_asym_timeout_k32_global16k/ckpt_local"
+ckpt_local_every = 5

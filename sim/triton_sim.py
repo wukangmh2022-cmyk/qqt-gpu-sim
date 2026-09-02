@@ -171,7 +171,7 @@ if _HAS_TRITON:
         """per-cell 4 方向扫描：1 kernel 替代 rays 的 ~4×Σb 次 shift。
 
         与 blast.rays 逐位一致（已 bitwise 验证）。wall 格不可覆盖；炮/brick
-        覆盖但不穿透（更远的格被挡）。BMAX 固定（growth_blast_max=7）。
+        覆盖但不穿透（更远的格被挡）。BMAX 固定（growth_blast_max=8）。
         """
         pid = tl.program_id(0)
         offs = pid * BLOCK + tl.arange(0, BLOCK)
@@ -493,7 +493,7 @@ def legal_mask_triton(cfg, wall, fuse, owner, pos, alive, brick,
     return move_mask, bomb_mask
 
 
-def explode_triton(src, wall, bombed, brick, blast, b_max=7):
+def explode_triton(src, wall, bombed, brick, blast, b_max=8):
     """爆炸传播（与 blast.rays 逐位一致）。返回 bool covered。
 
     src/wall/bombed/brick: (N,H,W) bool；blast: (N,H,W) int（每格档位）。
@@ -563,7 +563,7 @@ def place_bombs_triton(cfg, fuse, owner, bomb_blast, pos, alive, bomb,
 
 
 def resolve_triton(fuse, owner, wall, bomb_blast, brick, max_chain=16,
-                  b_max=7, early_exit=True):
+                  b_max=8, early_exit=True):
     """爆炸与连锁（triton explode kernel 链）。返回 (covered, triggered)。
 
     语义与 torch resolve_explosions 逐位一致（verify_triton_boom 固化）。
@@ -593,7 +593,7 @@ def resolve_triton(fuse, owner, wall, bomb_blast, brick, max_chain=16,
 
 
 def danger_triton(fuse, wall, bombed, brick, blast, fuse_max,
-                  b_max=7, exp=2.0, max_chain=1, early_exit=True):
+                  b_max=8, exp=2.0, max_chain=1, early_exit=True):
     """危险图（阶段 A 连锁修正 + 阶段 B 扩散），与 torch danger_map 逐位等价。
 
     - max_chain=1：阶段 B only（走 _danger_kernel 原路径，行为不变）。

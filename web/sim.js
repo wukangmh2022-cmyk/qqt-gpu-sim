@@ -32,14 +32,14 @@
   // duel.py 的配置（map_mode=corridor + open_fraction=1.0 即 open 关；
   // corridor 关用 growth_*_start 起步 + 顶墙/侧砖）。
   const CFG = {
-    tickHz: 10, speed: 3.0, radius: 0.36, maxSteps: 1800,
+    tickHz: 10, speed: 3.0, radius: 0.42, maxSteps: 1800,
     fuse: 30, blast: 2, maxBombs: 10, maxChain: 16,
     blastLingerTicks: 3,                 // 爆炸后余威 0.3s（10Hz）
     maxHp: 5, invulnTicks: 30,
     stepLen: 3.0 / 10,                 // 0.3 格/tick
     // 成长（corridor 起步）
     growthBombsStart: 2, growthBlastStart: 2, growthSpeedStart: 1.3,
-    growthBombsMax: 10, growthBlastMax: 7,
+    growthBombsMax: 10, growthBlastMax: 8,
     growthSpeedMax: 2.1, growthSpeedStep: 0.8 / 7,   // 7档: (2.1-1.3)/7 ≈ 0.1143
     // open 关起步 = 上限 80%（与训练一致）
     openGrowthBombs: Math.ceil(10 * 0.8),        // 8
@@ -395,7 +395,7 @@
         ? level.crate_rate : 1.0;
       // 宝箱中超级占比（超级威力/泡泡/速度 整体 = 普通爆率的 10% -> 1/11）
       this.superFraction = level.crate_super_fraction || 0;
-      // 属性上限标准化在地图文件里（比武图泡/威上限=7, 空场景速上限=2.2）
+      // 属性上限标准化在地图文件里（所有地图威力上限=8, 空场景速上限=2.2）
       this.bombsMax = level.bombs_max || CFG.growthBombsMax;
       this.blastMax = level.blast_max || CFG.growthBlastMax;
       this.speedMax = level.speed_max || CFG.growthSpeedMax;

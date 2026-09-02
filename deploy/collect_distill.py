@@ -54,7 +54,7 @@ from train.model import ActorCritic
 H, W, P = 13, 13, 2
 TICK_HZ = 10
 FUSE = 30
-BLAST = 7
+BLAST = 8
 MAX_STEPS = 1800
 
 # jax make_obs 视角通道 ← 共享 14 通道的索引（P=2）：

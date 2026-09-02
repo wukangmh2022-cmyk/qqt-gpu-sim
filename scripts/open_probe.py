@@ -31,7 +31,7 @@ def make_open_cfg(pct: float) -> SimConfig:
                      open_fraction=1.0, ring_fraction=0.0, hazard_fraction=0.0,
                      open_crate_cross=True, hit_attr_penalty=2,
                      open_growth_bombs=max(1, round(7 * pct)),
-                     open_growth_blast=max(1, round(7 * pct)),
+                     open_growth_blast=max(1, round(8 * pct)),
                      open_growth_speed=round(2.1 * pct, 2))
 
 

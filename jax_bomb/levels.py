@@ -31,9 +31,8 @@ from typing import NamedTuple, Optional
 import jax.numpy as jnp
 import jax.random as jrandom
 
-# 出生点 padding 上限（levels_qqt 实测最多 9 个，配对上限 66）
+# 出生点 padding 上限（levels_qqt 实测最多 9 个）
 S_MAX = 12
-P_MAX = 66
 
 
 class LevelSample(NamedTuple):
@@ -53,11 +52,10 @@ class LevelSample(NamedTuple):
 
 
 class LevelSet:
-    """241 关的静态 jnp 栈 + 权重 + 出生点距离课程支持。构建后只读；sample 是纯函数，vmap 安全。"""
+    """241 关的静态 jnp 栈 + 权重。构建后只读；sample 是纯函数，vmap 安全。"""
 
     def __init__(self, wall, brick, bush, pushable, crate, rec, lo, caps, rate,
-                 super_f, spawns, cnt, pairs, pair_dists, n_pairs, logw, is_open,
-                 max_spawn_dist=0):
+                 super_f, spawns, cnt, logw, is_open):
         self.wall = wall          # (L,H,W) bool
         self.brick = brick
         self.bush = bush          # (L,H,W) bool 灌木（野外关；与 brick/wall 零重叠）
@@ -70,33 +68,21 @@ class LevelSet:
         self.super_f = super_f    # (L,) float32 超级道具占比
         self.spawns = spawns      # (L,S_MAX,2) int32
         self.cnt = cnt            # (L,) int32 每关有效出生点数
-        self.pairs = pairs        # (L,P_MAX,2) int32 按曼哈顿距离升序排序的出生点对
-        self.pair_dists = pair_dists  # (L,P_MAX) int32 每对曼哈顿距离
-        self.n_pairs = n_pairs    # (L,) int32 每关有效点对数
         self.logw = logw          # (L,) float32 log 权重
         self.is_open = is_open    # (L,) bool
-        self.max_spawn_dist = jnp.asarray(max_spawn_dist, jnp.int32)
         self.L = wall.shape[0]
 
     def sample(self, key) -> LevelSample:
-        """按权重抽一关 + 满足距离课程的出生点对（空间 50/50 随机翻转保证绝对对称）。"""
+        """按权重抽一关 + 两个不同出生点。key 为单 env 的 reset RNG。"""
         k1, k2, k3 = jrandom.split(key, 3)
         i = jrandom.categorical(k1, self.logw)          # () int32 关卡
-
-        # 出生点距离课程：按曼哈顿距离限制采样候选对
-        cnt_p = self.n_pairs[i]
-        dists_i = self.pair_dists[i]
-        valid_pairs = (dists_i <= self.max_spawn_dist) & (jnp.arange(P_MAX) < cnt_p)
-        n_eligible = jnp.where(self.max_spawn_dist > 0,
-                               jnp.maximum(jnp.sum(valid_pairs), 1),
-                               cnt_p)
-        pidx = jrandom.randint(k2, (), 0, n_eligible)
-        pair = self.pairs[i, pidx]
-        s0, s1 = self.spawns[i, pair[0]], self.spawns[i, pair[1]]
-
-        # 空间对称翻转：50% 概率 P0/P1 出生点互换，彻底消除空间几何先手优势
-        flip = jrandom.bernoulli(k3)
-        pos = jnp.where(flip, jnp.stack([s1, s0]), jnp.stack([s0, s1])).astype(jnp.float32) + 0.5
+        # 出生点：cnt ≥ 2 保证；p0 ∈ [0,cnt)，p1 ∈ [0,cnt-1) 再避开 p0
+        cnt = jnp.maximum(self.cnt[i], 2)
+        p0 = jrandom.randint(k2, (), 0, cnt)
+        p1 = jrandom.randint(k3, (), 0, cnt - 1)
+        p1 = p1 + (p1 >= p0).astype(jnp.int32)
+        s0, s1 = self.spawns[i, p0], self.spawns[i, p1]  # (2,) 各
+        pos = jnp.stack([s0, s1]).astype(jnp.float32) + 0.5
         return LevelSample(
             i, pos, self.wall[i], self.brick[i], self.bush[i], self.pushable[i],
             self.crate[i], self.rec[i], self.lo[i], self.caps[i], self.rate[i],
@@ -106,8 +92,7 @@ class LevelSet:
     def summary(self) -> str:
         n_empty = int(jnp.sum(self.is_open))
         lo = self.lo
-        d_str = f"max_dist={int(self.max_spawn_dist)}" if int(self.max_spawn_dist) > 0 else "dist=unlimited"
-        return (f"L={self.L} {d_str} 空场景/无砖关={n_empty} "
+        return (f"L={self.L} 空场景/无砖关={n_empty} "
                 f"lo bombs {float(lo[:, 0].min()):.0f}-{float(lo[:, 0].max()):.0f} "
                 f"blast {float(lo[:, 1].min()):.0f}-{float(lo[:, 1].max()):.0f} "
                 f"speed {float(lo[:, 2].min()):.2f}-{float(lo[:, 2].max()):.2f} "
@@ -180,13 +165,11 @@ def _parse_weights(weights: str, names: list[str], themes: list[str]) -> list[fl
     return w
 
 
-def set_active(path: str, weights: str = "empty=0.05,功夫=0.1,比武=0.15",
-               max_spawn_dist: int = 0) -> LevelSet:
+def set_active(path: str, weights: str = "empty=0.05,功夫=0.1,比武=0.15") -> LevelSet:
     """从 levels.json 加载并激活（进程内一次；jit/vmap 前调用）。
 
     默认权重：空场景 5% + 功夫 10% + 比武 15%，其余 70% 均分随机。
-    空 weights="" 则全部关卡均分。
-    max_spawn_dist > 0 时激活出生点距离限制（例如 4 贴脸、6 近距、10 中距）。"""
+    空 weights="" 则全部关卡均分。"""
     global _ACTIVE
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
@@ -212,10 +195,6 @@ def set_active(path: str, weights: str = "empty=0.05,功夫=0.1,比武=0.15",
     super_f = np.zeros((L,), np.float32)
     spawns = np.full((L, S_MAX, 2), -1, np.int32)
     cnt = np.zeros((L,), np.int32)
-    pairs = np.full((L, P_MAX, 2), 0, np.int32)
-    pair_dists = np.full((L, P_MAX), 999, np.int32)
-    n_pairs = np.zeros((L,), np.int32)
-
     for lvl in data:
         i = int(lvl["id"])
         wall[i] = np.asarray(lvl["wall"], np.bool_).reshape(h, w)
@@ -234,30 +213,12 @@ def set_active(path: str, weights: str = "empty=0.05,功夫=0.1,比武=0.15",
         if not (rate[i] > 0):        # JS 钳制：crate_rate <= 0 / 缺失 → 1.0（炸砖必成箱）
             rate[i] = 1.0
         sp = lvl["spawns"]
-        c_i = min(len(sp), S_MAX)
-        cnt[i] = c_i
+        cnt[i] = min(len(sp), S_MAX)
         for j, (r, c) in enumerate(sp[:S_MAX]):
             spawns[i, j] = (r, c)
         for (r, c) in lvl.get("initial_crates", []):
             if 0 <= r < h and 0 <= c < w:
                 crate[i, r, c] = True
-
-        # 计算所有有效出生点对并按曼哈顿距离升序排序（过滤完全重叠点）
-        p_list = []
-        for a in range(c_i):
-            for b in range(a + 1, c_i):
-                if sp[a][0] == sp[b][0] and sp[a][1] == sp[b][1]:
-                    continue
-                d = abs(sp[a][0] - sp[b][0]) + abs(sp[a][1] - sp[b][1])
-                p_list.append((d, a, b))
-        if not p_list:
-            p_list = [(1, 0, min(1, c_i - 1))]
-        p_list.sort()
-        n_pairs[i] = min(len(p_list), P_MAX)
-        for p_idx, (d, a, b) in enumerate(p_list[:P_MAX]):
-            pairs[i, p_idx] = [a, b]
-            pair_dists[i, p_idx] = d
-
     logw = np.log(np.asarray(w_arr, np.float32))
     is_open = brick.sum(axis=(1, 2)) == 0
     ls = LevelSet(
@@ -266,12 +227,7 @@ def set_active(path: str, weights: str = "empty=0.05,功夫=0.1,比武=0.15",
         # 预置宝箱全部必升（rec == crate）
         jnp.asarray(lo), jnp.asarray(caps), jnp.asarray(rate),
         jnp.asarray(super_f), jnp.asarray(spawns),
-        jnp.asarray(cnt, jnp.int32),
-        jnp.asarray(pairs, jnp.int32),
-        jnp.asarray(pair_dists, jnp.int32),
-        jnp.asarray(n_pairs, jnp.int32),
-        jnp.asarray(logw),
-        jnp.asarray(is_open),
-        max_spawn_dist=max_spawn_dist)
+        jnp.asarray(cnt, jnp.int32), jnp.asarray(logw),
+        jnp.asarray(is_open))
     _ACTIVE = ls
     return ls

@@ -119,7 +119,7 @@ def main():
     @jax.jit
     def mb_fwd_bwd(pp, o):
         def loss_fn(ppp):
-            mv, bm, v = net_forward(ppp, args.arch, o)
+            mv, bm, v, _ = net_forward(ppp, args.arch, o)
             return mv.sum() + bm.sum() + v.sum()
         g = jax.grad(loss_fn)(pp)
         return g

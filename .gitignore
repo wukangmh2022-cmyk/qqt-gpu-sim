@@ -26,3 +26,10 @@ ckpt_local/
 upload_2x8gpu/
 *.tar.gz
 *.bak
+
+# 从 checkpoint 导出的本地评测模型（可用 export_web.py 重新生成）。
+# 这些文件通常每个几十 MB，批量实验时会迅速膨胀到数 GB，不纳入源码提交。
+web/models/params_*.json
+web/models/params_*.onnx
+params_it*.pkl
+params_surgery*.pkl

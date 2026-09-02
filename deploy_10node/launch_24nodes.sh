@@ -31,7 +31,6 @@ done
 
 # 生产训练参数（改这里即可）：steps/iter = 2×32768×256 ≈ 16.78M；
 # 260B 全量 ≈ 15500 iter。试跑用 ITERS= 覆盖（如 ITERS=100）。
-EPOCHS="${EPOCHS:-1}"
 ITERS="${ITERS:-15500}"
 NUM_ENVS="${NUM_ENVS:-32768}"
 NUM_STEPS="${NUM_STEPS:-256}"
@@ -137,8 +136,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 rm -rf /tmp/jaxbomb_24node && mkdir -p /tmp/jaxbomb_24node/scripts /tmp/jaxbomb_24node/web/assets/maps
 cp -r "$ROOT/jax_bomb" /tmp/jaxbomb_24node/
 cp "$ROOT/web/assets/maps/levels.json" /tmp/jaxbomb_24node/levels.json
-cp "$ROOT/web/assets/maps/curriculum.json" /tmp/jaxbomb_24node/web/assets/maps/curriculum.json
-cp "$ROOT/web/assets/maps/curriculum.json" /tmp/jaxbomb_24node/curriculum.json
+cp "$ROOT/web/assets/maps/levels.json" /tmp/jaxbomb_24node/web/assets/maps/levels.json
+cp "$ROOT/web/assets/maps/curriculum.json" /tmp/jaxbomb_24node/web/assets/maps/curriculum.json 2>/dev/null || true
+cp "$ROOT/web/assets/maps/curriculum.json" /tmp/jaxbomb_24node/curriculum.json 2>/dev/null || true
 for s in quick_check_levels.py quick_check_bush.py quick_check_crate_semantics.py \
          quick_check_obs_move.py quick_check_js_jax_move.py quick_check_anti_tunnel.py; do
   cp "$ROOT/scripts/$s" /tmp/jaxbomb_24node/scripts/ 2>/dev/null
@@ -182,10 +182,10 @@ MASTER="${N_IP[0]:-127.0.0.1}"
 [ "$MASTER" = "127.0.0.1" ] && { echo "rank0 IP 获取失败"; exit 1; }
 
 # ── 3) 启动（rank0 先起做 coordinator，其余立即跟上）──
-echo "=== 启动训练（MASTER_ADDR=$MASTER，LSGD_K=$LSGD_K LSGD_MODE=$LSGD_MODE，iters=$ITERS，patch=$PATCH，adv_top_frac=$ADV_TOP_FRAC，ema_decay=$EMA_DECAY，课程=${CURRICULUM_JSON##*/}）==="
+echo "=== 启动训练（MASTER_ADDR=${MASTER}，LSGD_K=${LSGD_K} LSGD_MODE=${LSGD_MODE}，iters=${ITERS}，patch=${PATCH}，adv_top_frac=${ADV_TOP_FRAC}，ema_decay=${EMA_DECAY}，课程=${CURRICULUM_JSON##*/}）==="
 for i in $(seq 0 $((NW-1))); do
   # LD_PRELOAD 用 glob 取实际 openmpi 版本；LSGD_K/MODE 在本地展开透传
-  "$WORK/cmd_$i" "cd /root/private_data/qqt-gpu-sim; source /opt/dtk/env.sh 2>/dev/null; unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; export LD_PRELOAD=\$(ls /usr/mpi/gcc/openmpi-*/lib/libmpi.so 2>/dev/null | head -1); export WORLD_SIZE=$NW RANK=$i MASTER_ADDR=$MASTER MASTER_PORT=29500; export LSGD_K=$LSGD_K LSGD_MODE=$LSGD_MODE CKPT_DIR=ckpt CKPT_EVERY=30 CKPT_LOCAL_DIR=ckpt_local CKPT_LOCAL_EVERY=30; L=\${LEVELS_FILE:+"--levels \$LEVELS_FILE --level-weights \"\$LEVEL_WEIGHTS\""}; C=\${CRATE_REWARD_COEF:+\"--crate-reward-coef \$CRATE_REWARD_COEF --crate-reward-anneal-steps \$CRATE_REWARD_ANNEAL\"}; X=\${EXPLORE_REWARD_COEF:+\"--explore-reward-coef \$EXPLORE_REWARD_COEF --explore-reward-anneal-steps \$EXPLORE_REWARD_ANNEAL\"}; B=\${BRICK_REWARD_COEF:+\"--brick-reward-coef \$BRICK_REWARD_COEF --reward-anneal-k \$REWARD_ANNEAL_K\"}; U=\${CURRICULUM_JSON:+\"--curriculum-json \$CURRICULUM_JSON\"}; E=\${EVAL_VS:+\"--eval-vs \$EVAL_VS --eval-every \${EVAL_EVERY:-200}\"}; nohup python3 -m jax_bomb.train_real --arch transformer --embed 392 --depth 4 --patch $PATCH --heads 4 --ff-factor 4 --adv-top-frac $ADV_TOP_FRAC --ema-decay $EMA_DECAY --num-envs $NUM_ENVS --num-steps $NUM_STEPS --minibatch $MINIBATCH --epochs $EPOCHS --iters $ITERS --lsgd-k $LSGD_K --lsgd-mode $LSGD_MODE \$L \$C \$X \$B \$U \$E $FRESH > /root/private_data/train_r$i.log 2>&1 & echo RANK$i_STARTED" | tail -1
+  "$WORK/cmd_$i" "cd /root/private_data/qqt-gpu-sim; source /opt/dtk/env.sh 2>/dev/null; unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; export LD_PRELOAD=\$(ls /usr/mpi/gcc/openmpi-*/lib/libmpi.so 2>/dev/null | head -1); export WORLD_SIZE=$NW RANK=$i MASTER_ADDR=$MASTER MASTER_PORT=29500; export LSGD_K=$LSGD_K LSGD_MODE=$LSGD_MODE CKPT_DIR=ckpt CKPT_EVERY=30 CKPT_LOCAL_DIR=ckpt_local CKPT_LOCAL_EVERY=30; L=\${LEVELS_FILE:+"--levels \$LEVELS_FILE --level-weights \"\$LEVEL_WEIGHTS\""}; C=\${CRATE_REWARD_COEF:+\"--crate-reward-coef \$CRATE_REWARD_COEF --crate-reward-anneal-steps \$CRATE_REWARD_ANNEAL\"}; X=\${EXPLORE_REWARD_COEF:+\"--explore-reward-coef \$EXPLORE_REWARD_COEF --explore-reward-anneal-steps \$EXPLORE_REWARD_ANNEAL\"}; B=\${BRICK_REWARD_COEF:+\"--brick-reward-coef \$BRICK_REWARD_COEF --reward-anneal-k \$REWARD_ANNEAL_K\"}; U=\${CURRICULUM_JSON:+\"--curriculum-json \$CURRICULUM_JSON\"}; E=\${EVAL_VS:+\"--eval-vs \$EVAL_VS --eval-every \${EVAL_EVERY:-200}\"}; nohup python3 -m jax_bomb.train_real --arch transformer --embed 392 --depth 4 --patch $PATCH --heads 4 --ff-factor 4 --adv-top-frac $ADV_TOP_FRAC --ema-decay $EMA_DECAY --num-envs $NUM_ENVS --num-steps $NUM_STEPS --minibatch $MINIBATCH --epochs 2 --iters $ITERS --lsgd-k $LSGD_K --lsgd-mode $LSGD_MODE \$L \$C \$X \$B \$U \$E $FRESH > /root/private_data/train_r$i.log 2>&1 & echo RANK${i}_STARTED" | tail -1
   [ "$i" = "0" ] && sleep 5   # coordinator 先起
 done
 

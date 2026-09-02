@@ -1,0 +1,5 @@
+[2026-08-30 00:30:38] [Gate] Stage 2 vs Baseline winrate=43.5% (515/1185)
+[2026-08-30 00:40:00] [Gate] Stage 2 vs Baseline winrate=74.1% (891/1202)
+[2026-08-30 01:00:49] PROMOTION -> Stage 3 (步数兜底 (frac=0.0200))
+[2026-08-30 01:27:08] PROMOTION -> Stage 4 (胜率达标 (winrate=82.6% >= 75.0%))
+[2026-08-30 01:45:55] PROMOTION -> Stage 5 (胜率达标 (winrate=67.5% >= 65.0%))

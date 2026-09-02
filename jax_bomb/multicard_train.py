@@ -35,7 +35,59 @@ import json
 import os
 import pickle
 import signal
+import sys
 import time
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - local Python 3.9 fallback
+    tomllib = None
+
+
+def _load_experiment_config(path):
+    """Load the small scalar-only TOML schema used by experiment configs.
+
+    Python 3.11 uses stdlib tomllib. The fallback keeps local Python 3.9
+    tooling usable without adding a runtime dependency; it intentionally
+    supports only sections plus string/bool/int/float scalar values.
+    """
+    if tomllib is not None:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    out, section = {}, None
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            line, quoted, esc = raw.strip(), False, False
+            chars = []
+            for ch in line:
+                if ch == '"' and not esc:
+                    quoted = not quoted
+                if ch == '#' and not quoted:
+                    break
+                chars.append(ch)
+                esc = (ch == '\\' and not esc)
+                if ch != '\\':
+                    esc = False
+            line = ''.join(chars).strip()
+            if not line:
+                continue
+            if line.startswith('[') and line.endswith(']'):
+                section = line[1:-1].strip()
+                out.setdefault(section, {})
+                continue
+            if '=' not in line or section is None:
+                raise ValueError(f"unsupported config line: {raw.rstrip()}")
+            key, value = (x.strip() for x in line.split('=', 1))
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1]
+            elif value.lower() in ('true', 'false'):
+                value = value.lower() == 'true'
+            elif any(c in value for c in '.eE'):
+                value = float(value)
+            else:
+                value = int(value)
+            out[section][key] = value
+    return out
 
 import numpy as np
 import jax
@@ -115,13 +167,13 @@ def newest_ckpt(ckpt_dir, rank):
     return max(files, key=lambda p: int(os.path.basename(p).split("_")[1]))
 
 
-def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg, cur_stage=0):
+def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg):
     """每个 rank 存自己的文件（states/keys 每 rank 不同；params/opt_state
     跨 rank 一致）。host 数组序列化，加载时转回 jax 数组。"""
     path = ckpt_file(ckpt_dir, rank, it)
     try:
         os.makedirs(ckpt_dir, exist_ok=True)
-        payload = {"it": it, "cfg": cfg, "cur_stage": int(cur_stage),
+        payload = {"it": it, "cfg": cfg,
                    "params": jax.tree.map(np.asarray, params),
                    "opt_state": jax.tree.map(np.asarray, opt_state),
                    "states": jax.tree.map(np.asarray, states),
@@ -145,43 +197,81 @@ def load_ckpt(path):
 
 
 def main():
+    # Two-stage parse: load a commented TOML experiment config first, then use
+    # normal CLI values as overrides. This keeps iteration/reward/topology
+    # parameters in one auditable file without breaking old CLI invocations.
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config", default=os.environ.get("TRAIN_CONFIG"))
+    pre_args, _ = pre.parse_known_args()
+    config_path = pre_args.config
+    config = {}
+    if config_path:
+        try:
+            config = _load_experiment_config(config_path)
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"cannot read --config {config_path}: {exc}") from exc
+
+    def cfg(section, key, default=None):
+        value = config.get(section, {}).get(key, default)
+        return default if value is None else value
+
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--arch", default="transformer")
-    ap.add_argument("--embed", type=int, default=392)
-    ap.add_argument("--depth", type=int, default=4)
-    ap.add_argument("--patch", type=int, default=3)
-    ap.add_argument("--heads", type=int, default=4)
-    ap.add_argument("--ff-factor", type=float, default=4)
-    ap.add_argument("--num-envs", type=int, default=4096)
-    ap.add_argument("--num-steps", type=int, default=256)
-    ap.add_argument("--minibatch", type=int, default=4096)
-    ap.add_argument("--epochs", type=int, default=2)
-    ap.add_argument("--iters", type=int, default=3)
-    ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--gamma", type=float, default=1.0)
-    ap.add_argument("--lam", type=float, default=0.95)
-    ap.add_argument("--clip-eps", type=float, default=0.2)
-    ap.add_argument("--vf-coef", type=float, default=0.5)
-    ap.add_argument("--ent-coef", type=float, default=0.01)
-    ap.add_argument("--adv-top-frac", type=float, default=0.25,
-                    help="Top-Advantage Filtering 比例 (保留前 25%% |A_t|)")
-    ap.add_argument("--ema-decay", type=float, default=0.999,
-                    help="参数 EMA 指数移动平均衰减系数")
-    ap.add_argument("--no-mask", action="store_true")
-    ap.add_argument("--obs-quant", action="store_true")
-    ap.add_argument("--checkpoint", action="store_true")
+    ap.add_argument("--config", default=config_path,
+                    help="注释 TOML 实验配置；命令行参数优先覆盖配置")
+    ap.add_argument("--arch", default=cfg("model", "arch", "transformer"))
+    ap.add_argument("--embed", type=int, default=cfg("model", "embed", 392))
+    ap.add_argument("--depth", type=int, default=cfg("model", "depth", 4))
+    ap.add_argument("--patch", type=int, default=cfg("model", "patch", 3))
+    ap.add_argument("--heads", type=int, default=cfg("model", "heads", 4))
+    ap.add_argument("--ff-factor", type=float, default=cfg("model", "ff_factor", 4))
+    ap.add_argument("--num-envs", type=int, default=cfg("rollout", "num_envs", 4096))
+    ap.add_argument("--num-steps", type=int, default=cfg("rollout", "num_steps", 256))
+    ap.add_argument("--minibatch", type=int, default=cfg("rollout", "minibatch", 4096))
+    ap.add_argument("--epochs", type=int, default=cfg("rollout", "epochs", 2))
+    ap.add_argument("--iters", type=int, default=cfg("run", "iters", 3))
+    ap.add_argument("--lr", type=float, default=cfg("optimizer", "lr", 3e-4))
+    ap.add_argument("--seed", type=int, default=cfg("run", "seed", 0))
+    ap.add_argument("--gamma", type=float, default=cfg("optimizer", "gamma", 0.99))
+    ap.add_argument("--lam", type=float, default=cfg("optimizer", "lam", 0.95))
+    ap.add_argument("--clip-eps", type=float, default=cfg("optimizer", "clip_eps", 0.2))
+    ap.add_argument("--vf-coef", type=float, default=cfg("optimizer", "vf_coef", 0.5))
+    ap.add_argument("--ent-coef", type=float, default=cfg("optimizer", "ent_coef", 0.01))
+    ap.add_argument("--win-bonus", type=float, default=cfg("reward", "win_bonus", 10.0),
+                    help="击杀胜者奖励（固定）")
+    ap.add_argument("--lose-bonus-start", type=float, default=cfg("reward", "lose_bonus_start", 6.0),
+                    help="击杀败者前期惩罚幅值；按固定退火降至 floor")
+    ap.add_argument("--lose-bonus-floor", type=float, default=cfg("reward", "lose_bonus_floor", 3.0),
+                    help="击杀败者后期最低惩罚幅值")
+    ap.add_argument("--timeout-lead-bonus", type=float, default=cfg("reward", "timeout_lead_bonus", 2.0),
+                    help="超时血量领先方固定奖励")
+    ap.add_argument("--timeout-trail-penalty", type=float, default=cfg("reward", "timeout_trail_penalty", 1.0),
+                    help="超时血量落后方固定惩罚")
+    ap.add_argument("--timeout-draw-bonus", type=float, default=cfg("reward", "timeout_draw_bonus", 0.0),
+                    help="超时平血双方奖励")
+    ap.add_argument("--adv-top-frac", type=float, default=cfg("reward", "adv_top_frac", 0.25),
+                    help="保留 |Advantage| 排名前比例（历史 Iter68=0.25）")
+    ap.add_argument("--no-mask", action="store_true",
+                    default=cfg("runtime", "no_mask", False))
+    ap.add_argument("--obs-quant", action="store_true",
+                    default=cfg("runtime", "obs_quant", False))
+    ap.add_argument("--legacy-obs13", action="store_true",
+                    default=cfg("runtime", "legacy_obs13", False),
+                    help="使用旧 ViTModel 的 13 通道观测（去掉当前新增的 "
+                         "pushable 通道），用于复刻旧 checkpoint；默认 14 通道")
+    ap.add_argument("--checkpoint", action="store_true",
+                    default=cfg("runtime", "checkpoint", False))
     # ---- Local SGD（有损同步，跨机降通信）----
     ap.add_argument("--lsgd-k", type=int,
-                    default=int(os.environ.get("LSGD_K", "0")),
+                    default=int(os.environ.get("LSGD_K", str(
+                        cfg("distributed", "lsgd_k", 0)))),
                     help="Local SGD 同步周期：每 K 个 minibatch 同步一次参数"
                          "（0=现状：每个 minibatch pmean 梯度，逐位一致）。"
                          ">0 时 minibatch 循环内零通信、每 K 步 pmean 参数，"
                          "通信量降到 ~1/K。20 卡（10 机×2 卡）下 K=256 ≈ "
                          "4 次同步/迭代 ≈ 0.5-1.5s，K=128 ≈ 8 次 ≈ 1-3s。"
                          "环境变量 LSGD_K 同效")
-    ap.add_argument("--lsgd-mode", default="param",
+    ap.add_argument("--lsgd-mode", default=cfg("distributed", "lsgd_mode", "param"),
                     choices=["param", "grad"],
                     help="Local SGD 同步对象：param=每 K 步平均参数（保持 "
                          "1024 次更新/迭代，代价是 K 步本地漂移）；grad=冻结"
@@ -189,84 +279,103 @@ def main():
                          "（零漂移、参数始终逐位一致，代价是只有 1024/K 次"
                          "更新/迭代；K=1 时与现状逐位一致）")
     ap.add_argument("--lsgd-bf16", action="store_true",
+                    default=cfg("distributed", "lsgd_bf16", False),
                     help="Local SGD 同步时用 bf16 半精度传输（流量减半，"
                          "尾数损失可忽略）")
     ap.add_argument("--lsgd-sync-state", action="store_true",
+                    default=cfg("distributed", "lsgd_sync_state", False),
                     help="Local SGD 同步时连 Adam 动量/方差一起平均"
                          "（防本地漂移，流量×3）")
     ap.add_argument("--tolerate-inconsistent", action="store_true",
+                    default=cfg("runtime", "tolerate_inconsistent", False),
                     help="一致性校验失败时继续跑（诊断用），默认退出")
-    ap.add_argument("--ckpt-dir", default=os.environ.get("CKPT_DIR", "ckpt"),
+    ap.add_argument("--ckpt-dir", default=os.environ.get(
+        "CKPT_DIR", cfg("checkpoint", "ckpt_dir", None)),
                     help="检查点目录；不设=不存盘（benchmark 模式）。"
                          "真实训练设 ckpt/（自动接续最新检查点）")
     ap.add_argument("--ckpt-every", type=int,
-                    default=int(os.environ.get("CKPT_EVERY", "60")),
+                    default=int(os.environ.get("CKPT_EVERY", str(
+                        cfg("checkpoint", "ckpt_every", 60)))),
                     help="周期存盘间隔（分钟）；0=仅在结束/收到信号时存")
     ap.add_argument("--ckpt-local-dir",
-                    default=os.environ.get("CKPT_LOCAL_DIR", "ckpt"),
+                    default=os.environ.get("CKPT_LOCAL_DIR",
+                                          cfg("checkpoint", "ckpt_local_dir", None)),
                     help="rank0 轻量参数快照目录（供拉回本地/评估，params 仅 "
-                         "~25MB pickle，不拖速度）。")
+                         "~25MB pickle，不拖速度）。不设=不存")
     ap.add_argument("--ckpt-local-every", type=int,
-                    default=int(os.environ.get("CKPT_LOCAL_EVERY", "30")),
+                    default=int(os.environ.get("CKPT_LOCAL_EVERY", str(
+                        cfg("checkpoint", "ckpt_local_every", 30)))),
                     help="参数快照间隔（分钟）；0=仅在结束/信号时存")
     # ---- 评估（当前策略 vs 冻结基线，两策略对打）----
-    ap.add_argument("--eval-vs", default=os.environ.get("EVAL_VS", None),
+    ap.add_argument("--eval-vs", default=os.environ.get(
+        "EVAL_VS", cfg("evaluation", "eval_vs", None)),
                     help="冻结基线 ckpt/params 路径（支持 {RANK} 占位，各 rank "
                          "用自己那份：如 ckpt/ckpt_00001000_r{RANK}.pkl）。"
                          "每 --eval-every 迭代打一次当前 vs 基线胜率")
     ap.add_argument("--eval-every", type=int,
-                    default=int(os.environ.get("EVAL_EVERY", "0")),
+                    default=int(os.environ.get("EVAL_EVERY", str(
+                        cfg("evaluation", "eval_every", 0)))),
                     help="评估间隔（迭代数）；0=关闭")
     ap.add_argument("--fresh", action="store_true",
+                    default=cfg("run", "fresh", False),
                     help="忽略已有检查点全新开始（默认自动接续；"
                          "也可删除检查点目录实现不接续）")
-    ap.add_argument("--init-params", default=os.environ.get("INIT_PARAMS", None),
-                    help="热启动初始模型权重路径（.pkl 文件，仅初始化网络参数，"
-                         "以继承预训练智慧开启全新 0~4 课程训练）")
-    ap.add_argument("--levels", default=os.environ.get("LEVELS_FILE", None),
+    ap.add_argument("--levels", default=os.environ.get(
+        "LEVELS_FILE", cfg("environment", "levels", None)),
                     help="标准化关卡数据 levels.json 路径（241 张 QQ堂地图；"
                          "不设时自动探测 ./levels.json / ./web/assets/maps/"
                          "levels.json，都没有则回退过程式生成）")
-    ap.add_argument("--level-weights", default=os.environ.get("LEVEL_WEIGHTS", "empty=0.05,功夫=0.1,比武=0.15"),
+    ap.add_argument("--level-weights", default=os.environ.get(
+        "LEVEL_WEIGHTS", cfg("environment", "level_weights",
+                             "empty=0.05,功夫=0.1,比武=0.15")),
                     help="关卡采样权重，如 '240=0.2' 或 'empty=0.2'（空场景关"
                          "占 20%%）；逗号分隔多个；其余关均分剩余概率")
-    ap.add_argument("--crate-reward-coef", type=float, default=0.0,
+    ap.add_argument("--crate-reward-coef", type=float, default=cfg(
+        "reward", "crate_reward_coef", 0.0),
                     help="开箱成长 bootstrap 奖励系数（0=关）。关卡模式多数"
                          "地图出生点被砖隔开，前期无交战通道——短促正奖励加速"
                          "前期学习，随 --crate-reward-anneal-steps 线性退火到 0")
-    ap.add_argument("--crate-reward-anneal-steps", type=int, default=0,
+    ap.add_argument("--crate-reward-anneal-steps", type=int, default=cfg(
+        "reward", "crate_reward_anneal_steps", 0),
                     help="开箱奖励退火步数（全局环境步；长训默认 300 亿，8.39M 步/iter 下覆盖整轮）。"
                          "0=不退火（保持恒定，不推荐）")
-    ap.add_argument("--explore-reward-coef", type=float, default=0.0,
+    ap.add_argument("--explore-reward-coef", type=float, default=cfg(
+        "reward", "explore_reward_coef", 0.0),
                     help="探索 novelty 奖励系数（0=关）。每 tick 玩家中心格若是本局首次"
                          "到达 → +coef；走过的格不再给分，坐桩/困出生点零探索分。与开箱"
                          "奖励同为 bootstrap 信号，随 --explore-reward-anneal-steps 退火到 0")
-    ap.add_argument("--explore-reward-anneal-steps", type=int, default=0,
+    ap.add_argument("--explore-reward-anneal-steps", type=int, default=cfg(
+        "reward", "explore_reward_anneal_steps", 0),
                     help="探索奖励退火步数（全局环境步；长训默认 300 亿）。0=不退火")
-    ap.add_argument("--brick-reward-coef", type=float, default=0.0,
+    ap.add_argument("--brick-reward-coef", type=float, default=cfg(
+        "reward", "brick_reward_coef", 0.0),
                     help="炸墙奖励系数（0=关）。每炸毁一块砖双方各 +coef/2——给"
                          "'炸墙'本身即时正反馈，治出生点 3 格死锁（crate 链路"
                          "炸→掷爆率→吃到太长太弱学不会）。乘统一退火 α")
-    ap.add_argument("--reward-anneal-k", type=float, default=1.2,
+    ap.add_argument("--reward-anneal-k", type=float, default=cfg(
+        "reward", "reward_anneal_k", 1.2),
                     help="动态退火斜率 k（α_dyn = max(0, 1-tanh(k·x))，x=训练内"
                          "每局击杀率）。击杀率上来（模型会打架了）塑形自动归零，"
                          "只剩纯胜负——Pommerman 论文机制，代替固定步数拍脑袋")
-    ap.add_argument("--reward-anneal-step-offset", type=int, default=0,
+    ap.add_argument("--reward-anneal-step-offset", type=int, default=cfg(
+        "reward", "reward_anneal_step_offset", 0),
                     help="奖励固定退火的已完成全局环境步数。参数 warm start 用它继承"
                          "源模型的固定退火进度；不改变 checkpoint iteration、Adam、"
                          "环境或 RNG 的恢复语义。")
-    ap.add_argument("--curriculum-json", default=None,
-                    help="Spawn-Distance 课程文件：按阶段自动切换图集与出生点距离 Stage1→4")
-    ap.add_argument("--curriculum-winrate-gate", type=float, default=0.65,
-                    help="课程自动晋级胜率门禁（默认 0.65：对战本阶段初始基准胜率 >= 65%% 时自动晋级）")
-    ap.add_argument("--curriculum-eval-every", type=int, default=50,
-                    help="课程对战评估间隔（迭代数，默认 50：每 50 轮评估一次 vs 阶段基线胜率）")
-    ap.add_argument("--curriculum-min-iters", type=int, default=50,
-                    help="每个课程阶段最小训练迭代数（默认 50：防止阶段跳变过快）")
-    ap.add_argument("--curriculum-eval-steps", type=int, default=0,
-                    help="课程 Gate 评估对战步数（默认 0=使用 --num-steps；"
-                         "建议设为 1800 与正式对局一致，保证复杂地图有足够步数分出胜负）")
+    ap.add_argument("--curriculum-json", default=cfg(
+        "environment", "curriculum_json", None),
+                    help="Spawn-Distance 课程文件（scripts/analyze_maps.py "
+                         "--curriculum 生成）：按全局步比例切换图集 Stage1→4，"
+                         "S1=Pommerman 式小房间起点，逐步放宽到全图")
     args = ap.parse_args()
+    if args.lose_bonus_start < 0 or args.lose_bonus_floor < 0:
+        raise SystemExit("lose bonus must be non-negative")
+    if args.lose_bonus_floor > args.lose_bonus_start:
+        raise SystemExit("lose-bonus-floor must be <= lose-bonus-start")
+    if args.legacy_obs13:
+        # jax_train 在下方才导入；设置环境变量即可让 rollout 与 next-value
+        # 路径统一裁掉 ch13。默认路径完全不受影响。
+        os.environ["JAXBOMB_LEGACY_OBS13"] = "1"
     if args.reward_anneal_step_offset < 0:
         raise SystemExit("--reward-anneal-step-offset must be non-negative")
     try:
@@ -316,22 +425,17 @@ def main():
         from jax_bomb import levels as _levels
 
         def _set_stage(si: int):
-            """课程：把 active 图集切到 stage si，并设置该阶段的出生点最大距离限制。"""
+            """课程：把 active 图集切到 stage si（图 id 均分权重）。"""
             ids = curriculum['stages'][si]
             w = 1.0 / len(ids)
-            # 空间几何距离：Stage 0 空场景(<=4) → Stage 1 贴脸(<=4) → Stage 2 近距破障(<=6) → Stage 3 中距迷宫(<=10) → Stage 4 全图无限制(0)
-            stage_dists = [4, 4, 6, 10, 0]
-            max_d = stage_dists[si] if si < len(stage_dists) else 0
             _levels.set_active(levels_path,
-                               weights=','.join(f"{i}={w:.8f}" for i in ids),
-                               max_spawn_dist=max_d)
+                               weights=','.join(f"{i}={w:.8f}" for i in ids))
 
         if args.curriculum_json:
             with open(args.curriculum_json, encoding="utf-8") as f:
                 curriculum = json.load(f)
             _set_stage(0)
-            cur_stage = 0
-            print(f"[{rank}] 课程模式: {args.curriculum_json} 初始 Stage 0 (纯空场景道场)"
+            print(f"[{rank}] 课程模式: {args.curriculum_json} 初始 Stage1"
                   f"（{len(curriculum['stages'][0])} 张）阈值"
                   f" {curriculum['thresholds']}", flush=True)
         else:
@@ -390,6 +494,8 @@ def main():
             p = load_ckpt(ck)
             cfg_old = p["cfg"]
             if "envs_per" in cfg_old:
+                # 新版 cfg：按"每副本负载"校验 —— 机器数变化（掉线降级重启）
+                # 时 per-replica 负载不变即允许接续，n_total 只警告
                 want = {"arch": args.arch, "embed": args.embed,
                         "depth": args.depth, "patch": args.patch,
                         "heads": args.heads, "ff_factor": args.ff_factor,
@@ -406,6 +512,12 @@ def main():
                         "brick_coef": args.brick_reward_coef,
                         "anneal_k": args.reward_anneal_k,
                         "reward_anneal_step_offset": args.reward_anneal_step_offset,
+                        "win_bonus": args.win_bonus,
+                        "lose_bonus_start": args.lose_bonus_start,
+                        "lose_bonus_floor": args.lose_bonus_floor,
+                        "timeout_lead_bonus": args.timeout_lead_bonus,
+                        "timeout_trail_penalty": args.timeout_trail_penalty,
+                        "timeout_draw_bonus": args.timeout_draw_bonus,
                         "envs_per": envs_per, "mb_local": mb_local}
                 bad = [k for k, v in want.items()
                        if cfg_old.get(k, 0 if k == "reward_anneal_step_offset"
@@ -416,6 +528,7 @@ def main():
                           f"允许接续。--num-envs/--minibatch 请按新卡数重设）",
                           flush=True)
             else:
+                # 旧版 cfg（无 envs_per）：沿用旧校验
                 want = {"arch": args.arch, "embed": args.embed,
                         "depth": args.depth, "patch": args.patch,
                         "num_envs": args.num_envs,
@@ -430,7 +543,13 @@ def main():
                         "explore_anneal": args.explore_reward_anneal_steps,
                         "brick_coef": args.brick_reward_coef,
                         "anneal_k": args.reward_anneal_k,
-                        "reward_anneal_step_offset": args.reward_anneal_step_offset}
+                        "reward_anneal_step_offset": args.reward_anneal_step_offset,
+                        "win_bonus": args.win_bonus,
+                        "lose_bonus_start": args.lose_bonus_start,
+                        "lose_bonus_floor": args.lose_bonus_floor,
+                        "timeout_lead_bonus": args.timeout_lead_bonus,
+                        "timeout_trail_penalty": args.timeout_trail_penalty,
+                        "timeout_draw_bonus": args.timeout_draw_bonus}
                 bad = [k for k, v in want.items()
                        if cfg_old.get(k, 0 if k == "reward_anneal_step_offset"
                                       else None) != v]
@@ -442,10 +561,6 @@ def main():
                     f"如确要新跑请加 --fresh 或删除检查点目录")
             it_done, params, opt_state = p["it"], p["params"], p["opt_state"]
             states, keys = p["states"], p["keys"]
-            if "cur_stage" in p and curriculum is not None:
-                cur_stage = int(p["cur_stage"])
-                _set_stage(cur_stage)
-                print(f"[{rank}] 课程阶段恢复为 Stage {cur_stage}（{len(curriculum['stages'][cur_stage])} 张图）", flush=True)
             print(f"[{rank}] 接续检查点 {ck}（iter {it_done}）", flush=True)
             write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                                 f"RESUME from {ck} iter={it_done}"])
@@ -457,17 +572,11 @@ def main():
             init_batch(jrandom.PRNGKey(args.seed * 1000 + rank * n_local + l),
                        envs_per)
             for l in range(n_local)])
-        if args.init_params and os.path.isfile(args.init_params):
-            with open(args.init_params, "rb") as f:
-                raw_p = pickle.load(f)
-            params = raw_p.get("params", raw_p) if isinstance(raw_p, dict) else raw_p
-            params = jax.tree.map(jnp.asarray, params)
-            print(f"[{rank}] 🔥 成功从热启动初始权重加载: {args.init_params}（带着预训练智慧从 0 开始课程）", flush=True)
-        else:
-            pkey = jrandom.PRNGKey(args.seed + 9999)
-            params = init_net(pkey, args.arch, N_OBS_CH, H, W,
-                              embed=args.embed, depth=args.depth, patch=args.patch,
-                              heads=args.heads, ff_factor=args.ff_factor)
+        pkey = jrandom.PRNGKey(args.seed + 9999)
+        obs_ch = 13 if args.legacy_obs13 else N_OBS_CH
+        params = init_net(pkey, args.arch, obs_ch, H, W,
+                          embed=args.embed, depth=args.depth, patch=args.patch,
+                          heads=args.heads, ff_factor=args.ff_factor)
         opt_state = opt.init(params)
         keys = jrandom.split(jrandom.PRNGKey(args.seed * 7919 + rank), n_local)
         write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] RUN start: "
@@ -479,9 +588,9 @@ def main():
                             f"lsgd_k={args.lsgd_k} lsgd_mode={args.lsgd_mode} "
                             f"lsgd_bf16={args.lsgd_bf16} "
                             f"lsgd_sync_state={args.lsgd_sync_state} "
-                            f"adv_top_frac={args.adv_top_frac} "
                             f"params={count_params(params):,}"])
-    cfg = {"arch": args.arch, "embed": args.embed, "depth": args.depth,
+    cfg = {"config": os.path.abspath(config_path) if config_path else None,
+           "arch": args.arch, "embed": args.embed, "depth": args.depth,
            "patch": args.patch, "heads": args.heads,
            "ff_factor": args.ff_factor,
            "num_envs": args.num_envs, "num_steps": args.num_steps,
@@ -497,9 +606,17 @@ def main():
            "brick_coef": args.brick_reward_coef,
            "anneal_k": args.reward_anneal_k,
            "reward_anneal_step_offset": args.reward_anneal_step_offset,
+           "win_bonus": args.win_bonus,
+           "lose_bonus_start": args.lose_bonus_start,
+           "lose_bonus_floor": args.lose_bonus_floor,
+           "timeout_lead_bonus": args.timeout_lead_bonus,
+           "timeout_trail_penalty": args.timeout_trail_penalty,
+           "timeout_draw_bonus": args.timeout_draw_bonus,
            "envs_per": envs_per, "mb_local": mb_local,
            "lsgd_k": args.lsgd_k, "lsgd_mode": args.lsgd_mode,
-           "lsgd_bf16": args.lsgd_bf16, "lsgd_sync_state": args.lsgd_sync_state}
+           "lsgd_bf16": args.lsgd_bf16, "lsgd_sync_state": args.lsgd_sync_state,
+           "adv_top_frac": args.adv_top_frac}
+    cfg["obs_channels"] = 13 if args.legacy_obs13 else N_OBS_CH
     print(f"[{rank}] arch={args.arch} embed={args.embed} depth={args.depth} "
           f"patch={args.patch} params={count_params(params):,} "
           f"envs/replica={envs_per} mb_local={mb_local} it_done={it_done}",
@@ -518,12 +635,14 @@ def main():
               f"稀疏/量化）", flush=True)
 
     def shard(params, opt_state, states, key, crate_coef, explore_coef,
-              brick_coef, timeout_alpha):
+              brick_coef, timeout_alpha, lose_bonus):
         """单个 replica 的一次迭代（与 jax_train.build_dp_one_iter 一致）。"""
         states, batch, nov, kills = collect_rollout(
             params, args.arch, states, key, steps,
             args.no_mask, args.obs_quant, args.checkpoint, crate_coef,
-            explore_coef, brick_coef, timeout_alpha)
+            explore_coef, brick_coef, timeout_alpha, lose_bonus,
+            args.win_bonus, args.timeout_lead_bonus,
+            args.timeout_trail_penalty, args.timeout_draw_bonus)
         obs, state, acts, lps, vals, rew, done, masks = batch
         fobs = both_perspectives(states)
         fmasks = both_masks(states)
@@ -542,7 +661,7 @@ def main():
                     key, mb_local, args.clip_eps, args.vf_coef,
                     args.ent_coef, args.epochs, axis_name="dev",
                     sync_k=args.lsgd_k, bf16_sync=args.lsgd_bf16,
-                    return_loss=True)
+                    return_loss=True, adv_top_frac=args.adv_top_frac)
             else:
                 params, opt_state, last_loss = ppo_update_lsgd(
                     params, opt, opt_state, args.arch,
@@ -560,7 +679,13 @@ def main():
                 args.epochs, axis_name="dev", return_loss=True,
                 adv_top_frac=args.adv_top_frac)
         key = jrandom.split(key)[0]
+        # 跨全部 replica（含跨实例）all_gather 参数摘要 → RCCL 正确性证据
         digest = jax.lax.all_gather(param_digest(params), "dev")
+        # 每迭代聚合统计（评估/监控）：(平均回报, 每帧结束率 → 平均对局长度,
+        #  探索分/帧 —— nov 是窗口内每 env/玩家 novelty 计数，÷steps×coef
+        #  与 rew 均值同口径，用来盯着探索分不压过胜负/掉血信号；
+        #  击杀率 kill_rate = 2×kills.sum()/max(done.sum(),1) ∈[0,1]（每局最多
+        #  1 击杀）—— 动态退火 α_dyn = max(0,1-tanh(k·kill_rate)) 的 x)
         ep_cnt = jnp.maximum(done.sum().astype(jnp.float32), 1.0)
         kill_rate = 2.0 * kills.sum() / ep_cnt
         stats = jnp.stack([jnp.mean(rew),
@@ -569,18 +694,17 @@ def main():
                            kill_rate])
         return params, opt_state, states, key, digest, last_loss, stats
 
-
     one_iter = jax.pmap(shard, axis_name="dev",
-                        in_axes=(None, None, 0, 0, None, None, None, None),
+                        in_axes=(None, None, 0, 0, None, None, None, None,
+                                 None),
                         out_axes=(None, None, 0, 0, 0, 0, 0))
 
-    # ---- 评估：两策略对打（用于课程胜率门禁与 --eval-vs 基线）----
+    # ---- 评估：当前策略 vs 冻结基线（两策略对打，--eval-vs + --eval-every）----
     eval_fn = None
-    eval_steps = args.curriculum_eval_steps if args.curriculum_eval_steps > 0 else steps
-    if (args.eval_vs and args.eval_every > 0) or (curriculum is not None and args.curriculum_eval_every > 0):
+    if args.eval_vs and args.eval_every > 0:
         def eval_shard(params, frozen, states, key):
             states, (w, l) = collect_rollout_two(
-                params, frozen, args.arch, states, key, eval_steps,
+                params, frozen, args.arch, states, key, steps,
                 args.no_mask, args.obs_quant)
             return states, key, w, l
 
@@ -588,11 +712,14 @@ def main():
                            in_axes=(None, None, 0, 0),
                            out_axes=(0, 0, 0, 0))
 
-    # ---- warmup（编译 + 预热，输出丢弃）----
+    # ---- warmup（编译 + 预热，输出丢弃）：保证 iters = 真实训练轮数，
+    #      且接续跑与连续跑逐位一致（接续时 warmup 不会吃掉第一轮）----
+    # 塑形 coef 传满值（warmup 输出丢弃，只编译；首轮真实退火在循环里算）
     _w = one_iter(params, opt_state, states, keys,
                   jnp.maximum(0.0, args.crate_reward_coef),
                   jnp.maximum(0.0, args.explore_reward_coef),
-                  jnp.maximum(0.0, args.brick_reward_coef), 1.0)
+                  jnp.maximum(0.0, args.brick_reward_coef), 1.0,
+                  args.lose_bonus_start)
     jax.block_until_ready(_w)
 
     # ---- 计时 + 逐轮指标 + 周期存盘（stdout/结果文件同步输出，长训监控）----
@@ -601,83 +728,49 @@ def main():
     last_local_save = t0
     n_run = 0
     cur = (params, opt_state, states, keys)
-    ema_params = jax.tree.map(np.asarray, params)    # EMA 参数副本
-    stage_baseline_params = cur[0]                    # 当前 Stage 的初始冻结基准 (内存零 IO)
-    stage_start_iter = it_done + 1                    # 当前 Stage 开始的 iter
     steps_per_iter_g = 2 * args.num_envs * steps     # 全局环境步/迭代
     kill_rate_prev = 0.0                              # 上一 iter 击杀率（首轮未知 → α_dyn=1）
     for i in range(it_done + 1, args.iters + 1):
         ti = time.time()
         gs = reward_schedule_global_steps(
             i, steps_per_iter_g, args.reward_anneal_step_offset)
+        # 课程按本次 run 自己走过的步数切换；参数 warm-start offset 只继承
+        # reward 的固定退火进度，不能跳过本 run 的地图课程阶段。
         curriculum_gs = (i - 1) * steps_per_iter_g
-
-        # ---- 课程自适应胜率门禁提档 (Dynamic Winrate Gating) ----
-        if curriculum is not None and cur_stage < len(curriculum['stages']) - 1:
-            iters_in_stage = i - stage_start_iter
-            gate_thresh = (curriculum.get('winrate_gates', [])[cur_stage]
-                           if curriculum and 'winrate_gates' in curriculum and cur_stage < len(curriculum['winrate_gates'])
-                           else args.curriculum_winrate_gate)
-
-            winrate_passed = False
-            wr = 0.0
-            if eval_fn is not None and i % args.curriculum_eval_every == 0 and iters_in_stage >= args.curriculum_min_iters:
-                est, ekey, ew, el = eval_fn(cur[0], stage_baseline_params, cur[2], cur[3])
-                jax.block_until_ready(est)
-                cur = (cur[0], cur[1], est, ekey)
-                ew_sum = int(np.sum(np.asarray(ew)))
-                el_sum = int(np.sum(np.asarray(el)))
-                total_games = ew_sum + el_sum
-                wr = ew_sum / max(total_games, 1)
-                print(f"[{rank}] [Curriculum Gate] Stage {cur_stage} 评估: "
-                      f"vs StageBaseline win={ew_sum} lose={el_sum} (总完局={total_games}) winrate={wr:.1%} "
-                      f"(晋级门禁={gate_thresh:.1%}, 已训={iters_in_stage} iters)", flush=True)
-                write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                                    f"[Gate] Stage {cur_stage} vs Baseline "
-                                    f"winrate={wr:.1%} ({ew_sum}/{total_games})"])
-                if total_games >= 30 and wr >= gate_thresh:
-                    winrate_passed = True
-
-            # 课程晋级判定：
-            # 1. 优先胜率大考（完局>=30局且胜率>=门禁阈值）
-            # 2. 安全兜底（某阶段深练超 300 轮且胜率>=50%，防止后期超大迷宫图局长过长死锁）
-            step_fallback = False
-            if eval_fn is None:
-                step_frac = curriculum_gs / max(1, steps_per_iter_g * args.iters)
-                step_fallback = (step_frac >= curriculum['thresholds'][cur_stage]) if cur_stage < len(curriculum['thresholds']) else False
-            elif iters_in_stage >= 300 and total_games >= 30 and wr >= 0.50:
-                step_fallback = True
-
-            if winrate_passed or step_fallback:
-                cur_stage += 1
-                _set_stage(cur_stage)
-                stage_start_iter = i
-                stage_baseline_params = cur[0]  # 锁定当前学成的新模型作为下一阶段 Baseline
-                reason = f"胜率达标 (winrate={wr:.1%} >= {gate_thresh:.1%}, 完局={total_games}局)" if winrate_passed else (f"安全超时晋级 (已练 {iters_in_stage} iters, winrate={wr:.1%})" if eval_fn is not None else f"步数达标 (step_frac={step_frac:.1%})")
-                print(f"[{rank}] 🏆 课程晋级 → Stage {cur_stage}（原因: {reason}，"
-                      f"{len(curriculum['stages'][cur_stage])} 张图）", flush=True)
-                write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                                    f"PROMOTION -> Stage {cur_stage} ({reason})"])
-
+        if curriculum is not None:
+            frac = curriculum_gs / max(1, steps_per_iter_g * args.iters)
+            si = 0
+            for t in curriculum['thresholds']:
+                if frac >= t:
+                    si += 1
+            if si != cur_stage:
+                _set_stage(si)
+                cur_stage = si
+                print(f"[{rank}] 课程 → Stage{si + 1}"
+                      f"（{len(curriculum['stages'][si])} 张图，frac={frac:.4f}，"
+                      f"jit 重编译）", flush=True)
+        # 统一退火：α = α_fix(固定 30B 线性) × α_dyn(1-tanh(k·击杀率))。
+        #   α_fix 兜底（防击杀率长期停滞塑形不退）；α_dyn 动态——击杀率上来
+        #   （模型会打架了）塑形自动归零，只剩纯胜负（Pommerman 论文机制）。
         alpha_fix = fixed_reward_alpha(
             i, steps_per_iter_g, shared_anneal_steps,
             args.reward_anneal_step_offset)
         alpha_dyn = jnp.maximum(
             0.0, 1.0 - jnp.tanh(args.reward_anneal_k * kill_rate_prev))
         alpha = alpha_fix * alpha_dyn
+        # 失败惩罚只按固定全局步退火（不乘 kill_rate 动态项），保留后期
+        # 的最低生存信号，避免形成“击杀率越高→失败惩罚越低”的反馈环。
+        lose_bonus = (args.lose_bonus_floor
+                      + (args.lose_bonus_start - args.lose_bonus_floor)
+                      * alpha_fix)
         crate_coef = args.crate_reward_coef * alpha
         explore_coef = args.explore_reward_coef * alpha
         brick_coef = args.brick_reward_coef * alpha
         res = one_iter(cur[0], cur[1], cur[2], cur[3], crate_coef,
-                       explore_coef, brick_coef, alpha)
+                       explore_coef, brick_coef, alpha, lose_bonus)
         jax.block_until_ready(res)
         cur = res
         n_run += 1
-        # 更新参数 EMA
-        cur_p_np = jax.tree.map(np.asarray, res[0])
-        d_ema = float(args.ema_decay)
-        ema_params = jax.tree.map(lambda e, p: d_ema * e + (1.0 - d_ema) * p,
-                                  ema_params, cur_p_np)
         dt_i = time.time() - ti
         dt_avg = (time.time() - t0) / n_run
         sps_i = 2 * args.num_envs * steps / dt_i
@@ -692,7 +785,8 @@ def main():
         line = (f"iter {i}/{args.iters} {dt_i:.3f}s ({dt_avg:.3f}s avg) "
                 f"{sps_i:,.0f} sps (avg {sps_avg:,.0f}) loss={loss_i:.4f} "
                 f"rew={rew_m:.3f} explore={exp_m:.3f} kill={kill_r:.3f} "
-                f"α={float(alpha):.2f} gs={gs:,} ep_len={ep_len:.1f}")
+                f"α={float(alpha):.2f} lose={float(lose_bonus):.2f} "
+                f"gs={gs:,} ep_len={ep_len:.1f}")
         print(f"[{rank}] {line}", flush=True)
         write_result(rank,
                      [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {line}"])
@@ -702,13 +796,13 @@ def main():
                                   and time.time() - last_save
                                   >= args.ckpt_every * 60)):
             if save_ckpt(args.ckpt_dir, rank, i,
-                         res[0], res[1], res[2], res[3], cfg, cur_stage=cur_stage):
+                         res[0], res[1], res[2], res[3], cfg):
                 print(f"[{rank}] ckpt saved: "
-                      f"{ckpt_file(args.ckpt_dir, rank, i)} (Stage {cur_stage})", flush=True)
+                      f"{ckpt_file(args.ckpt_dir, rank, i)}", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                                     f"ckpt saved iter {i}"])
                 last_save = time.time()
-        # rank0 轻量参数快照 + EMA 快照
+        # rank0 轻量参数快照（供拉回本地/评估；~25MB pickle，不拖速度）
         if (args.ckpt_local_dir and rank == 0
                 and (i == args.iters or stop_flag["v"]
                      or (args.ckpt_local_every > 0
@@ -718,20 +812,16 @@ def main():
                 os.makedirs(args.ckpt_local_dir, exist_ok=True)
                 p = os.path.join(args.ckpt_local_dir,
                                  f"params_it{i:08d}.pkl")
-                p_ema = os.path.join(args.ckpt_local_dir,
-                                     f"params_it{i:08d}_ema.pkl")
                 with open(p, "wb") as f:
-                    pickle.dump(cur_p_np, f)
-                with open(p_ema, "wb") as f:
-                    pickle.dump(ema_params, f)
-                print(f"[{rank}] params & EMA snapshot -> {p}", flush=True)
+                    pickle.dump(jax.tree.map(np.asarray, res[0]), f)
+                print(f"[{rank}] params snapshot -> {p}", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                                    f"params & EMA snapshot iter {i}"])
+                                    f"params snapshot iter {i}"])
                 last_local_save = time.time()
             except Exception as e:
                 print(f"[{rank}] WARN: 参数快照失败: {e}", flush=True)
         # ---- 评估：当前策略 vs 冻结基线（两策略对打，--eval-vs/--eval-every）----
-        if eval_fn is not None and args.eval_vs and args.eval_every > 0 and i % args.eval_every == 0:
+        if eval_fn is not None and i % args.eval_every == 0:
             fpath = args.eval_vs.replace("{RANK}", str(rank))
             try:
                 with open(fpath, "rb") as f:
@@ -785,20 +875,6 @@ def main():
     ])
     if not ok and not args.tolerate_inconsistent:
         raise SystemExit("跨卡参数不一致 —— RCCL/pmean 异常，训练结果无效")
-
-    # ---- rank0 保存最终训练模型与 EMA 快照 ----
-    if rank == 0:
-        save_dir = args.ckpt_local_dir or args.ckpt_dir or "ckpt"
-        os.makedirs(save_dir, exist_ok=True)
-        final_pkl = os.path.join(save_dir, f"params_it{it_end:08d}.pkl")
-        final_ema_pkl = os.path.join(save_dir, f"params_it{it_end:08d}_ema.pkl")
-        cur_p_np = jax.tree.map(np.asarray, params)
-        with open(final_pkl, "wb") as f:
-            pickle.dump(cur_p_np, f)
-        with open(final_ema_pkl, "wb") as f:
-            pickle.dump(ema_params, f)
-        print(f"[{rank}] 💾 训练完成！已保存最终模型 -> {final_pkl} 以及 EMA 模型 -> {final_ema_pkl}", flush=True)
-        write_result(rank, [f"[{ts}] Saved final models: {final_pkl}, {final_ema_pkl}"])
 
 
 if __name__ == "__main__":

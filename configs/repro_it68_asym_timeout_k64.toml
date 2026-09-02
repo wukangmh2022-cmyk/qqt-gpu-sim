@@ -1,0 +1,109 @@
+# ============================================================================
+# 实验：Iter68 asym-timeout / K64（唯一参数源）
+# 继承网络：ViT-Transformer，14ch，embed=392，depth=4，heads=4，FF=4，Patch=3
+# 继承价值头：HL-Gauss 128 bins（[-20,20]，sigma=1.5）；继承采样：Actor |Advantage| Top25%，Critic 全量
+# 继承训练骨架：num_envs=16384，steps=256，minibatch=16384，epochs=2，lr=3e-4
+# 继承环境：13×15、radius=0.36、16 replicas（8 节点×2 卡）、标准 levels.json
+# 本版独有奖励：击杀胜者 +10；败者 -6→-3；超时领先 +2、落后 -1、平血 0
+# 本版独有同步：Local-SGD param 模式，K=64；timeout 计分不再乘 timeout_alpha
+# 辅助奖励：crate=0.5 且 30B 步线性退火；explore=0；brick=0；动态退火 K=0
+# 终点：iters=68；所有 [终点]/[退火]/[多卡] 字段均需与启动命令保持一致
+# 参数来源：版本化 TOML 为唯一实验入口；checkpoint 保存最终解析后的配置
+# ============================================================================
+
+[run]
+name = "repro_it68_asym_timeout_k64"
+iters = 68                         # [终点] 最终训练 iteration
+seed = 0
+fresh = true
+
+[model]
+arch = "transformer"
+embed = 392
+depth = 4
+patch = 3
+heads = 4
+ff_factor = 4
+obs_channels = 14                  # [结构] 当前 14ch，另含 HL-Gauss-128 价值头
+ema_decay = 0.999
+
+[rollout]
+num_envs = 16384                   # [多卡] 全局 env 数；16 副本→1024/卡
+num_steps = 256                    # [多卡] rollout 长度
+minibatch = 16384                  # [多卡] 全局 minibatch；16 副本→1024/卡
+epochs = 2
+
+[optimizer]
+lr = 0.0003
+gamma = 0.995
+lam = 0.95
+clip_eps = 0.2
+vf_coef = 0.5
+ent_coef = 0.01
+
+[reward]
+# [独有] 当前非对称终局奖励配置
+profile = "asymmetric_terminal_timeout_fixed"
+step_penalty = 0.001
+hit_reward = 1.5
+# [终局奖励] 击杀胜者固定 +10；败者由 start 退火到 floor（实际为负）
+win_bonus = 10.0
+lose_bonus_start = 6.0
+lose_bonus_floor = 3.0
+# [超时奖励] 不乘 timeout_alpha，避免后期超时惩罚消失
+timeout_lead_bonus = 2.0
+timeout_trail_penalty = 1.0
+timeout_draw_bonus = 0.0
+# [策略采样]
+adv_top_frac = 0.25
+# [退火] alpha_fix = max(0, 1 - global_steps / crate_reward_anneal_steps)
+crate_reward_coef = 0.5
+crate_reward_anneal_steps = 30000000000
+explore_reward_coef = 0.0
+explore_reward_anneal_steps = 0
+brick_reward_coef = 0.0
+reward_anneal_k = 0.0               # [退火] 0=关闭 kill_rate 动态退火
+reward_anneal_step_offset = 0
+
+[value]
+# [结构] 与 Scheme1 相同的 HL-Gauss 价值头；量程针对 dense reward 校准。
+head = "hl_gauss"
+num_bins = 128
+v_min = -20.0
+v_max = 20.0
+sigma = 1.5
+
+[distributed]
+# [多卡] WORLD_SIZE/RANK/MASTER_* 由平台注入；以下是本实验的拓扑预期
+world_size = 8
+local_gpus = 2
+lsgd_k = 64                         # [多卡] 每 64 个 minibatch 同步参数
+lsgd_mode = "param"
+lsgd_bf16 = false
+lsgd_sync_state = false
+
+[environment]
+levels = "levels.json"
+level_weights = "empty=0.05,功夫=0.1,比武=0.15"
+curriculum_json = ""
+radius = 0.36
+n_total = 16
+map = "13x15"
+
+[runtime]
+no_mask = false
+obs_quant = false
+legacy_obs13 = false
+checkpoint = true
+tolerate_inconsistent = false
+
+[evaluation]
+eval_vs = ""
+eval_every = 0
+
+[checkpoint]
+# [终点/产物] 本次实验的 checkpoint 与轻量参数快照目录
+ckpt_dir = "runs/repro_it68_asym_timeout_k64/ckpt"
+ckpt_every = 15
+ckpt_local_dir = "runs/repro_it68_asym_timeout_k64/ckpt_local"
+ckpt_local_every = 5
