@@ -1572,9 +1572,11 @@
           for (let i = 0; i < N; i++) {
             // 新语义下砖在余威期间仍保留为碰撞体，因此用本 tick 的 covered
             // 事件识别炸毁；兼容旧录像仍保留 brick 由 1→0 的判断。
-            const newlyBurned = (frame.covered && frame.covered[i] &&
-              (!prevFrame.brickLinger || prevFrame.brickLinger[i] === 0)) ||
-              frame.brick[i] === 0;
+            const newlyBurned = frame.brickLinger != null
+              ? (frame.covered && frame.covered[i] &&
+                 (!prevFrame.brickLinger || prevFrame.brickLinger[i] === 0))
+              // 旧录像没有 brickLinger/covered 语义，只能用砖状态差分兼容。
+              : frame.brick[i] === 0;
             if (prevFrame.brick[i] === 1 && newlyBurned && l1 && l1[i]) {
               dieFx.set(i, { eid: Math.abs(l1[i]), until: nowMs + 350 });
             }
@@ -1798,10 +1800,10 @@
       const l1 = sim.level.layers[1];
       const l0 = sim.level.layers[0];
       for (let i = 0; i < N; i++) {
-        // 砖的碰撞体要等余威结束才清除，所以炸毁特效以本 tick 的
-        // lastCovered 事件为准；同时兼容没有该事件掩码的旧路径。
-        const newlyBurned = (sim.lastCovered && sim.lastCovered[i] &&
-          prevBrickLinger[i] === 0) || sim.brick[i] === 0;
+        // 砖的碰撞体要等余威结束才清除，所以炸毁特效只以本 tick 的
+        // lastCovered 事件为准，不能把残威结束时的 brick 1→0 当成第二次爆炸。
+        const newlyBurned = sim.lastCovered && sim.lastCovered[i] &&
+          prevBrickLinger[i] === 0;
         if (prevBrick[i] === 1 && newlyBurned && l1[i]) {
           dieFx.set(i, { eid: Math.abs(l1[i]), until: performance.now() + 350 });
         }
