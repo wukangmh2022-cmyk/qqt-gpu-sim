@@ -73,6 +73,9 @@ class BatchedSim:
         # 每颗泡自己的威力（成长系统：放泡那一刻按当前档位快照）。
         # 引信归 0 引爆时用这颗泡存的 blast 而不是"当前 t 的 blast"。
         self.bomb_blast = torch.zeros((n, h, w), dtype=torch.int16, device=d)
+        # 爆炸开始后的余威计时（0.3s = 3 tick）；不改变 info["blast"] 的
+        # 单 tick 爆炸事件，专门用于后续进入火区的伤害判定。
+        self.blast_linger = torch.zeros((n, h, w), dtype=torch.int8, device=d)
         self.pos = torch.zeros((n, p, 2), dtype=torch.float32, device=d)
         self.alive = torch.ones((n, p), dtype=torch.bool, device=d)
         self.hp = torch.full((n, p), cfg.max_hp, dtype=torch.uint8, device=d)
@@ -350,6 +353,7 @@ class BatchedSim:
         self.fuse[idx] = 0
         self.owner[idx] = -1
         self.bomb_blast[idx] = 0
+        self.blast_linger[idx] = 0
         self.alive[idx] = True
         self.hp[idx] = self.cfg.max_hp
         # 新一局算"冷却已完成"：开局第一泡也享受近身定位分（place_dist_cooldown
@@ -596,7 +600,7 @@ class BatchedSim:
             self.cfg, self.wall, self.fuse, self.owner, self.pos, self.alive,
             self.t, self.brick, self.bomb_blast,
             crate=self.crate, invuln=self.invuln, bombs_p=self.bombs_cap,
-            danger_precomputed=dng,
+            danger_precomputed=dng, blast_linger=self.blast_linger,
             early_exit=not self._graph_mode,
         )
 
@@ -605,7 +609,8 @@ class BatchedSim:
         wall 战斗中不变（reset 会连带 fuse 清零 → fuse 版本必变，天然失效）。"""
         return (self.fuse._version,
                 self.brick._version,
-                self.bomb_blast._version)
+                self.bomb_blast._version,
+                self.blast_linger._version)
 
     def legal_mask(self) -> tuple[torch.Tensor, torch.Tensor]:
         """返回 (move_mask (N,P,5), bomb_mask (N,P,2))。"""
@@ -685,6 +690,7 @@ class BatchedSim:
             "fuse": self.fuse.clone(),
             "owner": self.owner.clone(),
             "bomb_blast": self.bomb_blast.clone(),
+            "blast_linger": self.blast_linger.clone(),
             "pos": self.pos.clone(),
             "alive": self.alive.clone(),
             "hp": self.hp.clone(),
@@ -978,16 +984,16 @@ class BatchedSim:
         if cfg.map_mode == "corridor":
             self.crate.bitwise_or_(self.brick & covered)   # 炸掉的砖 → 宝箱（in-place）
         self.brick.bitwise_and_(~covered)                  # 摧毁砖（in-place）
-        # 5. 伤害判定：以移动后的**中心格**是否着火为准（同 tick 同时结算）。
-        #    着火扣 1 血，血归 0 才算死 —— 不再"一碰就死"（max_hp=1 等价旧版）。
-        #    **无敌保护期**：被炸伤后 invuln_ticks 内被炸不掉血、不触发对方 hit
-        #    奖励（打断"连炮往死里整对手"）；danger 图照常显示（无敌只挡掉血）。
+        # 5. 伤害判定：当前爆炸 + 之前 0.3s 余威覆盖的中心格均可扣 1 血。
+        #    余威只在后续 3 tick 生效；无敌保护期防止重复掉血。
         cell = center_cell(self.pos)
         # 防御：昇腾 gather 越界是未定义行为（官方文档），索引必须钳制。
         # pos 数学上恒在 [rad, h-rad]（move_players clamp），但 torch_npu 的
         # floor/long 曾偶发垃圾值（1.67e18）→ 先 clamp 再 gather。
         flat = (cell[..., 0] * cfg.width + cell[..., 1]).clamp(0, cfg.height * cfg.width - 1)
-        hit = alive0 & covered.view(n, -1).gather(1, flat)
+        linger_active = self.blast_linger > 0
+        damage_covered = covered | linger_active
+        hit = alive0 & damage_covered.view(n, -1).gather(1, flat)
         invuln_ok = self.invuln <= 0                 # (n,p) 无敌期结束才能掉血
         hit_eff = hit & invuln_ok                    # 实际扣血命中
         hp_new = (self.hp.to(torch.int32) - hit_eff.to(torch.int32)).clamp(min=0)
@@ -1006,6 +1012,12 @@ class BatchedSim:
         self.invuln.clamp_(min=0)
         # masked_fill_ 替代掩码索引赋值（同 since_bomb：NPU graph 捕获兼容）
         self.invuln.masked_fill_(hit_eff, cfg.invuln_ticks)
+        # 当前爆炸已经在本 tick 结算过；把其覆盖范围续留到后续 tick。
+        # 逐格计时可正确处理不同时间发生、范围重叠的多次爆炸。
+        linger_ticks = max(1, int(round(cfg.blast_linger_seconds * cfg.tick_hz)))
+        self.blast_linger.sub_(1)
+        self.blast_linger.clamp_(min=0)
+        self.blast_linger.masked_fill_(covered, linger_ticks)
         # 6. 清场，泡泡额度自然归还（owner 置 -1），威力同步清空（in-place）
         torch.where(triggered, torch.zeros_like(self.fuse), self.fuse, out=self.fuse)
         torch.where(triggered, torch.full_like(self.owner, -1), self.owner,
@@ -1146,6 +1158,9 @@ class BatchedSim:
                                 blast_max_hint=blast_hint,
                                 chain_cap=None if self._graph_mode
                                 else cfg.chain_cap_rounds)
+        # 余威不属于在场炸弹，单独叠加到危险图；它会随 blast_linger 计时
+        # 在后续 tick 自动消失。
+        danger = torch.maximum(danger, (self.blast_linger > 0).to(danger.dtype))
         self._dng_cache = danger                 # 缓存给本 tick 的 observe 复用
         self._dng_sig = self._dng_signature()
         cell = center_cell(self.pos)

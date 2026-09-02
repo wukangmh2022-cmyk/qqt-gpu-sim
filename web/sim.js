@@ -34,6 +34,7 @@
   const CFG = {
     tickHz: 10, speed: 3.0, radius: 0.36, maxSteps: 1800,
     fuse: 30, blast: 2, maxBombs: 10, maxChain: 16,
+    blastLingerTicks: 3,                 // 爆炸后余威 0.3s（10Hz）
     maxHp: 5, invulnTicks: 30,
     stepLen: 3.0 / 10,                 // 0.3 格/tick
     // 成长（corridor 起步）
@@ -158,6 +159,7 @@
       this.owner = new Int8Array(N);
       this.owner.fill(-1);
       this.bombBlast = new Int16Array(N);
+      this.blastLinger = new Int8Array(N);
       this.pos = new Float64Array(4);
       this.alive = [true, true];
       this.hp = [CFG.maxHp, CFG.maxHp];
@@ -256,6 +258,7 @@
         fuse: arr(this.fuse),
         owner: arr(this.owner),
         bombBlast: arr(this.bombBlast),
+        blastLinger: arr(this.blastLinger),
         pushable: arr(this.pushable),
         pushT: arr(this.pushT),
         pushBoxAt: arr(this.pushBoxAt),
@@ -292,12 +295,13 @@
       this.loBlast = frame.loBlast.slice();
       this.loSpeed = frame.loSpeed.slice();
       for (const name of ['wall', 'brick', 'cover', 'bush', 'crate', 'superCrate',
-        'recycle', 'fuse', 'owner', 'bombBlast', 'pushable', 'pushT', 'pushBoxAt',
+        'recycle', 'fuse', 'owner', 'bombBlast', 'blastLinger', 'pushable', 'pushT', 'pushBoxAt',
         'pushSprite']) {
         const old = this[name];
         if (frame[name] == null) continue;
         this[name] = new old.constructor(frame[name]);
       }
+      if (frame.blastLinger == null) this.blastLinger.fill(0);
       if (frame.crateType != null) this.crateType = new Int8Array(frame.crateType);
       this.pushBoxes = (frame.pushBoxes || []).map((b) => ({
         o: b.o, cells: b.cells.slice(), eid: b.eid, dead: !!b.dead,
@@ -572,12 +576,13 @@
         if (covered[i] && this.bush[i]) this.bush[i] = 0;
       }
 
-      // 5. 伤害判定：移动后的中心格着火 → 扣血（无敌期内不掉血）
+      // 5. 伤害判定：当前爆炸 + 之前 0.3s 余威覆盖的中心格均可扣血。
+      //    余威只在后续 3 tick 生效；无敌期防止重复掉血。
       for (let p = 0; p < 2; p++) {
         if (!alive0[p]) continue;
         const [r, c] = this.centerCell(p);
         const i = r * W + c;
-        const hit = covered[i] && this.invuln[p] <= 0;
+        const hit = (covered[i] || this.blastLinger[i] > 0) && this.invuln[p] <= 0;
         if (hit) {
           this.hp[p] = Math.max(0, this.hp[p] - 1);
           if (this.hp[p] === 0) {
@@ -591,6 +596,13 @@
       this.invuln[1] = Math.max(0, this.invuln[1] - 1);
       for (let p = 0; p < 2; p++) {
         if (hpBefore[p] > this.hp[p]) this.invuln[p] = CFG.invulnTicks;
+      }
+
+      // 当前爆炸已经在本 tick 结算过；把覆盖范围续留到后续 tick。
+      // 逐格计时可正确处理不同时间发生、范围重叠的多次爆炸。
+      for (let i = 0; i < N; i++) {
+        if (this.blastLinger[i] > 0) this.blastLinger[i]--;
+        if (covered[i]) this.blastLinger[i] = CFG.blastLingerTicks;
       }
 
       // 6. 清场（引爆的泡归还额度）
@@ -751,6 +763,8 @@
     // 阶段 B 从每颗炮按自身威力扩散（墙挡、泡/砖挡穿透但覆盖）。
     dangerMap() {
       const out = new Float32Array(N);
+      // 余威不是在场炸弹，不能参与连锁传播；但仍是当前可伤害区域。
+      for (let i = 0; i < N; i++) if (this.blastLinger[i] > 0) out[i] = 1;
       let anyBomb = false;
       for (let i = 0; i < N; i++) if (this.fuse[i] > 0) { anyBomb = true; break; }
       if (!anyBomb) return out;

@@ -59,6 +59,7 @@ def encode_obs(
     invuln: torch.Tensor | None = None,
     bombs_p: torch.Tensor | None = None,
     danger_precomputed: torch.Tensor | None = None,
+    blast_linger: torch.Tensor | None = None,
     early_exit: bool | None = None,
 ) -> torch.Tensor:
     """返回 (N, 2P+3+obs_extra(P), H, W)：**整个 env 一份**的共享观测。
@@ -98,6 +99,11 @@ def encode_obs(
     else:
         obs[:, 2 * p + 1] = danger_map(fuse, wall, blast_map, cfg.fuse, brick,
                                        cfg.max_chain, early_exit=early_exit)
+    # 爆炸后的短暂余威不是在场炸弹，不能参与 danger_map 的连锁传播；但它
+    # 仍是当前可伤害区域，叠加到同一 danger 通道让策略能观察到并避开。
+    if blast_linger is not None:
+        obs[:, 2 * p + 1] = torch.maximum(
+            obs[:, 2 * p + 1], (blast_linger > 0).to(obs.dtype))
     obs[:, 2 * p + 2] = (t.float() / float(cfg.max_steps)).view(n, 1, 1)
 
     # ---------------- 扩展通道（世界信息，尾部原样保留） ----------------

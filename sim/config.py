@@ -35,7 +35,7 @@ CUDA_LIMITS = {"max_h": 21, "max_w": 21, "max_players": 4}
 #   0     .. P-1   玩家 i 的位置（双线性 splat，质量 1）    无
 #   P     .. 2P-1  玩家 i 名下泡泡的引信，fuse / FUSE       无
 #   2P             墙，0/1（整局不变）                      无
-#   2P+1           危险图，越接近爆炸越接近 1               无
+#   2P+1           危险图（含爆炸后 0.3s 余威），越接近爆炸越接近 1 无
 #   2P+2           局内进度 t / MAX_STEPS（常量平面）       无
 #   （以下为扩展通道 OBS_EXTRA = 1 + 3P 个，全部**世界信息**，
 #     排在 2P+3 之后，view_perm 对尾部原样保留不做置换）
@@ -119,6 +119,7 @@ class SimConfig:
     fuse: int = 30          # 放泡后多少 tick 爆炸（30 tick @10Hz = 3 秒，原版手感）
     blast: int = 2          # 十字射线长度（不含中心格）。blast=3 时 AI 铺地雷过猛、
                             # 自伤/对轰频繁；改回 2 让走位与进攻更平衡
+    blast_linger_seconds: float = 0.3  # 爆炸开始后的持续余威（无敌期防重复掉血）
     max_bombs: int = 10     # 单角色同时在场泡泡数（4 → 10：放炮上限放宽，布局/封锁空间更大）
     max_chain: int = 16     # 连锁爆炸最多迭代几轮。8 → 16（漏爆修复）：13×13 地图
                             # 一行最长 13 颗泡（blast=1 首尾相接）需要 12 轮连锁，
@@ -484,6 +485,8 @@ class SimConfig:
         if not 0.0 < self.radius < 0.5:
             # 半宽 ≥ 0.5 意味着碰撞盒能同时压到三行，2x2 的邻格检查就不够了
             raise ValueError("radius 必须在 (0, 0.5) 开区间内")
+        if self.blast_linger_seconds <= 0:
+            raise ValueError("blast_linger_seconds 必须为正")
         if self.step_len >= 2.0:
             # 单 tick 位移超过 2 格才报错（> 两倍格宽，任何合理手感都用不到）。
             # 位移 > 1-2r 不再阻止：move.py 用 substep 拆解大位移防穿模
