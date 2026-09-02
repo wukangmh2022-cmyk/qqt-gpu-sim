@@ -10,7 +10,8 @@
 逻辑 10Hz（与训练一致），渲染 60fps + 位置插值 → 平滑滑动。
 
 渲染用 res/ 素材：
-    背景 bg1.png；炸弹 bomb1..6 呼吸动画；爆炸中心+四方向臂按 blast 切片；
+    背景 bg1.png；炸弹按敌方 default / 我方 custom 四帧序列播放（3s）；
+    爆炸中心+四方向臂按 blast 切片；
     角色 4×4 精灵图（行走动画，AI 染红调）；放泡/爆炸音效。
 """
 
@@ -537,18 +538,27 @@ def draw_grid(screen, res: Res, sim, obs, rpos, face, anim_frame,
                             seg = arm.subsurface((0, idx * CELL, CELL, CELL))
                         items.append((r, c * CELL, r * CELL, seg))
 
-    # 泡泡：**底部贴格底线**（站在格子底线上，像放在地上）—— 圆形图高 60px，
-    # 圆心若放格底会整颗压进下一格（"严重偏下"），底部对齐则泡中心 = 格中线、
-    # 视觉正好在格内。
+    # 泡泡：去掉额外上下呼吸位移，按引信年龄播放四帧序列。
+    # 每 1s 均匀播放一组（每帧 0.25s），3s 引信循环三组；敌方用 default，我方红/蓝 custom
+    # 按格子与放置 tick 稳定伪随机选择，保证渲染帧之间不会跳色。
     now = pygame.time.get_ticks() / 1000.0
+    tick_now = int(sim.t[0]) if sim.t is not None else 0
     bob = int(round(math.sin(now * 2 * math.pi) * 3))
-    bomb_surf = res.bombs[0]
-    bw, bh = bomb_surf.get_size()
     for r, c in zip(*_rcache["bomb_idx"]):
         r, c = int(r), int(c)
-        cx = c * CELL + CELL / 2.0
-        bx = int(cx - bw / 2)
-        by = (r + 1) * CELL - bh + bob              # 底边 = 格底线
+        owner_rc = int(owner[r, c])
+        fuse_rc = int(fuse[r, c])
+        age = max(0, cfg.fuse - fuse_rc)
+        frame_idx = ((age * 4) // max(1, cfg.tick_hz)) % 4
+        placed_tick = tick_now - age
+        style_hash = ((r * 73856093) ^ (c * 19349663) ^
+                      (placed_tick * 83492791)) & 1
+        if owner_rc == 0:
+            bomb_surf = res.bomb_custom[style_hash][frame_idx]
+        else:
+            bomb_surf = res.bomb_default[frame_idx]
+        bx = c * CELL
+        by = r * CELL
         items.append((r, bx, by, bomb_surf))
 
     # 宝箱（砖被炸掉后变）：三张道具图轮流展示，上下浮动；底部同样贴格底线。

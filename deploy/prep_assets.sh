@@ -21,6 +21,11 @@ for f in 角色4×4精灵图.png 角色b4×4.png 角色c4×4.png 角色火影4x4
   cp "$RES/$f" "$OUT/$f"
 done
 
+# 炸弹序列帧：浏览器只读 PNG，不在运行时解码 GIF。
+mkdir -p "$OUT/bomb-default" "$OUT/bomb-custom"
+cp "$RES/bomb-default"/*.png "$OUT/bomb-default/"
+cp "$RES/bomb-custom/png"/*.png "$OUT/bomb-custom/"
+
 # ---- 音效（可缺失）----
 for f in 放炮.wav 爆炸.wav 吃道具音效.wav 生命损失音效.wav 角色消失音效.wav; do
   [ -f "$RES/$f" ] && cp "$RES/$f" "$OUT/snd/"

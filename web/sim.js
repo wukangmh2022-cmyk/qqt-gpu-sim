@@ -127,7 +127,8 @@
   // ---------------------------------------------------------------- 模拟器
   class Sim {
     constructor(seed) {
-      this.rng = mulberry32(seed == null ? 1 : seed);
+      this.seed = seed == null ? 1 : (seed >>> 0);
+      this.rng = mulberry32(this.seed);
       this.reset('open');
     }
 
@@ -159,6 +160,10 @@
       this.owner = new Int8Array(N);
       this.owner.fill(-1);
       this.bombBlast = new Int16Array(N);
+      // 0=红 custom，1=蓝 custom；敌方使用 default。仅影响渲染，避免
+      // 消耗模拟 RNG（不改变对局轨迹与可复现性）。
+      this.bombStyle = new Int8Array(N);
+      this.bombStyle.fill(-1);
       this.blastLinger = new Int8Array(N);
       this.pos = new Float64Array(4);
       this.alive = [true, true];
@@ -258,6 +263,7 @@
         fuse: arr(this.fuse),
         owner: arr(this.owner),
         bombBlast: arr(this.bombBlast),
+        bombStyle: arr(this.bombStyle),
         blastLinger: arr(this.blastLinger),
         pushable: arr(this.pushable),
         pushT: arr(this.pushT),
@@ -295,12 +301,13 @@
       this.loBlast = frame.loBlast.slice();
       this.loSpeed = frame.loSpeed.slice();
       for (const name of ['wall', 'brick', 'cover', 'bush', 'crate', 'superCrate',
-        'recycle', 'fuse', 'owner', 'bombBlast', 'blastLinger', 'pushable', 'pushT', 'pushBoxAt',
+        'recycle', 'fuse', 'owner', 'bombBlast', 'bombStyle', 'blastLinger', 'pushable', 'pushT', 'pushBoxAt',
         'pushSprite']) {
         const old = this[name];
         if (frame[name] == null) continue;
         this[name] = new old.constructor(frame[name]);
       }
+      if (frame.bombStyle == null) this.bombStyle.fill(0);
       if (frame.blastLinger == null) this.blastLinger.fill(0);
       if (frame.crateType != null) this.crateType = new Int8Array(frame.crateType);
       this.pushBoxes = (frame.pushBoxes || []).map((b) => ({
@@ -478,6 +485,10 @@
           this.fuse[i] = CFG.fuse;
           this.owner[i] = p;
           this.bombBlast[i] = this.blastCap[p];
+          // 稳定伪随机：由种子、格子和放置 tick 决定，不推进 sim.rng。
+          const h = Math.imul(i ^ (this.seed >>> 0), 0x9e3779b1) ^
+            Math.imul(this.t + 1, 0x85ebca6b);
+          this.bombStyle[i] = p === 0 ? (h & 1) : -1;
           placed[p] = true;
         }
       }
@@ -608,7 +619,7 @@
       // 6. 清场（引爆的泡归还额度）
       for (let i = 0; i < N; i++) {
         if (triggered[i]) {
-          this.fuse[i] = 0; this.owner[i] = -1; this.bombBlast[i] = 0;
+          this.fuse[i] = 0; this.owner[i] = -1; this.bombBlast[i] = 0; this.bombStyle[i] = -1;
         }
       }
 

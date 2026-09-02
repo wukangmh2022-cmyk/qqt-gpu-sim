@@ -1,4 +1,4 @@
-"""加载 res/ 素材：角色精灵、炸弹呼吸动画、爆炸切片、背景、音效。
+"""加载 res/ 素材：角色精灵、炸弹序列帧、爆炸切片、背景、音效。
 
 精灵图布局（用户确认）：`角色4×4精灵图.png` = 4 行方向 × 4 列行走帧，
 行序从上到下 = **下、左、右、上**。每帧 85×85，运行时缩到格大小。
@@ -6,7 +6,8 @@
 爆炸图：`爆炸中心.png` 40×40；四个方向臂图是 520×40 / 40×520（13 格）。
 爆炸是"按最大爆炸范围画的"，必须按 blast 格数从中心端切片
 （向右/向下取中心端起始段，向左/向上取远离中心端的一段）。
-炸弹：bomb1..bomb6 六帧，按时间循环形成"上下呼吸"。
+炸弹：敌方使用 bomb-default 四帧；我方从 bomb-custom 的红/蓝四帧序列中
+稳定伪随机选择一组，4 帧每秒均匀循环播放（3 秒引信循环三组），不再做额外上下呼吸位移。
 """
 
 from __future__ import annotations
@@ -74,7 +75,18 @@ class Res:
         # 色块人形没有 → None。无敌光晕按它居中（罩住人物，不是贴脚底）。
         self.body_centers: list[list[tuple[int, int]]] | None = None
         self._fill_body_centers()
-        self.bombs = self._load_bombs(cell)
+        self.bomb_default = self._load_bomb_frames(
+            cell, "bomb-default",
+            ("bomb1_stand_0_0.png", "bomb1_stand_0_1.png",
+             "bomb1_stand_0_2.png", "bomb1_stand_0_3.png"))
+        self.bomb_custom = [
+            self._load_bomb_frames(cell, "bomb-custom/png",
+                                   ("red_01.png", "red_02.png", "red_03.png", "red_04.png")),
+            self._load_bomb_frames(cell, "bomb-custom/png",
+                                   ("blue_01.png", "blue_02.png", "blue_03.png", "blue_04.png")),
+        ]
+        # 兼容旧调用方；新的 draw_grid 按 owner 选择具体序列帧。
+        self.bombs = self.bomb_default
         self.props = self._load_props(cell)     # 道具图：威力/泡泡数量/鞋子
         self.explo_center, self.explo_arms = self._load_explosion(blast, cell)
         # 场景资源（纯 UI，不进训练）：砖块图 + 背景图 + BGM。
@@ -238,21 +250,25 @@ class Res:
                 out[r].append(t)
         return out
 
-    # ---------------- 炸弹：同一张图，渲染时垂直浮动做"呼吸" ----------------
-    # bomb1..6 是 6 种**不同样式**的泡泡（不是动画帧）。呼吸动画 = 用一张
-    # 固定的泡泡图（bomb1），在格内上下小幅浮动。加载成单张 surface。
-
-    def _load_bombs(self, cell: int) -> list[pygame.Surface]:
-        try:
-            img = _load("bomb1.png")
-        except FileNotFoundError:
-            img = pygame.Surface((40, 40), pygame.SRCALPHA)
-            pygame.draw.circle(img, (70, 150, 235), (20, 20), 13)
-        # 素材原生 40px/格，按画布缩放 1.5 倍到格子大小（60×60，和爆炸中心一致）。
-        # **不缩小** —— 和人物一样保持大图，摆放逻辑（duel.py）也是人物同款：
-        # 水平中心对格子中心、底边对格子底线；图比格大时左右各溢出一半。
-        size = (cell, cell)
-        return [pygame.transform.smoothscale(img, size)]
+    # ---------------- 炸弹：四帧序列，统一画布并底边对齐 ----------------
+    def _load_bomb_frames(self, cell: int, subdir: str,
+                          names: tuple[str, ...]) -> list[pygame.Surface]:
+        out = []
+        for name in names:
+            try:
+                img = _load(os.path.join(subdir, name))
+            except (FileNotFoundError, pygame.error):
+                img = pygame.Surface((40, 40), pygame.SRCALPHA)
+                pygame.draw.circle(img, (70, 150, 235), (20, 20), 13)
+            w0, h0 = img.get_size()
+            k = min(cell / max(1, w0), cell / max(1, h0))
+            scaled = pygame.transform.smoothscale(
+                img, (max(1, round(w0 * k)), max(1, round(h0 * k))))
+            frame = pygame.Surface((cell, cell), pygame.SRCALPHA)
+            frame.blit(scaled, ((cell - scaled.get_width()) // 2,
+                                cell - scaled.get_height()))
+            out.append(frame)
+        return out
 
     # ---------------- 道具图（宝箱用）：威力 / 泡泡数量 / 鞋子 ----------------
     # 三张 40×40 原生素材，按画布缩放 1.5 倍到格子大小（60×60，和炸弹一致）。

@@ -1,7 +1,7 @@
 // main.js —— 浏览器端：原版素材渲染 + 游戏主循环 + 输入 + 模型加载。
 //
 // 渲染移植自 play/duel.py::draw_grid + play/res.py：同一套 res/ 素材（角色
-// 4×4 精灵图、炸弹呼吸、爆炸臂切片、场景砖块/背景、道具图、无敌罩），
+// 4×4 精灵图、炸弹序列帧、爆炸臂切片、场景砖块/背景、道具图、无敌罩），
 // 同一套画家算法（z = 所在行，远→近绘制）与底边对齐锚点。
 // 玩法与 play/duel.py 对齐：人类 60Hz 帧级移动（自动转向 + AABB 滑动碰撞），
 // AI 决策与模拟推进走 10Hz；AI 用导出权重（已折 pid=0 视角）+ 合法动作掩码采样。
@@ -535,7 +535,31 @@
     }
     elSkin.value = '海王子';
     const wudi = premulAlpha(await loadImage('assets/无敌.PNG'));
-    const boomImg = await loadImage('assets/bomb1.png');
+    // 炸弹序列帧：每组 4 帧，1s 均匀播放（每帧 0.25s），3s 引信循环三组。
+    // 敌方固定 default；我方在红/蓝 custom 中按放置格稳定伪随机选择。
+    async function loadBombFrames(dir, names) {
+      return Promise.all(names.map(async (name) => {
+        const src = await loadImage(`assets/${dir}/${name}`);
+        // 各帧原图尺寸略有差异，统一放入 CELL×CELL 画布并底边对齐，
+        // 避免动画过程中因透明留白造成炸弹上下跳动。
+        const c = document.createElement('canvas');
+        c.width = CELL; c.height = CELL;
+        const k = Math.min(CELL / Math.max(1, src.width), CELL / Math.max(1, src.height));
+        const w = Math.max(1, Math.round(src.width * k));
+        const h = Math.max(1, Math.round(src.height * k));
+        c.getContext('2d').drawImage(src, Math.round((CELL - w) / 2), CELL - h, w, h);
+        return c;
+      }));
+    }
+    const bombNames = ['bomb1_stand_0_0.png', 'bomb1_stand_0_1.png',
+                       'bomb1_stand_0_2.png', 'bomb1_stand_0_3.png'];
+    const customNames = [
+      ['red_01.png', 'red_02.png', 'red_03.png', 'red_04.png'],
+      ['blue_01.png', 'blue_02.png', 'blue_03.png', 'blue_04.png'],
+    ];
+    const bombDefaultFrames = await loadBombFrames('bomb-default', bombNames);
+    const bombCustomFrames = await Promise.all(
+      customNames.map((names) => loadBombFrames('bomb-custom', names)));
     // 宝箱单图标：威力/泡泡数量/鞋子（炸开时种类已定，不再轮播）
     // 按原图像素 × 场景缩放系数(SCALE) 放大，绘制时格内居中（与整个场景一致）
     const iconScale = (img) => scaleCanvas(img, Math.round(img.width * SCALE), Math.round(img.height * SCALE));
@@ -562,7 +586,7 @@
       enemyRows,                   // 敌人固定角色c（不再染红）
       playerAi: enemyRows,
       wudi: scaleCanvas(wudi, Math.round(85 * SCALE), Math.round(85 * SCALE)),
-      bomb: scaleCanvas(boomImg, CELL, CELL),
+      bombFrames: { default: bombDefaultFrames, custom: bombCustomFrames },
       propIcons, superIcons, boxQ, baseBand,
       point: scaleCanvas(await loadImage('assets/point.png'),
                          Math.round(40 * SCALE * 0.5), Math.round(40 * SCALE * 0.5)),
@@ -2039,7 +2063,6 @@
 
     const nowS = now / 1000;
     const bob = Math.round(Math.sin(nowS * 2 * Math.PI) * 3);
-    const bombW = res.bomb.width, bombH = res.bomb.height;
 
     // 爆炸：中心格用中心图；臂图按实际爆炸格数从炸弹边缘端切片（duel.py 同款算法）
     if (explosion) {
@@ -2089,15 +2112,20 @@
       }
     }
 
-    // 泡泡：底部贴格底线 + 垂直呼吸（原样，无半透明/闪烁效果）
+    // 泡泡：去掉伪呼吸位移，按引信年龄播放 4 帧序列。
+    // 每 1s 完整播放一组（每帧 0.25s），3s 引信循环三组；画布统一
+    // CELL×CELL、底边贴格底线。
     for (let i = 0; i < N; i++) {
       if (sim.fuse[i] <= 0) continue;
       // 泡泡在任何果冻遮挡结构(房子/灌木/拱门等)上 → 隐藏（visible=false）
       if (hideCells.has(i)) continue;
       const r = (i / W) | 0, c = i % W;
-      const bx = c * CELL + (CELL - bombW) / 2;
-      const by = (r + 1) * CELL - bombH + bob;
-      items.push([r * Z_ROW_STRIDE + (Z_ROW_STRIDE - 1), res.bomb, bx, by]);
+      const age = Math.max(0, CFG.fuse - sim.fuse[i]);
+      const frame = Math.floor((age / CFG.tickHz) * 4) % 4;
+      const owner = sim.owner[i];
+      const custom = owner === 0 && sim.bombStyle ? (sim.bombStyle[i] & 1) : 0;
+      const frames = owner === 0 ? res.bombFrames.custom[custom] : res.bombFrames.default;
+      items.push([r * Z_ROW_STRIDE + (Z_ROW_STRIDE - 1), frames[frame], c * CELL, r * CELL]);
     }
 
     // 宝箱：三张道具图轮流展示 + 呼吸（底部贴格底线）
