@@ -52,6 +52,64 @@ def get_available_ckpts():
     ckpts = [os.path.basename(p).replace(".pkl", "") for p in sorted(ckpts, key=os.path.getmtime, reverse=True)]
     return list(dict.fromkeys(ckpts))
 
+import re, csv
+
+TRAIN_CURVE_CSV = os.path.join(MONITOR_DIR, "train_curve.csv")
+TRAIN_LOG_FILE = os.path.join(MONITOR_DIR, "train_r0_full.log")
+MULTICARD_RESULT = os.path.join(ROOT, "multicard_result.txt")
+
+ITER_RE = re.compile(
+    r"iter (\d+)/\d+ [\d.]+s \([\d.]+s avg\) ([\d,]+) sps \(avg [\d,]+\)"
+    r" loss=([-\d.]+) rew=([-\d.]+) explore=([\d.]+) kill=([\d.]+) "
+    r"α=([\d.]+) gs=([\d,]+) ep_len=([\d.naN]+)")
+
+def get_train_telemetry():
+    """解析每个 iteration 更新的高频训练指标 (loss, rew, kill, sps, ep_len)"""
+    if os.path.exists(TRAIN_CURVE_CSV):
+        try:
+            rows = []
+            with open(TRAIN_CURVE_CSV, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    rows.append({
+                        "iter": int(r["iter"]),
+                        "sps": float(r.get("sps", 0)),
+                        "loss": float(r.get("loss", 0)),
+                        "rew": float(r.get("rew", 0)),
+                        "kill": float(r.get("kill", 0)),
+                        "alpha": float(r.get("alpha", 1)),
+                        "ep_len": float(r.get("ep_len", 0)),
+                        "gs": int(float(r.get("gs", 0))) if "gs" in r else 0,
+                    })
+            if rows:
+                return rows
+        except Exception:
+            pass
+
+    cand_log = TRAIN_LOG_FILE if os.path.exists(TRAIN_LOG_FILE) else (MULTICARD_RESULT if os.path.exists(MULTICARD_RESULT) else None)
+    if cand_log and os.path.exists(cand_log):
+        rows = []
+        try:
+            with open(cand_log, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    m = ITER_RE.search(line)
+                    if m:
+                        it, sps, loss, rew, exp, kill, alpha, gs, epl = m.groups()
+                        rows.append({
+                            "iter": int(it),
+                            "sps": float(sps.replace(",", "")),
+                            "loss": float(loss),
+                            "rew": float(rew),
+                            "kill": float(kill),
+                            "alpha": float(alpha),
+                            "ep_len": float(epl) if epl.lower() != "nan" else 0.0,
+                            "gs": int(gs.replace(",", "")),
+                        })
+            return rows
+        except Exception:
+            pass
+    return []
+
 class MonitorHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
@@ -81,6 +139,8 @@ class MonitorHandler(SimpleHTTPRequestHandler):
             latest = history[-1] if history else None
             alert = get_alert()
             ckpts = get_available_ckpts()
+            telemetry = get_train_telemetry()
+            latest_train = telemetry[-1] if telemetry else None
             self._send_json({
                 "status": "online",
                 "evalInProgress": eval_in_progress,
@@ -90,7 +150,12 @@ class MonitorHandler(SimpleHTTPRequestHandler):
                 "activeAlert": alert,
                 "totalEvaluated": len(history),
                 "availableCheckpoints": ckpts[:15],
+                "latestTrain": latest_train,
             })
+            return
+
+        if path == "/api/train_telemetry":
+            self._send_json(get_train_telemetry())
             return
 
         if path == "/api/history":

@@ -102,6 +102,37 @@ body {
 .btn-danger { background: #dc2626; color: #fff; }
 .btn-sm { padding: 4px 10px; font-size: 0.78rem; border-radius: 4px; }
 
+/* 视图切换 Tab */
+.view-tabs {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.tab-btn {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  padding: 12px 22px;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab-btn:hover {
+  color: #fff;
+  border-color: var(--accent-blue);
+}
+
+.tab-btn.active {
+  background: #0284c7;
+  color: #fff;
+  border-color: #38bdf8;
+  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
+}
+
 /* 告警条幅 */
 .alert-banner {
   background: rgba(220, 38, 38, 0.15);

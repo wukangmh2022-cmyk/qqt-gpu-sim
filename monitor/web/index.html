@@ -38,77 +38,161 @@
       </div>
     </section>
 
-    <!-- 顶部核心指标卡片 -->
-    <section class="kpi-grid">
-      <div class="kpi-card">
-        <div class="kpi-title">策略健康状态</div>
-        <div class="kpi-value" id="kpiStatus">--</div>
-        <div class="kpi-sub" id="kpiLatestCkpt">暂无评估快照</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-title">空场景 vs Hunter 胜率</div>
-        <div class="kpi-value highlight-blue" id="kpiOpenHunterWin">--%</div>
-        <div class="kpi-sub" id="kpiOpenHunterTicks">局长: -- ticks</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-title">全池 241 图 vs Hunter 胜率</div>
-        <div class="kpi-value highlight-purple" id="kpiFullHunterWin">--%</div>
-        <div class="kpi-sub" id="kpiFullHunterTicks">实战障碍局长: -- ticks</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-title">基础木桩杀伤率 (空场景)</div>
-        <div class="kpi-value highlight-green" id="kpiOpenIdleWin">--%</div>
-        <div class="kpi-sub" id="kpiOpenIdleTicks">基准耗时: -- ticks</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-title">迷宫破砖寻路率 (241 图)</div>
-        <div class="kpi-value highlight-orange" id="kpiFullIdleWin">--%</div>
-        <div class="kpi-sub" id="kpiFullIdleTimeout">超时局: --</div>
-      </div>
-    </section>
+    <!-- 视图切换 Tab -->
+    <div class="view-tabs">
+      <button id="tabBtnTrain" class="tab-btn active" onclick="switchViewTab('train')">⚡ 高频训练动态 (每 it 实时: Loss / Reward / Kill / SPS)</button>
+      <button id="tabBtnEval" class="tab-btn" onclick="switchViewTab('eval')">⚔️ 低频对战验收 (128 局真实对决: 胜率 / 控图率 / 死锁拦截)</button>
+    </div>
 
-    <!-- 趋势图表区 -->
-    <section class="charts-grid">
-      <div class="chart-card">
-        <div class="chart-header">
-          <h3>📈 四大场景胜率与对抗演进趋势</h3>
-          <span class="chart-sub">识别 Hunter 战力与木桩杀伤基线</span>
+    <!-- ==================== 视图 1: 高频主训练流 (Per-Iteration Telemetry) ==================== -->
+    <div id="viewTrainSection">
+      <!-- 训练流 KPI 卡片 -->
+      <section class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-title">当前训练轮次 (Iteration)</div>
+          <div class="kpi-value highlight-blue" id="kpiTrainIter">--</div>
+          <div class="kpi-sub" id="kpiTrainSteps">全局步数: --</div>
         </div>
-        <div class="chart-body">
-          <canvas id="chartWinRates"></canvas>
+        <div class="kpi-card">
+          <div class="kpi-title">PPO 总损失 (Total Loss)</div>
+          <div class="kpi-value" id="kpiTrainLoss">--</div>
+          <div class="kpi-sub" id="kpiTrainLossSub">优化收敛走势</div>
         </div>
-      </div>
+        <div class="kpi-card">
+          <div class="kpi-title">采样平均回报 (Mean Reward)</div>
+          <div class="kpi-value highlight-green" id="kpiTrainRew">--</div>
+          <div class="kpi-sub" id="kpiTrainRewSub">每 Step 累计回报</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">自对弈采样击杀率 (Rollout Kill Rate)</div>
+          <div class="kpi-value highlight-purple" id="kpiTrainKill">--%</div>
+          <div class="kpi-sub" id="kpiTrainKillSub">对打有效斩杀占比</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">系统吞吐吞吐速度 (SPS)</div>
+          <div class="kpi-value highlight-orange" id="kpiTrainSps">--</div>
+          <div class="kpi-sub" id="kpiTrainEpLen">采样平均局长: -- ticks</div>
+        </div>
+      </section>
 
-      <div class="chart-card">
-        <div class="chart-header">
-          <h3>⏱️ 平均对战局长趋势 (死锁与发呆检测)</h3>
-          <span class="chart-sub">局长逼近 1800 tick 往往代表消极躲避与死锁</span>
+      <!-- 训练流图表区 -->
+      <section class="charts-grid">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>📉 PPO 损失收敛曲线 (Loss / Iteration)</h3>
+            <span class="chart-sub">观察策略与价值网络更新是否稳定，防止梯度爆炸</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartTrainLoss"></canvas>
+          </div>
         </div>
-        <div class="chart-body">
-          <canvas id="chartTicks"></canvas>
-        </div>
-      </div>
 
-      <div class="chart-card">
-        <div class="chart-header">
-          <h3>💣 局均放炮量与命中率 (进攻主动性)</h3>
-          <span class="chart-sub">放炮数断崖下跌即为发呆退化</span>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>🎯 采样累计回报 (Reward) 与 击杀率 (Kill Rate)</h3>
+            <span class="chart-sub">自对弈对局回报上升与斩杀效率关联</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartTrainRewardKill"></canvas>
+          </div>
         </div>
-        <div class="chart-body">
-          <canvas id="chartAggression"></canvas>
-        </div>
-      </div>
 
-      <div class="chart-card">
-        <div class="chart-header">
-          <h3>🛡️ 自杀率走势 (身法安全性)</h3>
-          <span class="chart-sub">自杀率 > 12% 需介入调节爆炸惩罚</span>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>⏳ 采样平均局长 (Episode Length) 与 奖励退火系数 (α)</h3>
+            <span class="chart-sub">局长变短通常代表斩杀效率提升，α 跟踪密集辅助奖励递减</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartTrainEpLenAlpha"></canvas>
+          </div>
         </div>
-        <div class="chart-body">
-          <canvas id="chartSafety"></canvas>
+
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>🚀 系统吞吐与算力负载 (Samples Per Second)</h3>
+            <span class="chart-sub">监控 GPU/分布式节点吞吐，防止卡死与通信掉速</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartTrainSps"></canvas>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </div>
+
+    <!-- ==================== 视图 2: 低频对战验收 (Periodic Benchmarks) ==================== -->
+    <div id="viewEvalSection" class="hidden">
+      <!-- 顶部核心指标卡片 -->
+      <section class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-title">策略健康状态</div>
+          <div class="kpi-value" id="kpiStatus">--</div>
+          <div class="kpi-sub" id="kpiLatestCkpt">暂无评估快照</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">空场景 vs Hunter 胜率</div>
+          <div class="kpi-value highlight-blue" id="kpiOpenHunterWin">--%</div>
+          <div class="kpi-sub" id="kpiOpenHunterTicks">局长: -- ticks</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">全池 241 图 vs Hunter 胜率</div>
+          <div class="kpi-value highlight-purple" id="kpiFullHunterWin">--%</div>
+          <div class="kpi-sub" id="kpiFullHunterTicks">实战障碍局长: -- ticks</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">基础木桩杀伤率 (空场景)</div>
+          <div class="kpi-value highlight-green" id="kpiOpenIdleWin">--%</div>
+          <div class="kpi-sub" id="kpiOpenIdleTicks">基准耗时: -- ticks</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">迷宫破砖寻路率 (241 图)</div>
+          <div class="kpi-value highlight-orange" id="kpiFullIdleWin">--%</div>
+          <div class="kpi-sub" id="kpiFullIdleTimeout">超时局: --</div>
+        </div>
+      </section>
+
+      <!-- 趋势图表区 -->
+      <section class="charts-grid">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>📈 四大场景胜率与对抗演进趋势</h3>
+            <span class="chart-sub">识别 Hunter 战力与木桩杀伤基线</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartWinRates"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>⏱️ 平均对战局长趋势 (死锁与发呆检测)</h3>
+            <span class="chart-sub">局长逼近 1800 tick 往往代表消极躲避与死锁</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartTicks"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>💣 局均放炮量与命中率 (进攻主动性)</h3>
+            <span class="chart-sub">放炮数断崖下跌即为发呆退化</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartAggression"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>🛡️ 自杀率走势 (身法安全性)</h3>
+            <span class="chart-sub">自杀率 > 12% 需介入调节爆炸惩罚</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartSafety"></canvas>
+          </div>
+        </div>
+      </section>
+    </div>
 
     <!-- 历史评测检查点明细表 -->
     <section class="table-section">

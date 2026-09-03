@@ -2,15 +2,18 @@
 
 let charts = {};
 let historyData = [];
+let telemetryData = [];
 
 document.addEventListener('DOMContentLoaded', () => {
   initCharts();
   fetchStatus();
+  fetchTrainTelemetry();
   fetchHistory();
   fetchConfigs();
 
   document.getElementById('btnRefresh').addEventListener('click', () => {
     fetchStatus();
+    fetchTrainTelemetry();
     fetchHistory();
   });
 
@@ -21,9 +24,30 @@ document.addEventListener('DOMContentLoaded', () => {
   // 轮询 (每 6 秒自动刷新)
   setInterval(() => {
     fetchStatus();
+    fetchTrainTelemetry();
     fetchHistory();
   }, 6000);
 });
+
+// --------------------------- Tab 切换逻辑 ---------------------------
+function switchViewTab(tab) {
+  const btnTrain = document.getElementById('tabBtnTrain');
+  const btnEval = document.getElementById('tabBtnEval');
+  const secTrain = document.getElementById('viewTrainSection');
+  const secEval = document.getElementById('viewEvalSection');
+
+  if (tab === 'train') {
+    btnTrain.classList.add('active');
+    btnEval.classList.remove('active');
+    secTrain.classList.remove('hidden');
+    secEval.classList.add('hidden');
+  } else {
+    btnEval.classList.add('active');
+    btnTrain.classList.remove('active');
+    secEval.classList.remove('hidden');
+    secTrain.classList.add('hidden');
+  }
+}
 
 // --------------------------- Chart.js 初始化 ---------------------------
 function initCharts() {
@@ -39,6 +63,73 @@ function initCharts() {
       y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
     }
   };
+
+  // ---------------- 主训练流指标 (4 图) ----------------
+  // T1. Loss
+  charts.trainLoss = new Chart(document.getElementById('chartTrainLoss'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'PPO Total Loss', borderColor: '#f43f5e', backgroundColor: 'rgba(244, 63, 94, 0.1)', data: [], tension: 0.15, fill: true }
+      ]
+    },
+    options: commonOptions
+  });
+
+  // T2. Reward & Kill
+  charts.trainRewardKill = new Chart(document.getElementById('chartTrainRewardKill'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Mean Step Reward', borderColor: '#10b981', yAxisID: 'y', data: [], tension: 0.15 },
+        { label: 'Rollout Kill Rate', borderColor: '#8b5cf6', yAxisID: 'y1', data: [], tension: 0.15 }
+      ]
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        x: commonOptions.scales.x,
+        y: { ...commonOptions.scales.y, position: 'left', title: { display: true, text: 'Reward', color: '#10b981' } },
+        y1: { ...commonOptions.scales.y, position: 'right', min: 0, max: 1.0, title: { display: true, text: 'Kill Rate', color: '#8b5cf6' }, grid: { drawOnChartArea: false } }
+      }
+    }
+  });
+
+  // T3. EpLen & Alpha
+  charts.trainEpLenAlpha = new Chart(document.getElementById('chartTrainEpLenAlpha'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        { label: '采样平均局长 (ticks)', borderColor: '#38bdf8', yAxisID: 'y', data: [], tension: 0.15 },
+        { label: '奖励退火系数 (α)', borderColor: '#eab308', yAxisID: 'y1', data: [], borderDash: [5, 5] }
+      ]
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        x: commonOptions.scales.x,
+        y: { ...commonOptions.scales.y, position: 'left', title: { display: true, text: 'Ticks', color: '#38bdf8' } },
+        y1: { ...commonOptions.scales.y, position: 'right', min: 0, max: 1.0, title: { display: true, text: 'Alpha', color: '#eab308' }, grid: { drawOnChartArea: false } }
+      }
+    }
+  });
+
+  // T4. SPS
+  charts.trainSps = new Chart(document.getElementById('chartTrainSps'), {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        { label: '吞吐速度 (SPS)', backgroundColor: 'rgba(56, 189, 248, 0.7)', data: [] }
+      ]
+    },
+    options: commonOptions
+  });
+
+  // ---------------- 外部对战验收指标 (4 图) ----------------
 
   // 1. 胜率趋势
   charts.winRates = new Chart(document.getElementById('chartWinRates'), {
@@ -173,6 +264,65 @@ async function fetchStatus() {
   } catch (err) {
     console.error('fetchStatus 失败', err);
   }
+}
+
+async function fetchTrainTelemetry() {
+  try {
+    const res = await fetch('/api/train_telemetry');
+    telemetryData = await res.json();
+    renderTrainKPIs();
+    renderTrainCharts();
+  } catch (err) {
+    console.error('fetchTrainTelemetry 失败', err);
+  }
+}
+
+function renderTrainKPIs() {
+  if (!telemetryData || !telemetryData.length) return;
+  const latest = telemetryData[telemetryData.length - 1];
+
+  document.getElementById('kpiTrainIter').textContent = `Iter ${latest.iter}`;
+  document.getElementById('kpiTrainSteps').textContent = `全局步数: ${latest.gs ? latest.gs.toLocaleString() : '--'}`;
+
+  document.getElementById('kpiTrainLoss').textContent = latest.loss.toFixed(4);
+  document.getElementById('kpiTrainLossSub').textContent = `α=${latest.alpha.toFixed(2)} (密集退火)`;
+
+  document.getElementById('kpiTrainRew').textContent = latest.rew.toFixed(3);
+  document.getElementById('kpiTrainRewSub').textContent = `Step 累计回报`;
+
+  document.getElementById('kpiTrainKill').textContent = `${(latest.kill * 100).toFixed(1)}%`;
+  document.getElementById('kpiTrainKillSub').textContent = `斩杀率: ${latest.kill.toFixed(3)}`;
+
+  document.getElementById('kpiTrainSps').textContent = `${Math.round(latest.sps).toLocaleString()}`;
+  document.getElementById('kpiTrainEpLen').textContent = `采样平均局长: ${latest.ep_len ? latest.ep_len.toFixed(1) : '--'}t`;
+}
+
+function renderTrainCharts() {
+  if (!telemetryData || !telemetryData.length) return;
+
+  const labels = telemetryData.map(d => `it${d.iter}`);
+
+  // T1. Loss
+  charts.trainLoss.data.labels = labels;
+  charts.trainLoss.data.datasets[0].data = telemetryData.map(d => d.loss);
+  charts.trainLoss.update();
+
+  // T2. Reward & Kill
+  charts.trainRewardKill.data.labels = labels;
+  charts.trainRewardKill.data.datasets[0].data = telemetryData.map(d => d.rew);
+  charts.trainRewardKill.data.datasets[1].data = telemetryData.map(d => d.kill);
+  charts.trainRewardKill.update();
+
+  // T3. EpLen & Alpha
+  charts.trainEpLenAlpha.data.labels = labels;
+  charts.trainEpLenAlpha.data.datasets[0].data = telemetryData.map(d => d.ep_len);
+  charts.trainEpLenAlpha.data.datasets[1].data = telemetryData.map(d => d.alpha);
+  charts.trainEpLenAlpha.update();
+
+  // T4. SPS
+  charts.trainSps.data.labels = labels;
+  charts.trainSps.data.datasets[0].data = telemetryData.map(d => d.sps);
+  charts.trainSps.update();
 }
 
 async function fetchHistory() {
