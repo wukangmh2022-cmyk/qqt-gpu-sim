@@ -2602,9 +2602,10 @@
       // 上一行水泡((r-1)*24+19 = r*24-5 < r*24+18)在角色后画(角色头部帽子盖住上一行水泡)
       const z = Math.floor(gy) * Z_ROW_STRIDE + 18;
       // 角色脚下阴影：位于地面与角色之间 (Z = z - 1)
+      // 影子图片底部与角色碰撞盒底线(blitY + s.height)严格贴齐，bbox 触底时不出格不出画
       if (res.shadow) {
         const shadowX = Math.round(cx - res.shadow.width / 2);
-        const shadowY = Math.round(blitY + s.height - res.shadow.height / 2);
+        const shadowY = Math.round(blitY + s.height - res.shadow.height);
         items.push([z - 1, res.shadow, shadowX, shadowY]);
       }
       items.push([z, s, blitX, blitY]);

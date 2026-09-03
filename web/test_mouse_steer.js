@@ -9,14 +9,15 @@ const blocked = new Uint8Array(Q.N);
 const dist = Q.CFG.stepLen;
 
 // 直上被挡且两侧条件相同：角色在格中心左侧时应向右归中，不能固定左滑。
+// 当前 CFG.radius=0.42，格边界外测试起点 y=5.43（5.43 - 0.42 = 5.01 贴近但未进入第4行）
 blocked[4 * Q.W + 5] = 1;
-let [ny, nx] = sim._steer(5.36, 5.20, Q.MOVE_UP, blocked, dist);
-assert(nx > 5.20 && Math.abs(ny - 5.36) < 1e-9,
+let [ny, nx] = sim._steer(5.43, 5.20, Q.MOVE_UP, blocked, dist);
+assert(nx > 5.20 && Math.abs(ny - 5.43) < 1e-9,
   `上方受阻、偏左时应右滑，实际 (${ny}, ${nx})`);
 
 // 镜像场景：角色在格中心右侧时应向左归中。
-[ny, nx] = sim._steer(5.36, 5.80, Q.MOVE_UP, blocked, dist);
-assert(nx < 5.80 && Math.abs(ny - 5.36) < 1e-9,
+[ny, nx] = sim._steer(5.43, 5.80, Q.MOVE_UP, blocked, dist);
+assert(nx < 5.80 && Math.abs(ny - 5.43) < 1e-9,
   `上方受阻、偏右时应左滑，实际 (${ny}, ${nx})`);
 
 // 目标格是可推箱时，直走受阻也必须原地顶箱，不能垂直侧滑。

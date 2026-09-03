@@ -1241,14 +1241,22 @@
       for (let p = 0; p < 2; p++) {
         if (!this.alive[p]) continue;
         const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
-        // 目标格查询：floor(位置) + DIRS 的 4 个相邻格，blocked 查表
+        const dist = CFG.stepLen * (this.spdG ? this.spdG[p] : 1.0);
         const r0 = Math.max(0, Math.min(H - 1, Math.floor(y)));
         const c0 = Math.max(0, Math.min(W - 1, Math.floor(x)));
         for (let mv = 0; mv < 4; mv++) {
           const [dr, dc] = DIRS[mv];
           const tr = r0 + dr, tc = c0 + dc;
-          if (tr < 0 || tr >= H || tc < 0 || tc >= W) { mm[p][mv] = 0; continue; }
-          mm[p][mv] = blocked[tr * W + tc] ? 0 : 1;   // 目标格非障碍 = 合法
+          // 可推箱方向保持合法（供 PPO 累计推进时长）
+          if (this.pushable && tr >= 0 && tr < H && tc >= 0 && tc < W && this.pushable[tr * W + tc]) {
+            mm[p][mv] = 1;
+            continue;
+          }
+          // 动作空间意图为"向该方向移动一步"：通过 _steer 探针测试是否能发生位移或自动转向；
+          // 彻底贴死在障碍/角落无法位移才 mask，避免在边缘格（如右侧第14列）被静态邻居查表提前误杀
+          const [ny, nx] = this._steer(y, x, mv, blocked, dist);
+          const moved = Math.abs(ny - y) + Math.abs(nx - x);
+          mm[p][mv] = moved > 2 * EPS ? 1 : 0;
         }
         const [r, c] = this.centerCell(p);
         const i = r * W + c;

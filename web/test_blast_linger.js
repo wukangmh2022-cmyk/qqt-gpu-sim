@@ -72,6 +72,9 @@ sim.bombBlast[bomb] = 1;
 
 sim.step([[4, 0], [4, 0]]);
 assert.strictEqual(sim.brick[brick], 1);
+assert.strictEqual(sim.brickLinger[brick], 4);
+sim.step([[4, 0], [4, 0]]);
+assert.strictEqual(sim.brick[brick], 1);
 assert.strictEqual(sim.brickLinger[brick], 3);
 sim.step([[4, 0], [4, 0]]);
 assert.strictEqual(sim.brick[brick], 1);
