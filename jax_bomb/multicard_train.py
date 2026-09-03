@@ -621,7 +621,9 @@ def main():
             for l in range(n_local)])
         pkey = jrandom.PRNGKey(args.seed + 9999)
         obs_ch = 13 if args.legacy_obs13 else N_OBS_CH
-        if getattr(args, "init_params", None) and os.path.exists(args.init_params):
+        if getattr(args, "init_params", None):
+            if not os.path.exists(args.init_params):
+                raise SystemExit(f"[{rank}] 致命错误: 指定的 --init-params 权重文件不存在: {args.init_params}，已阻断避免从零盲跑！")
             with open(args.init_params, "rb") as f_init:
                 raw_init = pickle.load(f_init)
             init_tree = raw_init.get("params", raw_init)
