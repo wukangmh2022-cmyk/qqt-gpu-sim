@@ -603,14 +603,12 @@
         if (covered[i] && this.bush[i]) this.bush[i] = 0;
       }
 
-      // 5. 伤害判定：当前爆炸 + 之前 0.3s 余威覆盖的中心格均可扣血。
-      //    余威只在后续 3 tick 生效；无敌期防止重复掉血。
+      // 5. 伤害判定：当前爆炸 + 之前 0.3s 余威覆盖区域均可扣血。
+      //    半身位微操：单水柱中心线判定（半身避伤），并排连锁相邻格自动扩张连通合并（连泡必伤）。
       for (let p = 0; p < 2; p++) {
         if (!alive0[p]) continue;
-        const [r, c] = this.centerCell(p);
-        const i = r * W + c;
-        const hit = (covered[i] || this.blastLinger[i] > 0) && this.invuln[p] <= 0;
-        if (hit) {
+        if (this.invuln[p] > 0) continue;
+        if (this._isHitByExplosion(p, covered)) {
           this.hp[p] = Math.max(0, this.hp[p] - 1);
           if (this.hp[p] === 0) {
             this.alive[p] = false;
@@ -793,6 +791,42 @@
         for (let i = 0; i < N; i++) if (more[i]) covered[i] = 1;
       }
       return { covered, triggered };
+    }
+
+    // 判定玩家 p 是否被爆炸火焰击中（支持 QQ 堂经典半身位避伤与并排连泡破半身）
+    _isHitByExplosion(p, covered) {
+      const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
+      const R = CFG.radius;
+      const py0 = y - R, py1 = y + R;
+      const px0 = x - R, px1 = x + R;
+
+      const rMin = Math.max(0, Math.floor(py0));
+      const rMax = Math.min(H - 1, Math.floor(py1));
+      const cMin = Math.max(0, Math.floor(px0));
+      const cMax = Math.min(W - 1, Math.floor(px1));
+
+      for (let r = rMin; r <= rMax; r++) {
+        for (let c = cMin; c <= cMax; c++) {
+          const idx = r * W + c;
+          if (!covered[idx] && this.blastLinger[idx] <= 0) continue;
+
+          // 邻域连通性：同向并排/并列连锁水流在两格缝隙处闭合连通
+          const leftOn = c > 0 && (covered[idx - 1] || this.blastLinger[idx - 1] > 0);
+          const rightOn = c < W - 1 && (covered[idx + 1] || this.blastLinger[idx + 1] > 0);
+          const topOn = r > 0 && (covered[idx - W] || this.blastLinger[idx - W] > 0);
+          const bottomOn = r < H - 1 && (covered[idx + W] || this.blastLinger[idx + W] > 0);
+
+          const fx0 = c + (leftOn ? 0.0 : 0.5);
+          const fx1 = c + (rightOn ? 1.0 : 0.5);
+          const fy0 = r + (topOn ? 0.0 : 0.5);
+          const fy1 = r + (bottomOn ? 1.0 : 0.5);
+
+          if (Math.max(py0, fy0) <= Math.min(py1, fy1) && Math.max(px0, fx0) <= Math.min(px1, fx1)) {
+            return true;
+          }
+        }
+      }
+      return false;
     }
 
     // ------------------------------------------------------- 危险图
