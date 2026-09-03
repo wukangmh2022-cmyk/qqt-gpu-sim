@@ -95,8 +95,8 @@ OPEN_CRATE_CROSS = True      # open 关开局中心十字宝箱池（≈46 格�
 MAX_RECYCLE = 2 * 3 * HIT_ATTR_PENALTY   # 单 tick 掉血回收箱上限（2 玩家 × 3 属性 × 层数）
 
 # 观测通道：0 我位置, 1 我泡, 2 对手位置, 3 对手泡, 4 墙, 5 危险图, 6 进度,
-#            7 宝箱（共享地图通道，torch obs14 ch7 同源）
 N_OBS_CH = 14
+N_OBS_CH_V2 = 15  # 包含 ch14 飞鸟空投预判列热力图
 
 
 # corridor / open 出生点（对齐 config.spawn_pos / torch_sim._open_spawns）：
@@ -1225,7 +1225,7 @@ def global_vec(state: BombState, pid: int) -> jnp.ndarray:
     ])
 
 
-def make_obs(state: BombState, pid: int, danger=None) -> jnp.ndarray:
+def make_obs(state: BombState, pid: int, danger=None, channels: int = N_OBS_CH) -> jnp.ndarray:
     """(N_OBS_CH, H, W) float32，玩家 pid 视角。
 
     通道 = 炸弹**基础信息 + 危险图**（ch5 = torch 同款 danger_map，网络直接
@@ -1239,11 +1239,12 @@ def make_obs(state: BombState, pid: int, danger=None) -> jnp.ndarray:
       ch9 泡道具（1/4）  ch10 威力道具（2/5）  ch11 速度道具（3/6）
       ch12 超级道具（4/5/6，+4 档；问号宝箱=7 时 ch9-12 全 0，只有 ch7）
       ch13 可推箱 pushable（二值；外观是砖但可被持续推动，AI 靠它区分
-      "炸"还是"推"——没有此通道推箱玩法对策略不可见）
+      ch14 飞鸟空投预判列热力图（二值/衰减：飞鸟巡航场内时在所处 X 列形成竖向热力带）
 
     `danger` 可传入预计算的危险图（两个视角共享同一份，省一半计算；
     both_perspectives 用）；None 时内部现算（单视角调用/对拍用）。
     血量和成长属性等时间序列标量不进格子通道，走 global_vec（state token）。
+    `channels` 控制输出通道数：默认为 14（完全兼容旧版模型）；设为 15 时包含 ch14。
     """
     (pos, fuse, owner, bomb_blast, blast_linger, _brick_linger, wall, brick, pushable, _pt, bush, crate, _rc,
      alive, _hp, _invuln, _bombs_cap, _blast_cap, _spd_g, _buff, _debuff,
@@ -1256,7 +1257,7 @@ def make_obs(state: BombState, pid: int, danger=None) -> jnp.ndarray:
     # 余威不是炸弹引信，不能进入 _danger_map 的连锁传播；但它应作为当前
     # 可伤害区域呈现在同一个 danger 通道里，避免策略看不见可进入的火区。
     danger = jnp.maximum(danger, (blast_linger > 0).astype(jnp.float32))
-    obs = jnp.stack([
+    obs_list = [
         _splat(pos[me], alive[me], H, W),
         jnp.where(owner == me, fuse_norm, jnp.zeros_like(fuse_norm)),
         _splat(pos[opp], alive[opp], H, W),
@@ -1271,5 +1272,17 @@ def make_obs(state: BombState, pid: int, danger=None) -> jnp.ndarray:
         ((crate == 3) | (crate == 6)).astype(jnp.float32),   # 速度道具
         ((crate >= 4) & (crate <= 6)).astype(jnp.float32),   # 超级道具（+4 档）
         pushable.astype(jnp.float32),                        # 可推箱（推箱子玩法）
-    ])
-    return obs
+    ]
+    if channels >= 15:
+        # ch14: 飞鸟空投预判列热力图 (Airdrop Column Heatmap)
+        cycle_t = t % 300
+        in_window = (cycle_t >= 270) & (cycle_t <= 298)
+        flight_t = (cycle_t.astype(jnp.float32) - 250.0) / 10.0
+        bx = 15.0 - (18.5 / 3.0) * (flight_t - 2.0)
+        bird_col = jnp.clip(jnp.round(bx).astype(jnp.int32), 0, W - 1)
+        cols = jnp.arange(W)
+        dist = jnp.abs(cols - bird_col)
+        col_weights = jnp.where(dist == 0, 1.0, jnp.where(dist == 1, 0.35, 0.0))
+        heatmap = jnp.where(in_window, jnp.broadcast_to(col_weights[None, :], (H, W)), jnp.zeros((H, W), jnp.float32))
+        obs_list.append(heatmap)
+    return jnp.stack(obs_list)

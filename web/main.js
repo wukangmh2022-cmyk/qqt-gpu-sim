@@ -722,6 +722,8 @@
       propIcons, superIcons, boxQ, baseBand,
       point: scaleCanvas(await loadImage('assets/point.png'),
                          Math.round(40 * SCALE * 0.5), Math.round(40 * SCALE * 0.5)),
+      shadow: scaleCanvas(await loadImage('assets/shadow.png'),
+                          Math.round(34 * SCALE), Math.round(25 * SCALE)),
       flames: flameFrames,
       birdFrames,
     };
@@ -2585,6 +2587,12 @@
       // 同行墙(≤+15)在角色后画(角色在前)；同行水泡(+19)在角色前画(盖住角色右/下半身)；
       // 上一行水泡((r-1)*24+19 = r*24-5 < r*24+18)在角色后画(角色头部帽子盖住上一行水泡)
       const z = Math.floor(gy) * Z_ROW_STRIDE + 18;
+      // 角色脚下阴影：位于地面与角色之间 (Z = z - 1)
+      if (res.shadow) {
+        const shadowX = Math.round(cx - res.shadow.width / 2);
+        const shadowY = Math.round(blitY + s.height - res.shadow.height / 2);
+        items.push([z - 1, res.shadow, shadowX, shadowY]);
+      }
       items.push([z, s, blitX, blitY]);
       chars.push({ pid, z, blitX, blitY, s, wudi, wx, wy, hpv: sim.hp[pid], mx: CFG.maxHp });
     }

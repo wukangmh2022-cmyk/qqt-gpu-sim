@@ -1077,6 +1077,33 @@
       if (C >= 14) {
         for (let i = 0; i < N; i++) o[13 * N + i] = this.pushable[i];
       }
+      if (C >= 15) {
+        // ch14: 飞鸟空投预判列热力图（Airdrop Column Heatmap）
+        // 30s 周期循环（sim.t / 10Hz = 300 tick）：
+        // - 飞鸟场内飞行时间窗：flightTime 2.0s ~ 4.8s（即周期 tick 270 ~ 298）；
+        // - 当飞鸟在场内且墓地有积攒道具时，在飞鸟当前所在列产生竖向预判热力带；
+        // - 墓地无道具或飞鸟未在场内时，该通道全 0；
+        // - 保障兼容：旧版模型仅请求 C=13 或 C=14 通道，完全不读 ch14。
+        const cycleTick = this.t % 300;
+        const hasProps = (this.graveyard && this.graveyard.length > 0);
+        if (cycleTick >= 270 && cycleTick <= 298 && hasProps) {
+          const flightTime = (cycleTick - 250) / 10.0;
+          const bx = 15.0 - (18.5 / 3.0) * (flightTime - 2.0);
+          const birdCol = Math.round(bx);
+          const intensity = Math.min(1.0, this.graveyard.length / 3.0);
+          for (let r = 0; r < H; r++) {
+            if (birdCol >= 0 && birdCol < W) {
+              o[14 * N + r * W + birdCol] = intensity;
+            }
+            if (birdCol - 1 >= 0 && birdCol - 1 < W) {
+              o[14 * N + r * W + (birdCol - 1)] = Math.max(o[14 * N + r * W + (birdCol - 1)], intensity * 0.35);
+            }
+            if (birdCol + 1 >= 0 && birdCol + 1 < W) {
+              o[14 * N + r * W + (birdCol + 1)] = Math.max(o[14 * N + r * W + (birdCol + 1)], intensity * 0.35);
+            }
+          }
+        }
+      }
       return o;
     }
 
