@@ -2160,6 +2160,7 @@
     drawBoard(sceneOf());
     drawDangerOverlay();
 
+    const items = [];              // 画家算法精灵列表 [z, img, x, y] / [z, fn]
     const hideCells = new Set();   // 角色/水泡进入果冻/小屋结构 → 足迹内被其遮挡隐藏（render 作用域）
     if (sim.level) {
       if (sim.level.overhead) {
