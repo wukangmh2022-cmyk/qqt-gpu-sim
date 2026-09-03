@@ -249,6 +249,19 @@ async function fetchStatus() {
       }
     }
 
+    // 0.5 训练总轮次推进度 (now it / num it)
+    if (data.progress) {
+      const p = data.progress;
+      const navText = document.getElementById('navProgressText');
+      const navBar = document.getElementById('navProgressBar');
+      if (navText) {
+        navText.textContent = `${p.currentIter.toLocaleString()} / ${p.totalIters.toLocaleString()} (${p.percentage.toFixed(1)}%)`;
+      }
+      if (navBar) {
+        navBar.style.width = `${Math.min(100, Math.max(0, p.percentage))}%`;
+      }
+    }
+
     // 1. 策略状态徽标与评估进度
     const badge = document.getElementById('healthBadge');
     if (data.evalInProgress) {
@@ -328,10 +341,10 @@ async function fetchTrainTelemetry() {
 
 function renderTrainKPIs() {
   if (!telemetryData || !telemetryData.length) return;
-  const latest = telemetryData[telemetryData.length - 1];
-
-  document.getElementById('kpiTrainIter').textContent = `Iter ${latest.iter}`;
-  document.getElementById('kpiTrainSteps').textContent = `全局步数: ${latest.gs ? latest.gs.toLocaleString() : '--'}`;
+  const totalIters = latest.total_iters || 24000;
+  const pct = ((latest.iter / totalIters) * 100).toFixed(1);
+  document.getElementById('kpiTrainIter').textContent = `${latest.iter.toLocaleString()} / ${totalIters.toLocaleString()}`;
+  document.getElementById('kpiTrainSteps').textContent = `全局步数: ${latest.gs ? latest.gs.toLocaleString() : '--'} (已完成 ${pct}%)`;
 
   document.getElementById('kpiTrainLoss').textContent = latest.loss.toFixed(4);
   document.getElementById('kpiTrainLossSub').textContent = `α=${latest.alpha.toFixed(2)} (密集退火)`;

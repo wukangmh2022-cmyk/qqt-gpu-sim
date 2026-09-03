@@ -61,20 +61,36 @@ TRAIN_LOG_FILE = os.path.join(MONITOR_DIR, "train_r0_full.log")
 MULTICARD_RESULT = os.path.join(ROOT, "multicard_result.txt")
 
 ITER_RE = re.compile(
-    r"iter (\d+)/\d+ [\d.]+s \([\d.]+s avg\) ([\d,]+) sps \(avg [\d,]+\)"
+    r"iter (\d+)/(\d+) [\d.]+s \([\d.]+s avg\) ([\d,]+) sps \(avg [\d,]+\)"
     r" loss=([-\d.]+) rew=([-\d.]+) explore=([\d.]+) kill=([\d.]+) "
     r"α=([\d.]+) gs=([\d,]+) ep_len=([\d.naN]+)")
 
+def get_total_iters_fallback():
+    for toml_name in ["scale_200b_ema_crate_floor.toml", "repro_it68_scheme1_actor_top25_critic_all_patch3_k32.toml"]:
+        p = os.path.join(CONFIGS_DIR, toml_name)
+        if os.path.exists(p):
+            try:
+                import toml
+                c = toml.load(p)
+                if "run" in c and "iters" in c["run"]:
+                    return int(c["run"]["iters"])
+            except Exception:
+                pass
+    return 24000
+
 def get_train_telemetry():
     """解析每个 iteration 更新的高频训练指标 (loss, rew, kill, sps, ep_len)"""
+    fallback_tot = get_total_iters_fallback()
     if os.path.exists(TRAIN_CURVE_CSV):
         try:
             rows = []
             with open(TRAIN_CURVE_CSV, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 for r in reader:
+                    tot = int(r.get("total_iters") or fallback_tot)
                     rows.append({
                         "iter": int(r["iter"]),
+                        "total_iters": tot,
                         "sps": float(r.get("sps", 0)),
                         "loss": float(r.get("loss", 0)),
                         "rew": float(r.get("rew", 0)),
@@ -96,9 +112,10 @@ def get_train_telemetry():
                 for line in f:
                     m = ITER_RE.search(line)
                     if m:
-                        it, sps, loss, rew, exp, kill, alpha, gs, epl = m.groups()
+                        it, tot_it, sps, loss, rew, exp, kill, alpha, gs, epl = m.groups()
                         rows.append({
                             "iter": int(it),
+                            "total_iters": int(tot_it),
                             "sps": float(sps.replace(",", "")),
                             "loss": float(loss),
                             "rew": float(rew),
@@ -149,6 +166,16 @@ class MonitorHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 heartbeat = {"status": "ERROR", "message": str(e), "color": "gray"}
 
+            fallback_tot = get_total_iters_fallback()
+            cur_it = latest_train["iter"] if latest_train else (latest.get("iteration", 0) if latest else 0)
+            tot_it = latest_train.get("total_iters", fallback_tot) if latest_train else fallback_tot
+            pct = round(100.0 * cur_it / max(1, tot_it), 2)
+            progress = {
+                "currentIter": cur_it,
+                "totalIters": tot_it,
+                "percentage": pct
+            }
+
             self._send_json({
                 "status": "online",
                 "evalInProgress": eval_in_progress,
@@ -159,6 +186,7 @@ class MonitorHandler(SimpleHTTPRequestHandler):
                 "totalEvaluated": len(history),
                 "availableCheckpoints": ckpts[:15],
                 "latestTrain": latest_train,
+                "progress": progress,
                 "heartbeat": heartbeat,
             })
             return

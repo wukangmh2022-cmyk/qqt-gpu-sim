@@ -20,6 +20,16 @@
         </div>
       </div>
       <div class="nav-actions">
+        <!-- 训练总进度指示条 -->
+        <div class="progress-box" style="display: flex; flex-direction: column; justify-content: center; min-width: 170px; background: rgba(15, 23, 42, 0.6); padding: 5px 12px; border-radius: 8px; border: 1px solid rgba(59, 130, 246, 0.35);">
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; font-weight: 600;">
+            <span style="color: #94a3b8;">🎯 进度</span>
+            <span id="navProgressText" style="color: #38bdf8; font-family: monospace; font-size: 0.82rem;">-- / -- (--%)</span>
+          </div>
+          <div style="width: 100%; height: 6px; background: #334155; border-radius: 3px; overflow: hidden; margin-top: 4px;">
+            <div id="navProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.4s ease;"></div>
+          </div>
+        </div>
         <span id="clusterBadge" class="badge badge-info">集群探测中...</span>
         <span id="healthBadge" class="badge badge-info">策略检测中...</span>
         <button id="btnRefresh" class="btn btn-secondary">🔄 刷新</button>
@@ -50,9 +60,9 @@
       <!-- 训练流 KPI 卡片 -->
       <section class="kpi-grid">
         <div class="kpi-card">
-          <div class="kpi-title">当前训练轮次 (Iteration)</div>
-          <div class="kpi-value highlight-blue" id="kpiTrainIter">--</div>
-          <div class="kpi-sub" id="kpiTrainSteps">全局步数: --</div>
+          <div class="kpi-title">当前训练进度 (Iter / Total)</div>
+          <div class="kpi-value highlight-blue" id="kpiTrainIter">-- / --</div>
+          <div class="kpi-sub" id="kpiTrainSteps">全局步数: -- (进度: --%)</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-title">PPO 总损失 (Total Loss)</div>
