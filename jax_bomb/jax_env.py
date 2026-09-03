@@ -965,30 +965,30 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
         rate_b = jnp.where(is_open, 1.0, CRATE_PROB)
         super_f = jnp.zeros((), jnp.float32)        # 过程式无超级道具
     covered_brick = brick & covered
-    # 同一砖在残威期间再次被覆盖只刷新计时，不重复掉落宝箱。
-    destroyed_brick = covered_brick & (brick_linger <= 0)
-    destroy = destroyed_brick | (bush & covered)
-    # 与 Web 一致（sim.js:349-359）：crate_rate 判定掉落 → superFraction 判定
-    # 超级（+4档）→ floor(rng*3) 定种类（0=泡 1=威 2=速）。编码：
-    # 1/2/3 = 泡/威/速 +1；4/5/6 = 超级泡/威/速 +4
-    k0, k1, k2 = jax.random.split(key, 3)
-    drop = destroy & (jax.random.uniform(k0, (H, W)) < rate_b)
-    is_super = jax.random.uniform(k1, (H, W)) < super_f
-    kind = (jax.random.uniform(k2, (H, W)) * 3).astype(jnp.int32)
-    crate = jnp.where(drop, (1 + kind + is_super.astype(jnp.int32) * 3)
-                           .astype(jnp.int8), crate)
     # 被炸砖保留为碰撞体，直到 0.4s（4 tick，水泡快消失时）结束开放通行；
     # 灌木仍在本 tick 直接清除（本来就是可通行物）。
     old_brick_linger = brick_linger
     next_brick_linger = jnp.maximum(old_brick_linger.astype(jnp.int16) - 1, 0)
-    brick_expired = (old_brick_linger > 0) & (next_brick_linger == 0)
+    brick_expired = (old_brick_linger > 0) & (next_brick_linger == 0) & ~covered_brick
     brick_linger = jnp.where(covered_brick,
                              jnp.int8(BRICK_LINGER_TICKS),
                              next_brick_linger.astype(jnp.int8))
-    brick = brick & ~(brick_expired & ~covered_brick)
-    bush = bush & ~destroy
-    pushable = pushable & ~destroy   # 可推箱被炸 → 箱子消失（brick 同步清）
-    push_t = jnp.where(destroy, 0.0, push_t)  # 箱子没了 → 该格计时一并清零
+    brick = brick & ~brick_expired
+
+    # 与 Web 一致（sim.js）：只有当墙体倒计时归零、真正变成可以通行的瞬间才刷出道具，
+    # 彻底杜绝 AI 观测中出现“不可通行墙格上浮现道具（道具上墙）”的矛盾特征。
+    k0, k1, k2 = jax.random.split(key, 3)
+    drop = brick_expired & (jax.random.uniform(k0, (H, W)) < rate_b)
+    is_super = jax.random.uniform(k1, (H, W)) < super_f
+    kind = (jax.random.uniform(k2, (H, W)) * 3).astype(jnp.int32)
+    crate = jnp.where(drop, (1 + kind + is_super.astype(jnp.int32) * 3)
+                           .astype(jnp.int8), crate)
+
+    bush_hit = bush & covered
+    bush = bush & ~bush_hit
+    pushable_hit = pushable & covered
+    pushable = pushable & ~pushable_hit   # 可推箱被炸 → 箱子消失（brick 同步清）
+    push_t = jnp.where(pushable_hit, 0.0, push_t)
 
     # 5. 伤害：当前爆炸 + 之前 0.3s 余威覆盖的中心格均可扣 1 血。
     #    余威只持续 BLAST_LINGER_TICKS 个后续 tick；invuln 防止重复掉血。

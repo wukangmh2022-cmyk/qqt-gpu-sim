@@ -595,12 +595,6 @@
               this.pushSprite[cell] = -1;
             }
           }
-          // brick 尚未清除，不能复用 _crateBlocked；永久墙仍不可生成宝箱。
-          if (this.rng() < this.crateRate && !this.wall[i]) {
-            this.crate[i] = 1;
-            this.superCrate[i] = this.rng() < this.superFraction ? 1 : 0;
-            this.crateType[i] = Math.floor(this.rng() * 3);   // 吃到啥在炸开时定
-          }
         }
         if (covered[i] && this.bush[i]) this.bush[i] = 0;
       }
@@ -639,6 +633,12 @@
         this.brickLinger[i] = nextBrickLinger;
         if (oldBrickLinger > 0 && nextBrickLinger === 0 && !coveredBrick[i]) {
           this.brick[i] = 0;
+          // 砖体真正消除、变成可以通行的瞬间才刷出道具（避免 AI 在不可通行墙体上看到道具/道具上墙）
+          if (this.rng() < this.crateRate && !this.wall[i]) {
+            this.crate[i] = 1;
+            this.superCrate[i] = this.rng() < this.superFraction ? 1 : 0;
+            this.crateType[i] = Math.floor(this.rng() * 3);   // 吃到啥在炸开时定
+          }
         }
       }
 
