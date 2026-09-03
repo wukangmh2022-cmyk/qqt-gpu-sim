@@ -2273,15 +2273,17 @@
           }
 
           // 2. 臂：从引爆源向 4 方向按实际长度画
-          // 中间格子：整个 B + C 前 0.25s (0.06s ~ 0.39s 共 330ms) 视为整体，均匀播放 2 -> 3 -> 4 帧 (每帧 110ms)
+          // 中间格子：
+          //   0.06s ~ 0.20s 扩散与展开阶段使用帧 2
+          //   0.20s ~ 0.33s 舒展与回缩阶段使用帧 4
+          //   0.33s ~ 0.45s 阶段 C 边缘过渡到帧 6 的这一刻，中间格同步使用帧 3
           let bodyFrame;
-          if (age < 0.06) {
+          if (age < 0.20) {
             bodyFrame = 2;
-          } else if (age < 0.39) {
-            const bodyProg = (age - 0.06) / 0.33;
-            bodyFrame = 2 + Math.min(2, Math.floor(bodyProg * 3));
-          } else {
+          } else if (age < 0.33) {
             bodyFrame = 4;
+          } else {
+            bodyFrame = 3;  // 边缘过渡到帧 6 的时刻，中间格使用帧 3
           }
 
           for (let i = 0; i < N; i++) {
