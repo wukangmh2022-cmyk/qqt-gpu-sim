@@ -858,7 +858,7 @@
       return { covered, triggered };
     }
 
-    // 判定玩家 p 是否被爆炸火焰击中（支持 QQ 堂经典半身位避伤与并排连泡破半身）
+    // 判定玩家 p 是否被爆炸火焰击中（支持 QQ 堂经典半身位避伤、并排连泡破半身与十字交叉角安全）
     _isHitByExplosion(p, covered) {
       const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
       const R = CFG.radius;
@@ -870,23 +870,43 @@
       const cMin = Math.max(0, Math.floor(px0));
       const cMax = Math.min(W - 1, Math.floor(px1));
 
+      const isCov = (rr, cc) => rr >= 0 && rr < H && cc >= 0 && cc < W &&
+        (covered[rr * W + cc] || this.blastLinger[rr * W + cc] > 0);
+
       for (let r = rMin; r <= rMax; r++) {
         for (let c = cMin; c <= cMax; c++) {
           const idx = r * W + c;
-          if (!covered[idx] && this.blastLinger[idx] <= 0) continue;
+          if (!isCov(r, c)) continue;
 
-          // 邻域连通性：同向并排/并列连锁水流在两格缝隙处闭合连通
-          const leftOn = c > 0 && (covered[idx - 1] || this.blastLinger[idx - 1] > 0);
-          const rightOn = c < W - 1 && (covered[idx + 1] || this.blastLinger[idx + 1] > 0);
-          const topOn = r > 0 && (covered[idx - W] || this.blastLinger[idx - W] > 0);
-          const bottomOn = r < H - 1 && (covered[idx + W] || this.blastLinger[idx + W] > 0);
+          // 邻域连通性：正交分解为横向与纵向水流，避免十字交叉口角部虚假碰撞
+          const leftOn = isCov(r, c - 1);
+          const rightOn = isCov(r, c + 1);
+          const topOn = isCov(r - 1, c);
+          const bottomOn = isCov(r + 1, c);
 
-          const fx0 = c + (leftOn ? 0.0 : 0.5);
-          const fx1 = c + (rightOn ? 1.0 : 0.5);
-          const fy0 = r + (topOn ? 0.0 : 0.5);
-          const fy1 = r + (bottomOn ? 1.0 : 0.5);
+          // 1. 横向水流：中心在 y = r + 0.5；仅在相邻行存在平行横向水流（并排连锁）时向上下闭合连通
+          const parTop = isCov(r - 1, c) && (isCov(r - 1, c - 1) || isCov(r - 1, c + 1));
+          const parBottom = isCov(r + 1, c) && (isCov(r + 1, c - 1) || isCov(r + 1, c + 1));
+          const hx0 = c + (leftOn ? 0.0 : 0.5);
+          const hx1 = c + (rightOn ? 1.0 : 0.5);
+          const hy0 = r + (parTop ? 0.0 : 0.5);
+          const hy1 = r + (parBottom ? 1.0 : 0.5);
+          const hasHorz = leftOn || rightOn || (!topOn && !bottomOn);
+          const hitHorz = hasHorz && (Math.max(px0, hx0) <= Math.min(px1, hx1)) &&
+                                     (Math.max(py0, hy0) <= Math.min(py1, hy1));
 
-          if (Math.max(py0, fy0) <= Math.min(py1, fy1) && Math.max(px0, fx0) <= Math.min(px1, fx1)) {
+          // 2. 纵向水流：中心在 x = c + 0.5；仅在相邻列存在平行纵向水流（并排连锁）时向左右闭合连通
+          const parLeft = isCov(r, c - 1) && (isCov(r - 1, c - 1) || isCov(r + 1, c - 1));
+          const parRight = isCov(r, c + 1) && (isCov(r - 1, c + 1) || isCov(r + 1, c + 1));
+          const vx0 = c + (parLeft ? 0.0 : 0.5);
+          const vx1 = c + (parRight ? 1.0 : 0.5);
+          const vy0 = r + (topOn ? 0.0 : 0.5);
+          const vy1 = r + (bottomOn ? 1.0 : 0.5);
+          const hasVert = topOn || bottomOn || (!leftOn && !rightOn);
+          const hitVert = hasVert && (Math.max(px0, vx0) <= Math.min(px1, vx1)) &&
+                                     (Math.max(py0, vy0) <= Math.min(py1, vy1));
+
+          if (hitHorz || hitVert) {
             return true;
           }
         }
