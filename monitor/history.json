@@ -1,0 +1,64 @@
+[
+  {
+    "timestamp": "2026-09-03 09:36:50",
+    "modelName": "params_it00000068_hlgauss_top25foractor_patch3_k32",
+    "evalDurationSeconds": 186.2,
+    "totalGames": 128,
+    "domains": {
+      "open_hunter": {
+        "name": "AI Hunter / 空场景道场",
+        "wins": 8,
+        "losses": 21,
+        "mutuals": 1,
+        "timeouts": 2,
+        "winRate": 25.0,
+        "suicides": 1,
+        "avgBombs": 278.1,
+        "avgHits": 2.51,
+        "avgTicks": 1418.3
+      },
+      "full_hunter": {
+        "name": "AI Hunter / 全池241复杂地图",
+        "wins": 17,
+        "losses": 14,
+        "mutuals": 1,
+        "timeouts": 0,
+        "winRate": 53.1,
+        "suicides": 1,
+        "avgBombs": 94.8,
+        "avgHits": 3.88,
+        "avgTicks": 1117.2
+      },
+      "open_idle": {
+        "name": "静止木桩  / 空场景道场",
+        "wins": 32,
+        "losses": 0,
+        "mutuals": 0,
+        "timeouts": 0,
+        "winRate": 100.0,
+        "suicides": 0,
+        "avgBombs": 60.1,
+        "avgHits": 5.0,
+        "avgTicks": 200.6
+      },
+      "full_idle": {
+        "name": "静止木桩  / 全池241复杂地图",
+        "wins": 12,
+        "losses": 6,
+        "mutuals": 0,
+        "timeouts": 14,
+        "winRate": 37.5,
+        "suicides": 0,
+        "avgBombs": 64.2,
+        "avgHits": 2.06,
+        "avgTicks": 1399.9
+      }
+    },
+    "health": {
+      "status": "HEALTHY",
+      "severity": "info",
+      "issues": [],
+      "checkedAt": "2026-09-03 09:36:50"
+    }
+  }
+]

@@ -101,6 +101,10 @@ if (!isMainThread) {
     let p0Bombs = 0;
     let p0Hits = 0;
     let p0Suicide = false;
+    const p0Moves = [0, 0, 0, 0, 0];
+    const visitedCells = new Set();
+    const [initR, initC] = sim.centerCell(0);
+    visitedCells.add(initR * W + initC);
 
     while (!sim.done && sim.t < maxTicks) {
       const preBombs = snapshotBombs(sim);
@@ -110,7 +114,12 @@ if (!isMainThread) {
       const a0 = await model.act(sim, 0, rng);
       const a1 = isHunter ? hunter.act(sim, 1) : [4, 0]; // 4=IDLE, 0=NO_BOMB
 
-      if (aliveBefore[0] && a0[1] === 1) p0Bombs++;
+      if (aliveBefore[0]) {
+        if (a0[1] === 1) p0Bombs++;
+        p0Moves[a0[0]]++;
+        const [cr, cc] = sim.centerCell(0);
+        visitedCells.add(cr * W + cc);
+      }
 
       sim.step([a0, a1]);
 
@@ -137,6 +146,20 @@ if (!isMainThread) {
       }
     }
 
+    // CleanRL / RLlib 诊断指标: 控图率、发呆率、动作经验熵
+    const totalMoves = p0Moves.reduce((a, b) => a + b, 0);
+    const idleRatio = totalMoves > 0 ? Number(((p0Moves[4] / totalMoves) * 100).toFixed(1)) : 0;
+    const exploredRatio = Number(((visitedCells.size / (W * H)) * 100).toFixed(1));
+    let moveEntropy = 0;
+    if (totalMoves > 0) {
+      for (const cnt of p0Moves) {
+        if (cnt > 0) {
+          const p = cnt / totalMoves;
+          moveEntropy -= p * Math.log(p);
+        }
+      }
+    }
+
     return {
       domain,
       gameIdx,
@@ -145,6 +168,9 @@ if (!isMainThread) {
       p0Bombs,
       p0Hits,
       p0Suicide,
+      idleRatio,
+      exploredRatio,
+      moveEntropy: Number(moveEntropy.toFixed(3)),
       hp: [sim.hp[0], sim.hp[1]],
     };
   }
@@ -270,6 +296,9 @@ async function main() {
     const avgBombs = (results.reduce((a, b) => a + b.p0Bombs, 0) / args.games).toFixed(1);
     const avgHits = (results.reduce((a, b) => a + b.p0Hits, 0) / args.games).toFixed(2);
     const avgTicks = (results.reduce((a, b) => a + b.ticks, 0) / args.games).toFixed(1);
+    const avgExplored = (results.reduce((a, b) => a + b.exploredRatio, 0) / args.games).toFixed(1);
+    const avgIdle = (results.reduce((a, b) => a + b.idleRatio, 0) / args.games).toFixed(1);
+    const avgEntropy = (results.reduce((a, b) => a + b.moveEntropy, 0) / args.games).toFixed(2);
     const winRate = ((wins / args.games) * 100).toFixed(1);
 
     domainReports.push({
@@ -284,6 +313,9 @@ async function main() {
       avgBombs,
       avgHits,
       avgTicks,
+      avgExplored,
+      avgIdle,
+      avgEntropy,
       winRate,
       domTime,
     });
@@ -299,10 +331,10 @@ async function main() {
   console.log(`📊 评测汇总成果 (总对局=${args.games * domains.length}，总耗时=${totalTime}s)`);
   console.log(`==========================================================================\n`);
 
-  console.log(`| 对手 / 地图场景 | 胜 | 负 | 同归 | 超时 | 胜率(%) | 自杀 | 炮/局 | 命中/局 | 平均局长 |`);
-  console.log(`| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`);
+  console.log(`| 对手 / 地图场景 | 胜 | 负 | 同归 | 超时 | 胜率(%) | 自杀 | 炮/局 | 命中/局 | 平均局长 | 控图率(%) | 发呆率(%) | 动作熵 |`);
+  console.log(`| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`);
   for (const r of domainReports) {
-    console.log(`| ${r.name} | **${r.wins}** | ${r.losses} | ${r.mutuals} | ${r.timeouts} | **${r.winRate}%** | ${r.suicides} | ${r.avgBombs} | ${r.avgHits} | ${r.avgTicks} |`);
+    console.log(`| ${r.name} | **${r.wins}** | ${r.losses} | ${r.mutuals} | ${r.timeouts} | **${r.winRate}%** | ${r.suicides} | ${r.avgBombs} | ${r.avgHits} | ${r.avgTicks} | ${r.avgExplored}% | ${r.avgIdle}% | ${r.avgEntropy} |`);
   }
 
   console.log(`\n✨ 验收完毕！可直接将表格写入评估复盘文档。\n`);

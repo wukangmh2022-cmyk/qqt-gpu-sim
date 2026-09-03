@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QQ堂 RL 训练时监控与死锁拦截看板</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- 顶部导航栏 -->
+    <header class="top-nav">
+      <div class="brand">
+        <span class="logo">⚡</span>
+        <div class="brand-text">
+          <h1>QQT-RL 训练监控与策略退化拦截控制面</h1>
+          <p class="subtitle">100% WebJS Headless 物理同源 · 1800 满帧 · 3.1 分钟极速验收</p>
+        </div>
+      </div>
+      <div class="nav-actions">
+        <span id="healthBadge" class="badge badge-info">检测中...</span>
+        <button id="btnRefresh" class="btn btn-secondary">🔄 刷新</button>
+        <button id="btnOpenConfigs" class="btn btn-secondary">⚙️ 超参配置</button>
+        <button id="btnOpenLaunch" class="btn btn-warning">🚀 回滚/重启干预</button>
+        <a href="http://localhost:8080" target="_blank" class="btn btn-primary">🎮 打开 Web 模拟器</a>
+      </div>
+    </header>
+
+    <!-- 异常与死锁告警浮层 -->
+    <section id="alertSection" class="alert-banner hidden">
+      <div class="alert-icon">🚨</div>
+      <div class="alert-content">
+        <h3 id="alertTitle">检测到策略退化 / 消极死锁告警！</h3>
+        <ul id="alertIssues"></ul>
+        <div class="alert-actions" id="alertSuggestions"></div>
+      </div>
+    </section>
+
+    <!-- 顶部核心指标卡片 -->
+    <section class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-title">策略健康状态</div>
+        <div class="kpi-value" id="kpiStatus">--</div>
+        <div class="kpi-sub" id="kpiLatestCkpt">暂无评估快照</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-title">空场景 vs Hunter 胜率</div>
+        <div class="kpi-value highlight-blue" id="kpiOpenHunterWin">--%</div>
+        <div class="kpi-sub" id="kpiOpenHunterTicks">局长: -- ticks</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-title">全池 241 图 vs Hunter 胜率</div>
+        <div class="kpi-value highlight-purple" id="kpiFullHunterWin">--%</div>
+        <div class="kpi-sub" id="kpiFullHunterTicks">实战障碍局长: -- ticks</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-title">基础木桩杀伤率 (空场景)</div>
+        <div class="kpi-value highlight-green" id="kpiOpenIdleWin">--%</div>
+        <div class="kpi-sub" id="kpiOpenIdleTicks">基准耗时: -- ticks</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-title">迷宫破砖寻路率 (241 图)</div>
+        <div class="kpi-value highlight-orange" id="kpiFullIdleWin">--%</div>
+        <div class="kpi-sub" id="kpiFullIdleTimeout">超时局: --</div>
+      </div>
+    </section>
+
+    <!-- 趋势图表区 -->
+    <section class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3>📈 四大场景胜率与对抗演进趋势</h3>
+          <span class="chart-sub">识别 Hunter 战力与木桩杀伤基线</span>
+        </div>
+        <div class="chart-body">
+          <canvas id="chartWinRates"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3>⏱️ 平均对战局长趋势 (死锁与发呆检测)</h3>
+          <span class="chart-sub">局长逼近 1800 tick 往往代表消极躲避与死锁</span>
+        </div>
+        <div class="chart-body">
+          <canvas id="chartTicks"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3>💣 局均放炮量与命中率 (进攻主动性)</h3>
+          <span class="chart-sub">放炮数断崖下跌即为发呆退化</span>
+        </div>
+        <div class="chart-body">
+          <canvas id="chartAggression"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3>🛡️ 自杀率走势 (身法安全性)</h3>
+          <span class="chart-sub">自杀率 > 12% 需介入调节爆炸惩罚</span>
+        </div>
+        <div class="chart-body">
+          <canvas id="chartSafety"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- 历史评测检查点明细表 -->
+    <section class="table-section">
+      <div class="table-header">
+        <h2>📋 检查点历史评测明细 (128 局真实盲测档案)</h2>
+        <div class="table-actions">
+          <select id="selectModelToEval" class="select-input">
+            <option value="">-- 选择快照执行即时评测 --</option>
+          </select>
+          <button id="btnTriggerEval" class="btn btn-primary">⚡ 立即评测该档</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>模型名称</th>
+              <th>评估时间</th>
+              <th>耗时</th>
+              <th>空场景 vs Hunter</th>
+              <th>全池图 vs Hunter</th>
+              <th>全池图 vs 木桩</th>
+              <th>控图率 (RLlib)</th>
+              <th>发呆率 (CleanRL)</th>
+              <th>动作熵 (CleanRL)</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody">
+            <tr><td colspan="9" class="text-center">加载数据中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- 模态框: TOML 超参热修改 -->
+  <div id="modalConfigs" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>⚙️ TOML 训练超参数热修改</h3>
+        <button class="modal-close" onclick="closeModal('modalConfigs')">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>选择配置文件：</label>
+          <select id="configSelect" class="select-input" onchange="loadConfigFile()"></select>
+        </div>
+        <div class="form-group">
+          <label>配置内容：</label>
+          <textarea id="configContent" class="code-editor" rows="18"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span id="configSaveTip" class="tip-text"></span>
+        <button class="btn btn-secondary" onclick="closeModal('modalConfigs')">取消</button>
+        <button class="btn btn-primary" onclick="saveConfigFile()">💾 保存修改</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模态框: 策略回滚与重启干预 -->
+  <div id="modalLaunch" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>🚀 策略回滚与断点续训重启</h3>
+        <button class="modal-close" onclick="closeModal('modalLaunch')">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          当检测到策略退化、死锁或发呆时，选择一个最后已知的健康检查点（例如 it68），并指定修改后的 TOML 超参配置重新拉起训练集群。
+        </p>
+        <div class="form-group">
+          <label>回滚基准快照 (Resume From)：</label>
+          <select id="launchResumeSelect" class="select-input"></select>
+        </div>
+        <div class="form-group">
+          <label>选用超参配置 (Config TOML)：</label>
+          <select id="launchConfigSelect" class="select-input"></select>
+        </div>
+        <div class="form-group">
+          <label>执行脚本 (Launch Script)：</label>
+          <input type="text" id="launchScriptInput" class="text-input" value="scripts/launch_8node_it68_hlgauss_top25_patch3.sh" />
+        </div>
+        <div class="form-group">
+          <label>预览生成启动指令：</label>
+          <div id="launchCommandPreview" class="code-preview">--</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modalLaunch')">关闭</button>
+        <button class="btn btn-danger" onclick="executeRestart()">🚨 复制并在终端启动</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
