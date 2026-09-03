@@ -675,6 +675,36 @@
                             ['left', '向左爆炸.png'], ['right', '向右爆炸.png']]) {
       exploArms[key] = await loadImage('assets/' + f);
     }
+    // 爆炸水泡序列帧素材 (res/flame):
+    // C: 中心格 1..2 (0 为透明占位)
+    // U, D, L, R: 四方向格 1..6 (1=炸开花边缘, 2-4=中间连续动画帧, 5=伸展边缘, 6=收尾边缘)
+    // 统一预生成 CELL × CELL (60×60) 贴图，按物理朝向边缘对齐
+    const flameFrames = { C: [], U: [], D: [], L: [], R: [] };
+    for (const f of [1, 2]) {
+      const img = await loadImage(`assets/flame/flame_C_${f}.png`);
+      const c = document.createElement('canvas');
+      c.width = CELL; c.height = CELL;
+      c.getContext('2d').drawImage(img, 0, 0, CELL, CELL);
+      flameFrames.C[f] = c;
+    }
+    for (const d of ['U', 'D', 'L', 'R']) {
+      flameFrames[d] = [];
+      for (let f = 1; f <= 6; f++) {
+        const img = await loadImage(`assets/flame/flame_${d}_${f}.png`);
+        const sw = Math.round(img.width * SCALE);
+        const sh = Math.round(img.height * SCALE);
+        const c = document.createElement('canvas');
+        c.width = CELL; c.height = CELL;
+        const g = c.getContext('2d');
+        let ox = 0, oy = 0;
+        if (d === 'U') oy = CELL - sh;
+        else if (d === 'D') oy = 0;
+        else if (d === 'L') ox = CELL - sw;
+        else if (d === 'R') ox = 0;
+        g.drawImage(img, 0, 0, img.width, img.height, ox, oy, sw, sh);
+        flameFrames[d][f] = c;
+      }
+    }
     res = {
       levels, levelById, elements, bgImages,
       skins: skinRows,             // 3 种玩家皮肤
@@ -688,6 +718,7 @@
                          Math.round(40 * SCALE * 0.5), Math.round(40 * SCALE * 0.5)),
       exploCenter: scaleCanvas(await loadImage('assets/爆炸中心.png'), CELL, CELL),
       exploArms,
+      flames: flameFrames,
     };
     // 音效（Web Audio；失败静默）
     try {
@@ -2005,9 +2036,7 @@
   //         （角色盖住结构）；角色中心**完全进入足迹**时才把结构 z 抬到角色
   //         之上（挡在前面），并在进入瞬间播放果冻扭动动画（横/纵不同相位
   //         的缩放，像钻进小房子那样扭一下）。
-  const Z_ROW_STRIDE = W + 1;              // 纵向主序步长
-  // 行内 z 范围 0..14；泡泡=15、角色=16 —— 同一行时实体恒在墙/元件前面，
-  // 只有实体在墙体上一行(更小 r)时才被墙盖住。
+  const Z_ROW_STRIDE = 24;                 // 纵向主序步长 (各行严格按 24 隔离，行内：墙体 0..15、道具 16、泡泡 17、人物 18、火焰 19)
   function tileZ(r, c) {
     return r * Z_ROW_STRIDE + (W - 1 - c);
   }
@@ -2218,45 +2247,91 @@
     const bob = Math.round(Math.sin(nowS * 2 * Math.PI) * 3);
 
     // 爆炸：中心格用中心图；臂图按实际爆炸格数从炸弹边缘端切片（duel.py 同款算法）
+    // ------------------------------------------------------------ 爆炸水泡逐格序列帧 (res/flame)
+    // 爆炸持续动画一共 0.46s：
+    //   A 阶段 [0.00s ~ 0.06s]：动画波及威力=1 的范围初始帧动画（在该范围造伤害，使用帧 1 炸开花边缘）
+    //   B 阶段 [0.06s ~ 0.14s]：动画波及到最远处（0.06s-0.30s 完整格子造成伤害，中间格使用帧 2-4 轮播，边缘使用帧 5）
+    //   C 阶段 [0.14s ~ 0.46s]：动画收汁：
+    //     - 前 0.25s [0.14s ~ 0.39s]：最边缘一格从帧 5 过渡到帧 6 收尾帧（0.30s 起伤害自然截止）
+    //     - 后 0.07s [0.39s ~ 0.46s]：回到 A 阶段效果（收缩回威力=1 的范围，边缘使用帧 6）
     if (explosion) {
       const age = (now - explosionT) / 1000;
-      if (age <= 0.4 && explosionTrig) {
+      if (age <= 0.46 && explosionTrig) {
         const blast = explosion;
         const maxBlast = 8;   // 成长上限，与 sim/jax_env.py / 地图数据一致
-        // 引爆源格画中心图
-        for (let i = 0; i < N; i++) {
-          if (!explosionTrig[i]) continue;
-          const r = (i / W) | 0, c = i % W;
-          items.push([r * Z_ROW_STRIDE + 2, res.exploCenter, c * CELL, r * CELL]);
-        }
-        // 臂：从引爆源向 4 方向按实际长度画（尊重挡火规则）
-        for (let i = 0; i < N; i++) {
-          if (!explosionTrig[i]) continue;
-          const sr = (i / W) | 0, sc = i % W;
-          for (let d = 0; d < 4; d++) {
-            const [dr, dc] = DIRS[d];
-            let n = 0;
-            for (let k = 1; k <= maxBlast; k++) {
-              const r = sr + dr * k, c = sc + dc * k;
-              if (r < 0 || r >= H || c < 0 || c >= W) break;
-              if (!blast[r * W + c]) break;
-              n++;
-            }
-            const arm = res.exploArms[['up', 'down', 'left', 'right'][d]];
-            const len = maxBlast * 40;
-            for (let k = 1; k <= n; k++) {
-              const r = sr + dr * k, c = sc + dc * k;
-              let sx, sy;
-              if (dc !== 0) {
-                sx = dc > 0 ? (arm.width - len) + (k - 1) * 40 : (n - k) * 40;
-                sy = 0;
-              } else {
-                sx = 0;
-                sy = dr > 0 ? (arm.height - len) + (k - 1) * 40 : (n - k) * 40;
+        if (res && res.flames) {
+          const DIR_KEYS = ['U', 'D', 'L', 'R'];
+          // 中心格动画帧：帧 1, 2 交替循环
+          const centerFrame = (Math.floor(age * 12) % 2 === 0) ? 1 : 2;
+          const centerImg = res.flames.C[centerFrame] || res.flames.C[1];
+
+          // 1. 引爆源格画中心图 (Z = r * Z_ROW_STRIDE + 19)
+          for (let i = 0; i < N; i++) {
+            if (!explosionTrig[i]) continue;
+            const r = (i / W) | 0, c = i % W;
+            items.push([r * Z_ROW_STRIDE + 19, centerImg, c * CELL, r * CELL]);
+          }
+
+          // 2. 臂：从引爆源向 4 方向按实际长度画
+          // 中间格动画帧（帧 2, 3, 4 轮播）
+          const bodyFrame = 2 + (Math.floor(age * 20) % 3);
+
+          for (let i = 0; i < N; i++) {
+            if (!explosionTrig[i]) continue;
+            const sr = (i / W) | 0, sc = i % W;
+            for (let d = 0; d < 4; d++) {
+              const [dr, dc] = DIRS[d];
+              const dirKey = DIR_KEYS[d];
+              let n = 0;
+              for (let k = 1; k <= maxBlast; k++) {
+                const r = sr + dr * k, c = sc + dc * k;
+                if (r < 0 || r >= H || c < 0 || c >= W) break;
+                if (!blast[r * W + c]) break;
+                n++;
               }
-              items.push([r * Z_ROW_STRIDE + 2, arm, sx, sy, 40, 40,
-                           c * CELL, r * CELL, CELL, CELL]);
+              if (n === 0) continue;
+
+              // 根据扩散时间线确定当前有效展示长度 activeLen 与边缘格的帧:
+              let activeLen = n;
+              let tipFrame = 5;
+
+              if (age < 0.06) {
+                // A 阶段 [0.00 ~ 0.06s]: 仅波及威力=1 范围，使用帧 1（炸开花初始边缘形态）
+                activeLen = Math.min(n, 1);
+                tipFrame = 1;
+              } else if (age < 0.14) {
+                // B 阶段 [0.06 ~ 0.14s]: 扩散到最远处，边缘使用帧 5
+                activeLen = n;
+                tipFrame = 5;
+              } else if (age < 0.39) {
+                // C1 阶段 [0.14 ~ 0.39s] (前 0.25s): 边缘从帧 5 过渡到帧 6
+                activeLen = n;
+                tipFrame = age < 0.265 ? 5 : 6;
+              } else {
+                // C2 阶段 [0.39 ~ 0.46s] (后 0.07s): 回到 A 阶段效果（收缩回威力=1 范围，边缘使用 6）
+                activeLen = Math.min(n, 1);
+                tipFrame = 6;
+              }
+
+              for (let k = 1; k <= activeLen; k++) {
+                const r = sr + dr * k, c = sc + dc * k;
+                // 如果该格本身是另一个引爆中心格，优先保留中心格显示
+                if (explosionTrig[r * W + c]) continue;
+                const img = (k === activeLen)
+                  ? res.flames[dirKey][tipFrame]
+                  : res.flames[dirKey][bodyFrame];
+                if (img) {
+                  items.push([r * Z_ROW_STRIDE + 19, img, c * CELL, r * CELL]);
+                }
+              }
             }
+          }
+        } else {
+          // 降级回退 (res.flames 尚未就绪时)
+          for (let i = 0; i < N; i++) {
+            if (!explosionTrig[i]) continue;
+            const r = (i / W) | 0, c = i % W;
+            items.push([r * Z_ROW_STRIDE + 19, res.exploCenter, c * CELL, r * CELL]);
           }
         }
       } else {
@@ -2284,7 +2359,7 @@
       const img = frames[frame];
       const bx = c * CELL + (CELL - img.width) / 2;
       const by = (r + 1) * CELL - img.height;
-      items.push([r * Z_ROW_STRIDE + (Z_ROW_STRIDE - 1), img, bx, by]);
+      items.push([r * Z_ROW_STRIDE + 17, img, bx, by]);
     }
 
     // 宝箱：三张道具图轮流展示 + 呼吸（底部贴格底线）
@@ -2307,7 +2382,7 @@
       // 原图尺寸，格内居中（不拉伸）
       const px = c * CELL + (CELL - p.width) / 2;
       const py = r * CELL + (CELL - p.height) / 2 + bob * 0.5;
-      items.push([r * Z_ROW_STRIDE + 4, p, Math.round(px), Math.round(py)]);
+      items.push([r * Z_ROW_STRIDE + 16, p, Math.round(px), Math.round(py)]);
     }
 
     // 掉血回收宝箱飞行：从玩家身上抛物线(上拱)飞向落点，100ms 完成
@@ -2359,9 +2434,10 @@
         wx = blitX + s.width / 2 - wudi.width / 2;
         wy = blitY + s.height / 2 - wudi.height / 2 + 5 * SCALE;
       }
-      // 角色 Z = 行×16+15：同行墙(≤+14)在角色后画(角色在前)；
-      // 下一行最后一列墙(+16)在角色后画(墙溢出盖住角色脚部) —— 不产生平级
-      const z = Math.floor(gy) * Z_ROW_STRIDE + (Z_ROW_STRIDE - 1);
+      // 角色 Z = 行×24+18：
+      // 同行墙(≤+15)在角色后画(角色在前)；同行水泡(+19)在角色前画(盖住角色右/下半身)；
+      // 上一行水泡((r-1)*24+19 = r*24-5 < r*24+18)在角色后画(角色头部帽子盖住上一行水泡)
+      const z = Math.floor(gy) * Z_ROW_STRIDE + 18;
       items.push([z, s, blitX, blitY]);
       chars.push({ pid, z, blitX, blitY, s, wudi, wx, wy, hpv: sim.hp[pid], mx: CFG.maxHp });
     }
