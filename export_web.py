@@ -242,6 +242,9 @@ def main():
         if layers_flat and len(layers_flat[0]) == w * h:
             bush_flat = [int(bool(v) or abs(layers_flat[0][i]) == 6003)
                          for i, v in enumerate(bush_flat)]
+        overhead_flat = flat(d["overhead"]) if "overhead" in d else [0] * (w * h)
+        cover_flat = flat(d["cover"]) if "cover" in d else [0] * (w * h)
+        cover_flat = [int(bool(c) or bool(o)) for c, o in zip(cover_flat, overhead_flat)]
         levels.append({
             "id": int(pt.stem.split("_")[1]),
             "source": d["source"], "name": d.get("map_name", ""),
@@ -250,8 +253,8 @@ def main():
             "theme": Path(d.get("background", "")).parent.name if d.get("background") else "",
             "w": w, "h": h,
             "wall": flat(d["wall"]), "brick": flat(d["brick"]),
-            "overhead": flat(d["overhead"]), "pushable": flat(d["pushable"]),
-            "cover": flat(d["cover"]) if "cover" in d else [0] * (w * h),
+            "overhead": overhead_flat, "pushable": flat(d["pushable"]),
+            "cover": cover_flat,
             "bush": bush_flat,
             "ground": flat(d["ground"]),
             "layers": layers_flat,

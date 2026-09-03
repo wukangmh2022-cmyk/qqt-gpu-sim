@@ -347,6 +347,7 @@
         this.wall[i] = level.wall[i];
         this.brick[i] = level.brick[i];
         if (level.cover) this.cover[i] = level.cover[i];
+        if (level.overhead && level.overhead[i]) this.cover[i] = 1;
         if (level.bush) this.bush[i] = level.bush[i];
         // 旧版 Web 地图导出可能只有 layers，没有同步 bush 布尔层。
         // 野外 6003 是可通行且可炸的躲猫猫草丛，运行时必须补回状态层。

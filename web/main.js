@@ -2160,8 +2160,18 @@
     drawBoard(sceneOf());
     drawDangerOverlay();
 
-    const items = [];   // (z, drawFn)
-    const hideCells = new Set();   // 角色进入果冻结构 → 足迹内角色隐藏（render 作用域）
+    const hideCells = new Set();   // 角色/水泡进入果冻/小屋结构 → 足迹内被其遮挡隐藏（render 作用域）
+    if (sim.level) {
+      if (sim.level.overhead) {
+        for (let i = 0; i < N; i++) { if (sim.level.overhead[i]) hideCells.add(i); }
+      }
+      if (sim.level.cover) {
+        for (let i = 0; i < N; i++) { if (sim.level.cover[i]) hideCells.add(i); }
+      }
+      if (sim.cover) {
+        for (let i = 0; i < N; i++) { if (sim.cover[i]) hideCells.add(i); }
+      }
+    }
 
     // 结构精灵（L1 墙/砖 + L0 头顶装饰）：负值延续格跳过，多格元件整体在原点
     // 画一次；L1 由 sim 状态驱动（砖在余威结束后消失）；角色中心进入结构足迹 →
@@ -2182,8 +2192,9 @@
         if (sim.pushable && sim.pushable[st.r * W + st.c]) continue;   // 可推箱由运行时画
         if (st.layer === 1) {
           const i = st.r * W + st.c;
-          // 墙/砖/房子/灌木 都在才画；砖与灌木被炸毁后消失
-          if (!sim.wall[i] && !sim.brick[i] && !sim.cover[i] && !sim.bush[i]) continue;
+          // 墙/砖/房子/灌木/overhead 都在才画；砖与灌木被炸毁后消失
+          const isCover = (sim.cover && sim.cover[i]) || (sim.level && sim.level.overhead && sim.level.overhead[i]);
+          if (!sim.wall[i] && !sim.brick[i] && !sim.cover[i] && !isCover && !sim.bush[i]) continue;
         } else if (st.isBush && !sim.bush[st.r * W + st.c]) {
           continue;                            // 顶层灌木被炸毁 → 不画
         }
@@ -2368,8 +2379,8 @@
     // 绘制，底边贴格底线，超过一格的高度允许向上溢出。
     for (let i = 0; i < N; i++) {
       if (sim.fuse[i] <= 0) continue;
-      // 泡泡在任何果冻遮挡结构(房子/灌木/拱门等)上 → 隐藏（visible=false）
-      if (hideCells.has(i)) continue;
+      // 泡泡在任何果冻遮挡结构(房子/灌木/拱门/小屋元件等)上 → 被其遮挡隐藏（visible=false）
+      if (hideCells.has(i) || (sim.cover && sim.cover[i]) || (sim.level && sim.level.overhead && sim.level.overhead[i])) continue;
       const r = (i / W) | 0, c = i % W;
       const age = Math.max(0, CFG.fuse - sim.fuse[i]);
       const frame = Math.floor((age / CFG.tickHz) * 4) % 4;
@@ -2401,6 +2412,8 @@
       if (!sim.crate[i] || flyTargets.has(i)) continue;
       // 砖还在碎墙动画 (dieFx) 期间，不提前显示该格的道具/宝箱
       if (dieFx.has(i)) continue;
+      // 道具在遮挡结构/小屋元件内也应该被其遮挡
+      if (hideCells.has(i) || (sim.cover && sim.cover[i]) || (sim.level && sim.level.overhead && sim.level.overhead[i])) continue;
       const r = (i / W) | 0, c = i % W;
       // 随机宝箱(带?箱子) / 普通(种类定好) / 超级(种类+超级图标)
       let p;
@@ -2574,8 +2587,9 @@
       const blitY = Math.min(Math.round(cy + CFG.radius * CELL - s.height), H * CELL - s.height);
       // 我方箭头位置：**先记录**，进果冻遮挡隐藏后箭头仍显示
       if (pid === 0) p0Arrow = { blitX, blitY, s };
-      // 走进果冻结构（房子/灌木/拱门等，可炸或不可炸）内 → 角色隐藏
-      if (hideCells.has(Math.floor(gy) * W + Math.floor(gx))) continue;
+      // 走进果冻结构（房子/灌木/拱门等，可炸或不可炸/小屋元件）内 → 角色隐藏
+      const pcell = Math.floor(gy) * W + Math.floor(gx);
+      if (hideCells.has(pcell) || (sim.cover && sim.cover[pcell]) || (sim.level && sim.level.overhead && sim.level.overhead[pcell])) continue;
       let wudi = null, wx = blitX, wy = blitY;
       if (sim.invuln[pid] > 0) {
         wudi = res.wudi;
