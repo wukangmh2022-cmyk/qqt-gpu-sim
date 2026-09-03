@@ -261,6 +261,12 @@ section.meta code { background: #262c39; padding: 1px 4px; border-radius: 4px; }
   cursor: pointer; width: 100%;
 }
 #mm-random-btn:hover { background: #2c3542; }
+#mm-random-btn.mm-cur {
+  background: #2a374d;
+  border-color: #ffd700;
+  color: #ffd700;
+  box-shadow: 0 0 10px rgba(255, 215, 0, 0.35);
+}
 .mm-split { grid-column: 1 / -1; display: flex; gap: 10px; max-height: 320px; }
 .mm-col-list { flex: 1.5; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 6px; }
 .mm-col-prev {

@@ -3052,7 +3052,56 @@
     const statIds = ['bombs', 'bombs-max', 'blast', 'blast-max', 'speed', 'speed-max'];
     const statEls = Object.fromEntries(statIds.map((id) => [id, document.getElementById(`mm-${id}`)]));
     const statOut = Object.fromEntries(statIds.map((id) => [id, document.getElementById(`mm-${id}-v`)]));
+    let isRandomSelected = true;
+    const RAND_IMG = 'assets/maps/thumb/rand.png';
+
+    const showPrev = (l, extraName, extraMeta, imgSrc) => {
+      if (!l && !extraName && !imgSrc) return;
+      if (prevImg) prevImg.src = imgSrc || (l && l.thumb) || '';
+      if (prevName) prevName.textContent = extraName || (l ? (l.name || l.source) : '');
+      const st = l ? (l.initial_stats || {}) : {};
+      if (prevMeta) prevMeta.textContent = extraMeta ||
+        (l ? `${l.mode} · ${l.source}` : '');
+    };
+
+    const showRandomPreview = () => {
+      showPrev(null, '随机地图', '全 241 张地图随机抽取', RAND_IMG);
+      if (!customStats) {
+        customStats = {
+          bombs: 2, bombsMax: CFG.growthBombsMax,
+          blast: 2, blastMax: CFG.growthBlastMax,
+          speed: 1.3, speedMax: CFG.growthSpeedMax,
+        };
+      }
+      const values = [customStats.bombs, customStats.bombsMax, customStats.blast,
+                      customStats.blastMax, customStats.speed, customStats.speedMax];
+      statIds.forEach((id, i) => { statEls[id].value = values[i]; statOut[id].textContent = values[i]; });
+    };
+
+    const restorePreview = () => {
+      if (isRandomSelected) {
+        showRandomPreview();
+      } else if (selectedLevel) {
+        showPrev(selectedLevel);
+      }
+    };
+
+    const selectRandom = () => {
+      isRandomSelected = true;
+      if (rndBtn) rndBtn.classList.add('mm-cur');
+      for (const el of tree.children) {
+        const children = el.children && el.children[1];
+        if (!children || !children.children) continue;
+        for (const item of children.children) {
+          item.classList.remove('mm-cur');
+        }
+      }
+      showRandomPreview();
+    };
+
     const setSelected = (l) => {
+      isRandomSelected = false;
+      if (rndBtn) rndBtn.classList.remove('mm-cur');
       selectedLevel = l;
       const st = l.initial_stats || { bombs: 2, blast: 2, speed: 1.3 };
       customStats = {
@@ -3073,6 +3122,7 @@
         }
       }
     };
+
     const syncStats = () => {
       const n = (id) => Number(statEls[id].value);
       let bombsMax = n('bombs-max'), blastMax = n('blast-max'), speedMax = n('speed-max');
@@ -3087,37 +3137,29 @@
     statIds.forEach((id) => statEls[id].addEventListener('input', (ev) => {
       ev.stopPropagation(); syncStats();
     }));
+
     if (enterBtn) enterBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
+      if (isRandomSelected) {
+        selectedLevel = levels[Math.floor(Math.random() * levels.length)];
+      }
       if (selectedLevel) startGame();
     });
-    const showPrev = (l, extraName, extraMeta, imgSrc) => {
-      if (!l && !extraName && !imgSrc) return;
-      if (prevImg) prevImg.src = imgSrc || (l && l.thumb) || '';
-      if (prevName) prevName.textContent = extraName || (l ? (l.name || l.source) : '');
-      const st = l ? (l.initial_stats || {}) : {};
-      if (prevMeta) prevMeta.textContent = extraMeta ||
-        (l ? `${l.mode} · ${l.source}` : '');
-    };
-    // 随机地图：官方 rand 缩略图；hover 展示、点击随机开局
+
+    // 随机地图按钮：常驻“随机地图”；hover 预览随机、点击选中随机模式
     const rndBtn = document.getElementById('mm-random-btn');
     if (rndBtn) {
-      const RAND_IMG = 'assets/maps/thumb/rand.png';
-      rndBtn.addEventListener('mouseenter', () =>
-        showPrev(null, '随机地图', '全 241 张地图随机抽取', RAND_IMG));
-      rndBtn.addEventListener('mouseleave', () =>
-        showPrev(null, '随机地图', '全 241 张地图随机抽取', RAND_IMG));
+      rndBtn.addEventListener('mouseenter', () => showRandomPreview());
+      rndBtn.addEventListener('mouseleave', () => restorePreview());
       rndBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        const l = levels[Math.floor(Math.random() * levels.length)];
-        setSelected(l);
-        showPrev(l);
+        selectRandom();
       });
-      // 官方随机缩略图（rand.png）常驻预览
-      if (prevImg) prevImg.src = 'assets/maps/thumb/rand.png';
-      if (prevName) prevName.textContent = '随机地图';
-      if (prevMeta) prevMeta.textContent = '全 241 张地图随机抽取';
     }
+
+    // 树容器监听：鼠标移出树列表时，自动恢复到已选状态（若选了随机则依然显示随机）
+    tree.addEventListener('mouseleave', () => restorePreview());
+
     // 树：分类节点（▸ 可展开）→ 地图项（hover 缩略图 / 点击开局）
     for (const [cat, maps] of groups) {
       const node = document.createElement('div');
@@ -3167,11 +3209,10 @@
       node.appendChild(children);
       tree.appendChild(node);
     }
-    if (selectedLevel) {
-      setSelected(selectedLevel);
-      showPrev(selectedLevel);
-    }
-      elBanner.classList.remove('hidden');
+
+    // 默认保持随机地图高亮选中状态
+    selectRandom();
+    elBanner.classList.remove('hidden');
     }
   function openMapMenu() {
     running = false;
