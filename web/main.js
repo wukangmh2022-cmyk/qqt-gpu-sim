@@ -2583,8 +2583,8 @@
       const frame = (moving ? Math.floor(nowS * 8) % 4 : 0);
       const s = rows[row][frame];
       const blitX = Math.round(cx - s.width / 2);
-      // 精灵脚底对齐碰撞盒底 (gy + radius)，人物视觉整体上移 6px（纯渲染层，不影响物理 bbox）：
-      const CHAR_VISUAL_OFFSET_Y = 6;
+      // 精灵脚底对齐碰撞盒底 (gy + radius)，人物微调上移 2px（纯渲染层，不影响物理 bbox）：
+      const CHAR_VISUAL_OFFSET_Y = 2;
       const blitY = Math.min(Math.round(cy + CFG.radius * CELL - s.height - CHAR_VISUAL_OFFSET_Y), H * CELL - s.height);
       // 我方箭头位置：**先记录**，进果冻遮挡隐藏后箭头仍显示
       if (pid === 0) p0Arrow = { blitX, blitY, s };
@@ -2603,14 +2603,11 @@
       // 上一行水泡((r-1)*24+19 = r*24-5 < r*24+18)在角色后画(角色头部帽子盖住上一行水泡)
       const z = Math.floor(gy) * Z_ROW_STRIDE + 18;
       // 角色脚下阴影：位于地面与角色之间 (Z = z - 1)
-      // 阴影下移 1/5 格子（+12px，累计 +18px），使角色鞋底精确踩在椭圆阴影视觉中心（触地点在椭圆中心上方 3px）；
-      // 底边缘做画布边界保护（H * CELL - res.shadow.height），贴底行绝不出画
+      // 阴影与角色保持完全刚性锁定（不单独对格子边界做钳制，避免走到最下方格子时阴影与人物距离被压缩挤扁）；
+      // 鞋底自然踏在椭圆正中，且无论走到哪个格子两者相对间距恒定不变
       if (res.shadow) {
         const shadowX = Math.round(cx - res.shadow.width / 2);
-        const shadowY = Math.min(
-          Math.round(blitY + s.height - res.shadow.height + 18),
-          H * CELL - res.shadow.height
-        );
+        const shadowY = Math.round(blitY + s.height - res.shadow.height + 16);
         items.push([z - 1, res.shadow, shadowX, shadowY]);
       }
       items.push([z, s, blitX, blitY]);
