@@ -249,8 +249,16 @@ def process_checkpoint(ckpt_path, games=32, workers=4):
     health = evaluate_health(report)
     report["health"] = health
 
-    # 4. 持久化记录
+    # 4. 战力巅峰与里程碑判定 (Peak Elo Milestone)
     history = load_history()
+    try:
+        import monitor.retention as ret
+        is_mile, mile_reason = ret.check_and_mark_milestone(report, history)
+        if is_mile:
+            print(f"[Watchdog] 🌟 恭喜！{stem} 判定为里程碑: {mile_reason}")
+    except Exception as e:
+        report["isMilestone"] = False
+
     # 替换或追加
     idx = next((i for i, h in enumerate(history) if h.get("modelName") == stem), -1)
     if idx >= 0:
@@ -258,6 +266,13 @@ def process_checkpoint(ckpt_path, games=32, workers=4):
     else:
         history.append(report)
     save_history(history)
+
+    # 4.5 自动执行本地轻量滚动清理 (保留最新 6 个非里程碑档，保护所有里程碑与黄金档)
+    try:
+        import monitor.retention as ret
+        ret.prune_local_storage(keep_last_n=6, dry_run=False)
+    except Exception as e:
+        pass
 
     # 5. 告警触发
     if health["status"] in ["WARNING", "DEGRADED"]:

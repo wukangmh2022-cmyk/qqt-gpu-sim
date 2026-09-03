@@ -496,8 +496,12 @@ function renderTable() {
     const idleStr = d.open_hunter?.avgIdle ? `${d.open_hunter.avgIdle}%` : '--';
     const entStr = d.open_hunter?.avgEntropy ? `${d.open_hunter.avgEntropy}` : '--';
 
+    const milestoneBadge = h.isMilestone
+      ? ` <span class="badge" style="background: #f59e0b; color: #fff; font-size: 0.72rem;" title="${h.milestoneReason || '里程碑'}">👑 里程碑</span>`
+      : '';
+
     tr.innerHTML = `
-      <td><strong>${h.modelName}</strong></td>
+      <td><strong>${h.modelName}</strong>${milestoneBadge}</td>
       <td>${h.timestamp}</td>
       <td>${h.evalDurationSeconds}s</td>
       <td>${ohStr}</td>
