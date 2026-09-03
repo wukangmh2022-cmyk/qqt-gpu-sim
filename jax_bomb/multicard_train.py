@@ -167,9 +167,9 @@ def newest_ckpt(ckpt_dir, rank):
     return max(files, key=lambda p: int(os.path.basename(p).split("_")[1]))
 
 
-def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg):
+def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg, max_to_keep=3):
     """每个 rank 存自己的文件（states/keys 每 rank 不同；params/opt_state
-    跨 rank 一致）。host 数组序列化，加载时转回 jax 数组。"""
+    跨 rank 一致）。host 数组序列化，加载时转回 jax 数组。自动滚动清理旧存档。"""
     path = ckpt_file(ckpt_dir, rank, it)
     try:
         os.makedirs(ckpt_dir, exist_ok=True)
@@ -180,6 +180,18 @@ def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg):
                    "keys": np.asarray(keys)}
         with open(path, "wb") as f:
             pickle.dump(payload, f)
+
+        # 滚动清理：仅保留本 rank 最新的 max_to_keep 个全量检查点，防止云端磁盘爆满 (保持 <30GB)
+        if max_to_keep > 0:
+            import glob
+            pattern = os.path.join(ckpt_dir, f"ckpt_*_r{rank}.pkl")
+            files = sorted(glob.glob(pattern))
+            if len(files) > max_to_keep:
+                for old_f in files[:-max_to_keep]:
+                    try:
+                        os.remove(old_f)
+                    except OSError:
+                        pass
     except Exception as e:
         print(f"[{rank}] WARN: 检查点保存失败 {path}: {e}", flush=True)
         return False
@@ -297,6 +309,10 @@ def main():
                     default=int(os.environ.get("CKPT_EVERY", str(
                         cfg("checkpoint", "ckpt_every", 60)))),
                     help="周期存盘间隔（分钟）；0=仅在结束/收到信号时存")
+    ap.add_argument("--ckpt-max-to-keep", type=int,
+                    default=int(os.environ.get("CKPT_MAX_TO_KEEP", str(
+                        cfg("checkpoint", "ckpt_max_to_keep", 3)))),
+                    help="全量检查点滚动保留数（默认保留最新 3 个，避免磁盘暴涨超 30GB）")
     ap.add_argument("--ckpt-local-dir",
                     default=os.environ.get("CKPT_LOCAL_DIR",
                                           cfg("checkpoint", "ckpt_local_dir", None)),
@@ -306,6 +322,10 @@ def main():
                     default=int(os.environ.get("CKPT_LOCAL_EVERY", str(
                         cfg("checkpoint", "ckpt_local_every", 30)))),
                     help="参数快照间隔（分钟）；0=仅在结束/信号时存")
+    ap.add_argument("--ckpt-local-max-to-keep", type=int,
+                    default=int(os.environ.get("CKPT_LOCAL_MAX_TO_KEEP", str(
+                        cfg("checkpoint", "ckpt_local_max_to_keep", 10)))),
+                    help="轻量参数快照滚动保留数（默认最新 10 个）")
     # ---- 评估（当前策略 vs 冻结基线，两策略对打）----
     ap.add_argument("--eval-vs", default=os.environ.get(
         "EVAL_VS", cfg("evaluation", "eval_vs", None)),
@@ -796,7 +816,8 @@ def main():
                                   and time.time() - last_save
                                   >= args.ckpt_every * 60)):
             if save_ckpt(args.ckpt_dir, rank, i,
-                         res[0], res[1], res[2], res[3], cfg):
+                         res[0], res[1], res[2], res[3], cfg,
+                         max_to_keep=args.ckpt_max_to_keep):
                 print(f"[{rank}] ckpt saved: "
                       f"{ckpt_file(args.ckpt_dir, rank, i)}", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
@@ -817,6 +838,16 @@ def main():
                 print(f"[{rank}] params snapshot -> {p}", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                                     f"params snapshot iter {i}"])
+                # 滚动清理：仅保留最新 ckpt_local_max_to_keep 个轻量快照，严控云端磁盘 < 30GB
+                if getattr(args, "ckpt_local_max_to_keep", 10) > 0:
+                    import glob
+                    local_files = sorted(glob.glob(os.path.join(args.ckpt_local_dir, "params_it*.pkl")))
+                    if len(local_files) > args.ckpt_local_max_to_keep:
+                        for old_p in local_files[:-args.ckpt_local_max_to_keep]:
+                            try:
+                                os.remove(old_p)
+                            except OSError:
+                                pass
                 last_local_save = time.time()
             except Exception as e:
                 print(f"[{rank}] WARN: 参数快照失败: {e}", flush=True)
