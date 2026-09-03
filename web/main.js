@@ -704,9 +704,12 @@
         flameFrames[d][f] = c;
       }
     }
+    const rawBird1 = await loadImage('assets/bird1.png');
+    const rawBird2 = await loadImage('assets/bird2.png');
+    // 飞鸟按 1.5 倍放大展示（128×96 -> 192×144）
     const birdFrames = [
-      await loadImage('assets/bird1.png'),
-      await loadImage('assets/bird2.png'),
+      scaleCanvas(rawBird1, Math.round(rawBird1.width * 1.5), Math.round(rawBird1.height * 1.5)),
+      scaleCanvas(rawBird2, Math.round(rawBird2.width * 1.5), Math.round(rawBird2.height * 1.5)),
     ];
     res = {
       levels, levelById, elements, bgImages,
@@ -2471,12 +2474,12 @@
 
         // 坐标计算：
         // 0s ~ 2s：从 x = 22 移动到 x = 15 (进入画面右边界)
-        // 2s ~ 5s：从 x = 15 移动到 x = -2.5 (完全飞离画面左边界)
+        // 2s ~ 5s：从 x = 15 移动到 x = -3.5 (完全飞离画面左边界，1.5x 宽为 3.2 格)
         let bx;
         if (flightTime < 2.0) {
           bx = (22 - 3.5 * flightTime) * CELL;
         } else {
-          bx = (15 - (17.5 / 3.0) * (flightTime - 2.0)) * CELL;
+          bx = (15 - (18.5 / 3.0) * (flightTime - 2.0)) * CELL;
         }
         // y 坐标固定为从上往下第 3.5 个格子 (oy = 3.5 * CELL)
         const by = 3.5 * CELL;
