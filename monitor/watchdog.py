@@ -123,9 +123,30 @@ def run_eval(model_name, games=32, workers=4):
                 except ValueError as e:
                     pass
 
+    import re, math
+    m = re.search(r"it(\d+)", model_name)
+    iteration = int(m.group(1)) if m else 0
+
+    def compute_elo(wr_pct, anchor_elo=1500):
+        wr = max(1.0, min(99.0, wr_pct)) / 100.0
+        return round(anchor_elo + 400.0 * math.log10(wr / (1.0 - wr)))
+
+    oh_wr = reports.get("open_hunter", {}).get("winRate", 25.0)
+    fh_wr = reports.get("full_hunter", {}).get("winRate", 50.0)
+    elo_oh = compute_elo(oh_wr, 1500)
+    elo_fh = compute_elo(fh_wr, 1500)
+    composite_elo = round(0.4 * elo_oh + 0.6 * elo_fh)
+
     return {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "modelName": model_name,
+        "iteration": iteration,
+        "elo": {
+            "anchor": 1500,
+            "vsOpenHunter": elo_oh,
+            "vsFullHunter": elo_fh,
+            "composite": composite_elo
+        },
         "evalDurationSeconds": round(dt, 2),
         "totalGames": games * 4,
         "domains": reports

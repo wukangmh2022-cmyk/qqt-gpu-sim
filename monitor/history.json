@@ -2,6 +2,13 @@
   {
     "timestamp": "2026-09-03 09:36:50",
     "modelName": "params_it00000068_hlgauss_top25foractor_patch3_k32",
+    "iteration": 68,
+    "elo": {
+      "anchor": 1500,
+      "vsOpenHunter": 1309,
+      "vsFullHunter": 1522,
+      "composite": 1437
+    },
     "evalDurationSeconds": 186.2,
     "totalGames": 128,
     "domains": {

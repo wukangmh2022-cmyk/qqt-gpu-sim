@@ -129,6 +129,11 @@
           <div class="kpi-sub" id="kpiLatestCkpt">暂无评估快照</div>
         </div>
         <div class="kpi-card">
+          <div class="kpi-title">估算 Elo 战力分 (Hunter 锚点)</div>
+          <div class="kpi-value highlight-blue" id="kpiElo">--</div>
+          <div class="kpi-sub" id="kpiEloSub">基准: Hunter=1500</div>
+        </div>
+        <div class="kpi-card">
           <div class="kpi-title">空场景 vs Hunter 胜率</div>
           <div class="kpi-value highlight-blue" id="kpiOpenHunterWin">--%</div>
           <div class="kpi-sub" id="kpiOpenHunterTicks">局长: -- ticks</div>
@@ -154,11 +159,21 @@
       <section class="charts-grid">
         <div class="chart-card">
           <div class="chart-header">
-            <h3>📈 四大场景胜率与对抗演进趋势</h3>
-            <span class="chart-sub">识别 Hunter 战力与木桩杀伤基线</span>
+            <h3>📈 胜率随训练轮次演进 (Winrate vs. Iteration)</h3>
+            <span class="chart-sub">横轴按纯数值 Iteration 严格排序对齐，四大场景对抗趋势</span>
           </div>
           <div class="chart-body">
             <canvas id="chartWinRates"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>🏆 相对 Elo 天梯战力分曲线 (Anchor Elo vs. Iteration)</h3>
+            <span class="chart-sub">以全局 HunterAI (1500分) 为基准锚点，打破自对弈内卷假象</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartElo"></canvas>
           </div>
         </div>
 

@@ -131,7 +131,7 @@ function initCharts() {
 
   // ---------------- 外部对战验收指标 (4 图) ----------------
 
-  // 1. 胜率趋势
+  // 1. 胜率趋势 (Winrate vs. Iteration)
   charts.winRates = new Chart(document.getElementById('chartWinRates'), {
     type: 'line',
     data: {
@@ -148,6 +148,26 @@ function initCharts() {
       scales: {
         ...commonOptions.scales,
         y: { ...commonOptions.scales.y, min: 0, max: 100, ticks: { callback: v => v + '%' } }
+      }
+    }
+  });
+
+  // 1.5 相对 Elo 战力分曲线 (Anchor Elo vs. Iteration)
+  charts.elo = new Chart(document.getElementById('chartElo'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        { label: '综合 Elo 战力', borderColor: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.1)', data: [], tension: 0.2, fill: true },
+        { label: '空场景 Elo', borderColor: '#a78bfa', data: [], borderDash: [4, 4] },
+        { label: '复杂图 Elo', borderColor: '#f472b6', data: [], borderDash: [4, 4] },
+      ]
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        ...commonOptions.scales,
+        y: { ...commonOptions.scales.y, min: 1000, max: 2000 }
       }
     }
   });
@@ -353,6 +373,14 @@ function renderKPIs() {
     document.getElementById('kpiFullHunterWin').textContent = `${doms.full_hunter.winRate}%`;
     document.getElementById('kpiFullHunterTicks').textContent = `局均 ${doms.full_hunter.avgTicks} ticks | 命中 ${doms.full_hunter.avgHits}`;
   }
+
+  if (latest.elo) {
+    document.getElementById('kpiElo').textContent = `${latest.elo.composite}`;
+    document.getElementById('kpiEloSub').textContent = `道场: ${latest.elo.vsOpenHunter} | 复杂: ${latest.elo.vsFullHunter}`;
+  } else {
+    document.getElementById('kpiElo').textContent = `--`;
+  }
+
   if (doms.open_idle) {
     document.getElementById('kpiOpenIdleWin').textContent = `${doms.open_idle.winRate}%`;
     document.getElementById('kpiOpenIdleTicks').textContent = `速杀局均 ${doms.open_idle.avgTicks} ticks`;
@@ -366,38 +394,52 @@ function renderKPIs() {
 function renderCharts() {
   if (!historyData || !historyData.length) return;
 
-  const labels = historyData.map(h => {
-    const name = h.modelName.replace('params_it', 'it').replace('_patch3_k32', '').replace('_hlgauss_top25foractor', '');
-    return name.length > 18 ? name.slice(0, 18) + '…' : name;
+  // 按 iteration 数值严格排序对齐横轴
+  const sortedHistory = [...historyData].sort((a, b) => {
+    const itA = a.iteration !== undefined ? a.iteration : (parseInt((a.modelName.match(/it(\d+)/) || [])[1]) || 0);
+    const itB = b.iteration !== undefined ? b.iteration : (parseInt((b.modelName.match(/it(\d+)/) || [])[1]) || 0);
+    return itA - itB;
   });
 
-  // 1. 胜率
+  const labels = sortedHistory.map(h => {
+    const it = h.iteration !== undefined ? h.iteration : (parseInt((h.modelName.match(/it(\d+)/) || [])[1]) || 0);
+    return `Iter ${it}`;
+  });
+
+  // 1. 胜率趋势 (Winrate vs. Iteration)
   charts.winRates.data.labels = labels;
-  charts.winRates.data.datasets[0].data = historyData.map(h => (h.domains.open_hunter ? h.domains.open_hunter.winRate : null));
-  charts.winRates.data.datasets[1].data = historyData.map(h => (h.domains.full_hunter ? h.domains.full_hunter.winRate : null));
-  charts.winRates.data.datasets[2].data = historyData.map(h => (h.domains.open_idle ? h.domains.open_idle.winRate : null));
-  charts.winRates.data.datasets[3].data = historyData.map(h => (h.domains.full_idle ? h.domains.full_idle.winRate : null));
+  charts.winRates.data.datasets[0].data = sortedHistory.map(h => (h.domains.open_hunter ? h.domains.open_hunter.winRate : null));
+  charts.winRates.data.datasets[1].data = sortedHistory.map(h => (h.domains.full_hunter ? h.domains.full_hunter.winRate : null));
+  charts.winRates.data.datasets[2].data = sortedHistory.map(h => (h.domains.open_idle ? h.domains.open_idle.winRate : null));
+  charts.winRates.data.datasets[3].data = sortedHistory.map(h => (h.domains.full_idle ? h.domains.full_idle.winRate : null));
   charts.winRates.update();
+
+  // 1.5 相对 Elo 天梯战力曲线 (Anchor Elo vs. Iteration)
+  charts.elo.data.labels = labels;
+  charts.elo.data.datasets[0].data = sortedHistory.map(h => (h.elo ? h.elo.composite : null));
+  charts.elo.data.datasets[1].data = sortedHistory.map(h => (h.elo ? h.elo.vsOpenHunter : null));
+  charts.elo.data.datasets[2].data = sortedHistory.map(h => (h.elo ? h.elo.vsFullHunter : null));
+  charts.elo.update();
 
   // 2. 局长
   charts.ticks.data.labels = labels;
-  charts.ticks.data.datasets[0].data = historyData.map(h => (h.domains.open_hunter ? h.domains.open_hunter.avgTicks : null));
-  charts.ticks.data.datasets[1].data = historyData.map(h => (h.domains.full_hunter ? h.domains.full_hunter.avgTicks : null));
-  charts.ticks.data.datasets[2].data = historyData.map(h => (h.domains.open_idle ? h.domains.open_idle.avgTicks : null));
-  charts.ticks.data.datasets[3].data = historyData.map(h => (h.domains.full_idle ? h.domains.full_idle.avgTicks : null));
+  charts.ticks.data.datasets[0].data = sortedHistory.map(h => (h.domains.open_hunter ? h.domains.open_hunter.avgTicks : null));
+  charts.ticks.data.datasets[1].data = sortedHistory.map(h => (h.domains.full_hunter ? h.domains.full_hunter.avgTicks : null));
+  charts.ticks.data.datasets[2].data = sortedHistory.map(h => (h.domains.open_idle ? h.domains.open_idle.avgTicks : null));
+  charts.ticks.data.datasets[3].data = sortedHistory.map(h => (h.domains.full_idle ? h.domains.full_idle.avgTicks : null));
   charts.ticks.update();
 
   // 3. 进攻性
   charts.aggression.data.labels = labels;
-  charts.aggression.data.datasets[0].data = historyData.map(h => (h.domains.open_hunter ? h.domains.open_hunter.avgBombs : null));
-  charts.aggression.data.datasets[1].data = historyData.map(h => (h.domains.full_hunter ? h.domains.full_hunter.avgBombs : null));
-  charts.aggression.data.datasets[2].data = historyData.map(h => (h.domains.full_hunter ? h.domains.full_hunter.avgHits : null));
+  charts.aggression.data.datasets[0].data = sortedHistory.map(h => (h.domains.open_hunter ? h.domains.open_hunter.avgBombs : null));
+  charts.aggression.data.datasets[1].data = sortedHistory.map(h => (h.domains.full_hunter ? h.domains.full_hunter.avgBombs : null));
+  charts.aggression.data.datasets[2].data = sortedHistory.map(h => (h.domains.full_hunter ? h.domains.full_hunter.avgHits : null));
   charts.aggression.update();
 
   // 4. 自杀率
   charts.safety.data.labels = labels;
-  charts.safety.data.datasets[0].data = historyData.map(h => (h.domains.open_hunter ? h.domains.open_hunter.suicides : null));
-  charts.safety.data.datasets[1].data = historyData.map(h => (h.domains.full_hunter ? h.domains.full_hunter.suicides : null));
+  charts.safety.data.datasets[0].data = sortedHistory.map(h => (h.domains.open_hunter ? h.domains.open_hunter.suicides : null));
+  charts.safety.data.datasets[1].data = sortedHistory.map(h => (h.domains.full_hunter ? h.domains.full_hunter.suicides : null));
   charts.safety.update();
 }
 
