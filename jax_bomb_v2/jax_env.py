@@ -662,8 +662,9 @@ def _resolve_axis(coord, delta, other, y, x, blocked_flat, vertical):
     new_lead = jnp.floor(coord + sgn * RADIUS).astype(jnp.int32)
     lo = jnp.minimum(old_lead, new_lead)
     hi = jnp.maximum(old_lead, new_lead)
-    span0 = jnp.floor(other - RADIUS).astype(jnp.int32)
-    span1 = jnp.floor(other + RADIUS).astype(jnp.int32)
+    span_limit = jnp.where(vertical, W - 1, H - 1)
+    span0 = jnp.clip(jnp.floor(other - RADIUS + 1e-5).astype(jnp.int32), 0, span_limit)
+    span1 = jnp.clip(jnp.floor(other + RADIUS - 1e-5).astype(jnp.int32), 0, span_limit)
 
     def hit_at(lead):
         if vertical:

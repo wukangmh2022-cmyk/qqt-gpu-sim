@@ -104,8 +104,9 @@
     const newLead = Math.floor(coord + sgn * rad);
     const lo = Math.min(oldLead, newLead);
     const hi = Math.max(oldLead, newLead);
-    const span0 = Math.floor(other - rad);
-    const span1 = Math.floor(other + rad);
+    const spanLimit = (vertical ? w : h) - 1;
+    const span0 = Math.max(0, Math.min(spanLimit, Math.floor(other - rad + 1e-5)));
+    const span1 = Math.max(0, Math.min(spanLimit, Math.floor(other + rad - 1e-5)));
     const hitAt = (lead) => {
       if (vertical) {
         return impassable(blocked, lead, span0, y, x, rad, h, w) ||
