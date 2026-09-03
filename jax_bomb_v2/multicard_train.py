@@ -167,8 +167,8 @@ def main():
     ap.add_argument("--ent-coef", type=float, default=0.01)
     ap.add_argument("--adv-top-frac", type=float, default=0.25,
                     help="Top-Advantage Filtering 比例 (保留前 25%% |A_t|)")
-    ap.add_argument("--ema-decay", type=float, default=0.999,
-                    help="参数 EMA 指数移动平均衰减系数")
+    ap.add_argument("--ema-decay", type=float, default=0.0,
+                    help="参数 EMA 指数移动平均衰减系数（默认 0.0 即关闭；> 0.0 时开启）")
     ap.add_argument("--no-mask", action="store_true")
     ap.add_argument("--obs-quant", action="store_true")
     ap.add_argument("--checkpoint", action="store_true")

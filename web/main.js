@@ -1417,6 +1417,7 @@
   elDanger.addEventListener('change', () => { showDanger = elDanger.checked; });
   elRadius.addEventListener('input', setRadiusLabel);
   elRadius.addEventListener('change', () => { applyRadius(); startGame(); });
+  applyRadius();  // 初始化同步半径显示与 CFG.radius (0.42)
   elSound.addEventListener('change', () => { soundOn = elSound.checked; });
   elBgm.addEventListener('change', () => {
     bgmOn = elBgm.checked;

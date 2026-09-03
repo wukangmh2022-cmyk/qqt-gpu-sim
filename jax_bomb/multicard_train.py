@@ -384,8 +384,8 @@ def main():
                     help="开箱奖励退火步数（全局环境步；长训默认 300 亿，8.39M 步/iter 下覆盖整轮）。"
                          "0=不退火（保持恒定，不推荐）")
     ap.add_argument("--ema-decay", type=float, default=float(cfg(
-        "model", "ema_decay", 0.999)),
-                    help="参数 EMA 指数移动平均衰减系数（默认 0.999，验证稳步提升 30+ Elo 并消除震荡）")
+        "model", "ema_decay", 0.0)),
+                    help="参数 EMA 指数移动平均衰减系数（默认 0.0 即关闭；配置 > 0.0 时开启）")
     ap.add_argument("--explore-reward-coef", type=float, default=cfg(
         "reward", "explore_reward_coef", 0.0),
                     help="探索 novelty 奖励系数（0=关）。每 tick 玩家中心格若是本局首次"

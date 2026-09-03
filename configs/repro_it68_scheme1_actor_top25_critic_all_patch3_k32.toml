@@ -25,7 +25,6 @@ patch = 3                            # [证据]
 heads = 4                            # [证据]
 ff_factor = 4                        # [证据]
 obs_channels = 14                    # [证据] 带 14ch
-ema_decay = 0.999                    # [历史默认]
 
 [rollout]
 num_envs = 16384                     # [证据][多卡] 16 replica × 1024/卡

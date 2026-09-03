@@ -25,7 +25,6 @@ patch = 3
 heads = 4
 ff_factor = 4
 obs_channels = 14                  # [结构] 当前 14ch，另含 HL-Gauss-128 价值头
-ema_decay = 0.999
 
 [rollout]
 num_envs = 16384                   # [多卡] 全局 env 数；16 副本→1024/卡
