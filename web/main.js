@@ -1295,7 +1295,13 @@
     elEnemyAi.value = modelList[0] ? modelList[0].name : LATEST_VIT;
     elP0Ai.value = HUNTER_VAL;                // 观战「我方：」默认规则 Hunter
     p0Sel = elP0Ai.value;
-    await applyModel();            // 预加载默认敌人模型（我方默认同款，已入缓存）
+    try {
+      await applyModel();            // 预加载默认敌人模型（我方默认同款，已入缓存）
+    } catch (e) {
+      console.warn('默认模型加载异常，降级至规则 Hunter：', e);
+      elEnemyAi.value = HUNTER_VAL;
+      await applyModel();
+    }
   }
 
   let isApplyingModel = false;
@@ -1306,12 +1312,16 @@
     if (!sel) return;
     if (sel === HUNTER_VAL) {
       enemySel = HUNTER_VAL;
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
       elCurModel.textContent = '规则 Hunter（纯进攻寻路）';
       elStatus.innerHTML = '敌人：<b>规则 Hunter</b>（纯进攻寻路 AI，无需模型权重）';
       return;
     }
     if (sel === IDLE_VAL) {
       enemySel = IDLE_VAL;
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
       elCurModel.textContent = '静止（不动不炸）';
       elStatus.innerHTML = '敌人：<b>静止</b>（不动不炸）';
       return;
@@ -1340,6 +1350,8 @@
         (m._ortError ? `<br><span class="dim">ORT 失败：${m._ortError.slice(0, 120)}</span>` : '') +
         (m._lastInferError ? `<br><span class="dim">推理失败：${m._lastInferError.slice(0, 160)}</span>` : '');
     } catch (e) {
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
       elCurModel.textContent = '❌ 加载失败（点击「应用」重试）';
       elStatus.innerHTML = `模型加载失败：${e.message}。请检查网络后点击「应用」重试。`;
       console.error('[model] 加载失败:', e);
