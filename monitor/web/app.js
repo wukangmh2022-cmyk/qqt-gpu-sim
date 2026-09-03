@@ -9,12 +9,14 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchStatus();
   fetchTrainTelemetry();
   fetchHistory();
+  fetchLeagueMatrix();
   fetchConfigs();
 
   document.getElementById('btnRefresh').addEventListener('click', () => {
     fetchStatus();
     fetchTrainTelemetry();
     fetchHistory();
+    fetchLeagueMatrix();
   });
 
   document.getElementById('btnTriggerEval').addEventListener('click', triggerEval);
@@ -26,6 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchStatus();
     fetchTrainTelemetry();
     fetchHistory();
+    fetchLeagueMatrix();
   }, 6000);
 });
 
@@ -509,6 +512,83 @@ function renderTable() {
         <button class="btn btn-sm btn-secondary" onclick="reEvalModel('${h.modelName}')">⚡ 复测</button>
       </td>
     `;
+    tbody.appendChild(tr);
+  });
+}
+
+// --------------------------- 跨代对抗联赛矩阵与闭环检测 ---------------------------
+async function fetchLeagueMatrix() {
+  try {
+    const res = await fetch('/api/league');
+    const data = await res.json();
+    renderLeagueMatrix(data);
+  } catch (err) {
+    console.error('fetchLeagueMatrix 失败', err);
+  }
+}
+
+function renderLeagueMatrix(data) {
+  if (!data || !data.matrix || !data.matrix.length) return;
+
+  // 1. 状态徽标与涡流比
+  const badgeStatus = document.getElementById('badgeCycleStatus');
+  const badgeRatio = document.getElementById('badgeCyclicRatio');
+
+  if (data.hodge) {
+    const ratio = data.hodge.cyclic_ratio || 0;
+    badgeRatio.textContent = `涡流比: ${ratio}%`;
+    if (data.has_cycles || ratio > 25.0) {
+      badgeStatus.className = 'badge badge-danger';
+      badgeStatus.textContent = '🔴 闭环克制 (石头剪刀布)';
+    } else if (ratio > 10.0) {
+      badgeStatus.className = 'badge badge-warning';
+      badgeStatus.textContent = '🟡 轻微克制回旋';
+    } else {
+      badgeStatus.className = 'badge badge-success';
+      badgeStatus.textContent = '🟢 传递性良好 (绝对晋级)';
+    }
+  }
+
+  // 2. 闭环警告浮层
+  const banner = document.getElementById('cycleWarningBanner');
+  if (data.has_cycles && data.cycles && data.cycles.length > 0) {
+    banner.classList.remove('hidden');
+    document.getElementById('cycleWarningTitle').textContent = `🚨 警告：检测到 ${data.cycles.length} 个跨代对决闭环回路 (石头剪刀布)！`;
+    const list = document.getElementById('cycleWarningList');
+    list.innerHTML = data.cycles.map(c => `<li><strong>${c.summary}</strong> (对局相互克制，绝对胜率失效)</li>`).join('');
+  } else {
+    banner.classList.add('hidden');
+  }
+
+  // 3. 渲染矩阵表格
+  const thead = document.getElementById('leagueMatrixHeader');
+  const tbody = document.getElementById('leagueMatrixBody');
+
+  const models = data.matrix.map(m => m.model);
+  const shorten = (name) => {
+    const m = name.match(/it(\d+)/);
+    return m ? `Iter ${parseInt(m[1])}` : (name.length > 12 ? name.slice(0, 10) + '..' : name);
+  };
+
+  thead.innerHTML = `<tr><th>对手 (P0 \\ P1)</th>` + models.map(m => `<th>${shorten(m)}</th>`).join('') + `</tr>`;
+
+  tbody.innerHTML = '';
+  data.matrix.forEach(row => {
+    const tr = document.createElement('tr');
+    let html = `<td><strong>${shorten(row.model)}</strong></td>`;
+    models.forEach(target => {
+      const score = row.scores[target];
+      if (row.model === target) {
+        html += `<td style="color: #64748b; background: rgba(100, 116, 139, 0.1);">--</td>`;
+      } else if (score >= 60.0) {
+        html += `<td style="color: #4ade80; font-weight: bold; background: rgba(74, 222, 128, 0.1);">${score}%</td>`;
+      } else if (score <= 40.0) {
+        html += `<td style="color: #f87171; font-weight: bold; background: rgba(248, 113, 113, 0.1);">${score}%</td>`;
+      } else {
+        html += `<td style="color: #94a3b8;">${score}%</td>`;
+      }
+    });
+    tr.innerHTML = html;
     tbody.appendChild(tr);
   });
 }

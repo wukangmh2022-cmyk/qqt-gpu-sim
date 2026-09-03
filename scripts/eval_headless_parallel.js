@@ -28,6 +28,7 @@ function parseArgs() {
   };
   return {
     model: getArg('--model', 'params_it00000068_hlgauss_top25foractor_patch3_k32'),
+    oppModel: getArg('--opp-model', ''),              // 可选：对手 ONNX 模型代号 (开启 Model vs Model 跨代对决)
     workers: parseInt(getArg('--workers', '4'), 10), // 默认 4 核心并发（对齐物理大核）
     games: parseInt(getArg('--games', '32'), 10),    // 默认 4 场景各 32 局 = 总共 128 局（~3 分钟）
     maxTicks: parseInt(getArg('--max-ticks', '1800'), 10), // 默认 1800 tick 真实上限
@@ -45,18 +46,13 @@ if (!isMainThread) {
   const QQT = require(path.join(ROOT, 'web', 'sim.js'));
   const { Sim, ORTTransformerModel, HunterAI, mulberry32, W, H } = QQT;
 
-  let model = null;
+  let model0 = null;
+  let model1 = null;
   let hunter = null;
   let levels = null;
 
-  function isSuicide(sim, p, preBombs, diedCell) {
-    const [r, c] = diedCell;
-    for (const b of preBombs) {
-      if (b.owner !== p || b.fuse !== 1) continue;
-      const br = Math.floor(b.i / W), bc = b.i % W;
-      if (Math.abs(br - r) + Math.abs(bc - c) <= b.blast) return true;
-    }
-    return false;
+  function isBombExplodingNow(sim, i) {
+    return sim.fuse[i] === 1;
   }
 
   function snapshotBombs(sim) {
@@ -69,24 +65,32 @@ if (!isMainThread) {
     return bs;
   }
 
-  async function initWorker(modelName) {
-    const docPath = path.join(MODELS_DIR, `${modelName}.json`);
-    const onnxPath = path.join(MODELS_DIR, `${modelName}.onnx`);
-    const doc = JSON.parse(fs.readFileSync(docPath, 'utf8'));
-    const sess = await ort.InferenceSession.create(onnxPath, {
-      executionProviders: ['cpu'],
-      intraOpNumThreads: 1,
-      interOpNumThreads: 1,
-    });
-    model = new ORTTransformerModel(doc, sess);
-    model.inferEvery = 1;
+  async function initWorker(modelName, oppModelName) {
+    const loadModel = async (name) => {
+      const docPath = path.join(MODELS_DIR, `${name}.json`);
+      const onnxPath = path.join(MODELS_DIR, `${name}.onnx`);
+      const doc = JSON.parse(fs.readFileSync(docPath, 'utf8'));
+      const sess = await ort.InferenceSession.create(onnxPath, {
+        executionProviders: ['cpu'],
+        intraOpNumThreads: 1,
+        interOpNumThreads: 1,
+      });
+      const m = new ORTTransformerModel(doc, sess);
+      m.inferEvery = 1;
+      return m;
+    };
+
+    model0 = await loadModel(modelName);
+    if (oppModelName) {
+      model1 = await loadModel(oppModelName);
+    }
     hunter = new HunterAI();
     levels = JSON.parse(fs.readFileSync(MAPS_JSON, 'utf8'));
     if (!Array.isArray(levels)) levels = levels.levels || levels.maps;
   }
 
   async function runTask(task) {
-    const { domain, gameIdx, seed, maxTicks } = task;
+    const { domain, gameIdx, seed, maxTicks, oppType, swapSide } = task;
     const sim = new Sim(seed);
     if (domain.startsWith('open')) {
       sim.reset('open');
@@ -97,13 +101,15 @@ if (!isMainThread) {
 
     const rng = mulberry32(seed ^ 0x9e3779b9);
     const isHunter = domain.endsWith('hunter');
+    const isModelOpp = oppType === 'model' && model1 !== null;
 
     let p0Bombs = 0;
     let p0Hits = 0;
     let p0Suicide = false;
     const p0Moves = [0, 0, 0, 0, 0];
     const visitedCells = new Set();
-    const [initR, initC] = sim.centerCell(0);
+    const model0PlayerIdx = swapSide ? 1 : 0;
+    const [initR, initC] = sim.centerCell(model0PlayerIdx);
     visitedCells.add(initR * W + initC);
 
     while (!sim.done && sim.t < maxTicks) {
@@ -111,60 +117,81 @@ if (!isMainThread) {
       const hpBefore = [sim.hp[0], sim.hp[1]];
       const aliveBefore = [sim.alive[0], sim.alive[1]];
 
-      const a0 = await model.act(sim, 0, rng);
-      const a1 = isHunter ? hunter.act(sim, 1) : [4, 0]; // 4=IDLE, 0=NO_BOMB
+      let a0, a1;
+      if (isModelOpp) {
+        if (!swapSide) {
+          a0 = await model0.act(sim, 0, rng);
+          a1 = await model1.act(sim, 1, rng);
+        } else {
+          a0 = await model1.act(sim, 0, rng);
+          a1 = await model0.act(sim, 1, rng);
+        }
+      } else {
+        a0 = await model0.act(sim, 0, rng);
+        a1 = isHunter ? hunter.act(sim, 1) : [4, 0]; // 4=IDLE, 0=NO_BOMB
+      }
 
-      if (aliveBefore[0]) {
-        if (a0[1] === 1) p0Bombs++;
-        p0Moves[a0[0]]++;
-        const [cr, cc] = sim.centerCell(0);
+      const model0Action = swapSide ? a1 : a0;
+
+      if (aliveBefore[model0PlayerIdx]) {
+        if (model0Action[1] === 1) p0Bombs++;
+        p0Moves[model0Action[0]]++;
+        const [cr, cc] = sim.centerCell(model0PlayerIdx);
         visitedCells.add(cr * W + cc);
       }
 
       sim.step([a0, a1]);
 
-      if (aliveBefore[1] && hpBefore[1] > sim.hp[1]) {
-        p0Hits++;
-      }
-      if (aliveBefore[0] && !sim.alive[0]) {
-        const dc = sim.centerCell(0);
-        p0Suicide = isSuicide(sim, 0, preBombs, dc);
-      }
-    }
-
-    // 终局判定
-    let outcome = 'draw_timeout';
-    if (sim.hp[0] > sim.hp[1]) {
-      outcome = 'win';
-    } else if (sim.hp[1] > sim.hp[0]) {
-      outcome = 'loss';
-    } else {
-      if (sim.hp[0] === 0 && sim.hp[1] === 0) {
-        outcome = 'draw_mutual';
-      } else {
-        outcome = 'draw_timeout';
-      }
-    }
-
-    // CleanRL / RLlib 诊断指标: 控图率、发呆率、动作经验熵
-    const totalMoves = p0Moves.reduce((a, b) => a + b, 0);
-    const idleRatio = totalMoves > 0 ? Number(((p0Moves[4] / totalMoves) * 100).toFixed(1)) : 0;
-    const exploredRatio = Number(((visitedCells.size / (W * H)) * 100).toFixed(1));
-    let moveEntropy = 0;
-    if (totalMoves > 0) {
-      for (const cnt of p0Moves) {
-        if (cnt > 0) {
-          const p = cnt / totalMoves;
-          moveEntropy -= p * Math.log(p);
+      // 检查 model0 炸弹造成的命中或自杀
+      for (const b of preBombs) {
+        if (b.owner === model0PlayerIdx && isBombExplodingNow(sim, b.i)) {
+          const oppIdx = 1 - model0PlayerIdx;
+          if (aliveBefore[oppIdx] && sim.hp[oppIdx] < hpBefore[oppIdx]) {
+            p0Hits++;
+          }
+          if (aliveBefore[model0PlayerIdx] && sim.hp[model0PlayerIdx] < hpBefore[model0PlayerIdx]) {
+            p0Suicide = true;
+          }
         }
       }
     }
 
+    const oppIdx = 1 - model0PlayerIdx;
+    const finalAlive = [sim.alive[0], sim.alive[1]];
+    const finalHp = [sim.hp[0], sim.hp[1]];
+
+    let outcome = 'timeout';
+    if (!finalAlive[0] && !finalAlive[1]) {
+      outcome = 'mutual';
+    } else if (finalAlive[model0PlayerIdx] && !finalAlive[oppIdx]) {
+      outcome = 'win';
+    } else if (!finalAlive[model0PlayerIdx] && finalAlive[oppIdx]) {
+      outcome = 'loss';
+    } else {
+      if (finalHp[model0PlayerIdx] > finalHp[oppIdx]) outcome = 'win';
+      else if (finalHp[oppIdx] > finalHp[model0PlayerIdx]) outcome = 'loss';
+      else outcome = 'timeout';
+    }
+
+    // 计算发呆率与动作经验熵
+    const totalMoves = p0Moves.reduce((a, b) => a + b, 0);
+    const idleRatio = totalMoves > 0 ? Number(((p0Moves[4] / totalMoves) * 100).toFixed(1)) : 0;
+    let moveEntropy = 0;
+    if (totalMoves > 0) {
+      for (let i = 0; i < 5; i++) {
+        if (p0Moves[i] > 0) {
+          const p = p0Moves[i] / totalMoves;
+          moveEntropy -= p * Math.log2(p);
+        }
+      }
+    }
+    const exploredRatio = Number(((visitedCells.size / (W * H)) * 100).toFixed(1));
+
     return {
       domain,
       gameIdx,
-      outcome,
       ticks: sim.t,
+      outcome,
       p0Bombs,
       p0Hits,
       p0Suicide,
@@ -177,7 +204,7 @@ if (!isMainThread) {
 
   parentPort.on('message', async (msg) => {
     if (msg.type === 'init') {
-      await initWorker(msg.modelName);
+      await initWorker(msg.modelName, msg.oppModelName);
       parentPort.postMessage({ type: 'ready' });
     } else if (msg.type === 'task') {
       const result = await runTask(msg.task);
@@ -201,14 +228,22 @@ async function main() {
   console.log(`   一致性保证: 100% web/sim.js 真实物理 + 全局 Dijkstra HunterAI + 单线程绑定 ONNX`);
   console.log(`==========================================================================\n`);
 
-  const domains = args.domain === 'all'
-    ? [
-        { id: 'open_hunter', name: 'AI Hunter / 空场景道场' },
-        { id: 'full_hunter', name: 'AI Hunter / 全池241复杂地图' },
-        { id: 'open_idle',   name: '静止木桩  / 空场景道场' },
-        { id: 'full_idle',   name: '静止木桩  / 全池241复杂地图' },
-      ]
-    : [{ id: args.domain, name: args.domain }];
+  let domains = [];
+  if (args.oppModel) {
+    domains = [
+      { id: 'open_vs_opp', name: `模型对决 / 空道场 vs ${args.oppModel}`, oppType: 'model' },
+      { id: 'full_vs_opp', name: `模型对决 / 241复杂图 vs ${args.oppModel}`, oppType: 'model' },
+    ];
+  } else if (args.domain === 'all') {
+    domains = [
+      { id: 'open_hunter', name: 'AI Hunter / 空场景道场' },
+      { id: 'full_hunter', name: 'AI Hunter / 全池241复杂地图' },
+      { id: 'open_idle',   name: '静止木桩  / 空场景道场' },
+      { id: 'full_idle',   name: '静止木桩  / 全池241复杂地图' },
+    ];
+  } else {
+    domains = [{ id: args.domain, name: args.domain }];
+  }
 
   // 1. 初始化 Worker 池
   const workers = [];
@@ -227,7 +262,7 @@ async function main() {
       w.on('message', onMsg);
     });
     readyPromises.push(p);
-    w.postMessage({ type: 'init', modelName: args.model });
+    w.postMessage({ type: 'init', modelName: args.model, oppModelName: args.oppModel });
   }
 
   const tInitStart = Date.now();
@@ -245,6 +280,8 @@ async function main() {
     for (let i = 0; i < args.games; i++) {
       tasks.push({
         domain: dom.id,
+        oppType: dom.oppType || 'rule',
+        swapSide: dom.oppType === 'model' ? (i % 2 === 1) : false,
         gameIdx: i,
         seed: args.seed + i * 31337,
         maxTicks: args.maxTicks,

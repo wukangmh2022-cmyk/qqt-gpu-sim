@@ -171,6 +171,33 @@ class MonitorHandler(SimpleHTTPRequestHandler):
             self._send_json(get_history())
             return
 
+        if path == "/api/league":
+            try:
+                import monitor.cycle_detector as cd
+                league_file = os.path.join(MONITOR_DIR, "league_matches.json")
+                matches = []
+                if os.path.exists(league_file):
+                    with open(league_file, "r", encoding="utf-8") as f:
+                        matches = json.load(f)
+
+                history = get_history()
+                models = []
+                for h in history:
+                    mname = h.get("modelName")
+                    if mname and mname not in models:
+                        models.append(mname)
+                for m in matches:
+                    for k in ["model0", "model1"]:
+                        name = m.get(k)
+                        if name and name not in models:
+                            models.append(name)
+
+                analysis = cd.analyze_league_cycles(matches, models)
+                self._send_json(analysis)
+            except Exception as e:
+                self._send_json({"has_cycles": False, "error": str(e), "cycles": [], "matrix": []})
+            return
+
         if path == "/api/configs":
             self._send_json(get_configs())
             return

@@ -1,0 +1,26 @@
+[
+  {
+    "model0": "params_it00000068_hlgauss_top25foractor_patch3_k32",
+    "model1": "params_it00000060",
+    "m0_wins": 22,
+    "total_games": 32,
+    "draws": 0,
+    "timestamp": "2026-09-03 09:40:00"
+  },
+  {
+    "model0": "params_it00000060",
+    "model1": "params_it00000054",
+    "m0_wins": 20,
+    "total_games": 32,
+    "draws": 0,
+    "timestamp": "2026-09-03 09:45:00"
+  },
+  {
+    "model0": "params_it00000068_hlgauss_top25foractor_patch3_k32",
+    "model1": "params_it00000054",
+    "m0_wins": 26,
+    "total_games": 32,
+    "draws": 0,
+    "timestamp": "2026-09-03 09:50:00"
+  }
+]

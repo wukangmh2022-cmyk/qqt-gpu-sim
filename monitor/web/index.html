@@ -208,6 +208,38 @@
           </div>
         </div>
       </section>
+
+      <!-- 跨代博弈矩阵与闭环/非传递性检测 (League Payoff Matrix & Cycle Detection) -->
+      <section class="table-section" style="margin-top: 24px;">
+        <div class="table-header">
+          <div>
+            <h2>⚔️ 跨代 Checkpoint 联赛对抗矩阵 (League Payoff Matrix)</h2>
+            <span class="chart-sub">真实 Model vs Model 换边对决 · 监控石头剪刀布闭环 (Non-transitive Cycles) 与 Hodge 旋转涡流</span>
+          </div>
+          <div class="table-actions">
+            <span id="badgeCycleStatus" class="badge badge-success">博弈传递性: 100% (正常)</span>
+            <span id="badgeCyclicRatio" class="badge badge-info">涡流比: 0.0%</span>
+          </div>
+        </div>
+
+        <div id="cycleWarningBanner" class="alert-banner hidden" style="margin-bottom: 16px;">
+          <div class="alert-icon">🌀</div>
+          <div class="alert-content">
+            <h3 id="cycleWarningTitle">检测到策略石头剪刀布闭环克制！</h3>
+            <ul id="cycleWarningList" class="alert-issues"></ul>
+            <div class="alert-suggestions">
+              <strong>打破闭环干预建议：</strong> 避免仅与单一代际对战，请启用 Fictitious Self-Play (历史联赛池混合均匀采样)，并适度提高动作掩码熵系数以打破单一克制套路。
+            </div>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table" id="leagueMatrixTable">
+            <thead id="leagueMatrixHeader"></thead>
+            <tbody id="leagueMatrixBody"></tbody>
+          </table>
+        </div>
+      </section>
     </div>
 
     <!-- 历史评测检查点明细表 -->
