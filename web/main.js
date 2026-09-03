@@ -2603,11 +2603,14 @@
       // 上一行水泡((r-1)*24+19 = r*24-5 < r*24+18)在角色后画(角色头部帽子盖住上一行水泡)
       const z = Math.floor(gy) * Z_ROW_STRIDE + 18;
       // 角色脚下阴影：位于地面与角色之间 (Z = z - 1)
-      // 阴影相对脚底下移微调（+6px），使鞋底自然踏入椭圆阴影内部；
-      // 且因角色上移 6px 完美抵消，在 bbox 触底时阴影底边缘依然严格贴齐格底，绝不出格
+      // 阴影下移 1/5 格子（+12px，累计 +18px），使角色鞋底精确踩在椭圆阴影视觉中心（触地点在椭圆中心上方 3px）；
+      // 底边缘做画布边界保护（H * CELL - res.shadow.height），贴底行绝不出画
       if (res.shadow) {
         const shadowX = Math.round(cx - res.shadow.width / 2);
-        const shadowY = Math.round(blitY + s.height - res.shadow.height + 6);
+        const shadowY = Math.min(
+          Math.round(blitY + s.height - res.shadow.height + 18),
+          H * CELL - res.shadow.height
+        );
         items.push([z - 1, res.shadow, shadowX, shadowY]);
       }
       items.push([z, s, blitX, blitY]);

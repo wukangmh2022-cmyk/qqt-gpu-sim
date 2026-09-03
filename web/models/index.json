@@ -1,8 +1,8 @@
 {
  "models": [
   {
-   "name": "ViTModel2_1.1B",
-   "display_name": "ViTModel2_1.1B",
+   "name": "ViTModel2_31.9B",
+   "display_name": "ViTModel2_31.9B",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -13,9 +13,9 @@
    "patch": 4,
    "depth": 4,
    "n_players": 2,
-   "it": 129,
-   "global_step": 1082130432,
-   "source": "ViTModel2_129_it00000129.pkl",
+   "it": 1461,
+   "global_step": 31946227712,
+   "source": "ViTModel2_1461_it00001461.pkl",
    "generated_at": "2026-08-26 11:21 UTC"
   },
   {
@@ -35,270 +35,6 @@
    "global_step": 22570053632,
    "source": "ViTModel2_902_it00000902.pkl",
    "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_31.9B",
-   "display_name": "ViTModel2_31.9B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 1461,
-   "global_step": 31946227712,
-   "source": "ViTModel2_1461_it00001461.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel2_7.5B",
-   "display_name": "ViTModel2_7.5B",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 889,
-   "global_step": 7457472512,
-   "source": "ViTModel2_889_it00000889.pkl",
-   "generated_at": "2026-08-26 11:21 UTC"
-  },
-  {
-   "name": "ViTModel_102",
-   "arch": "transformer",
-   "obs_shape": [
-    13,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 102,
-   "global_step": 855638016,
-   "source": "params_it00000102.pkl",
-   "generated_at": "2026-08-20 13:28 UTC"
-  },
-  {
-   "name": "ViTModel_204",
-   "arch": "transformer",
-   "obs_shape": [
-    13,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 204,
-   "global_step": 1711276032,
-   "source": "params_it00000204.pkl",
-   "generated_at": "2026-08-20 13:28 UTC"
-  },
-  {
-   "name": "ViTModel_238",
-   "arch": "transformer",
-   "obs_shape": [
-    13,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 238,
-   "global_step": 1996488704,
-   "source": "params_it00000238.pkl",
-   "generated_at": "2026-08-20 14:06 UTC"
-  },
-  {
-   "name": "ViTModel_340",
-   "arch": "transformer",
-   "obs_shape": [
-    13,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 340,
-   "global_step": 2852126720,
-   "source": "params_it00000340.pkl",
-   "generated_at": "2026-08-20 15:31 UTC"
-  },
-  {
-   "name": "ViTModel_500",
-   "arch": "transformer",
-   "obs_shape": [
-    13,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 500,
-   "global_step": 4194304000,
-   "source": "params_it00000500.pkl",
-   "generated_at": "2026-08-20 23:10 UTC"
-  },
-  {
-   "name": "ViTModel_68",
-   "arch": "transformer",
-   "obs_shape": [
-    13,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 4,
-   "depth": 4,
-   "n_players": 2,
-   "it": 68,
-   "global_step": 570425344,
-   "source": "params_it00000068.pkl",
-   "generated_at": "2026-08-20 13:28 UTC"
-  },
-  {
-   "name": "cnn_course_latest_min",
-   "arch": "cnn",
-   "obs_shape": [
-    14,
-    13,
-    13
-   ],
-   "n_players": 2,
-   "global_step": 594214912,
-   "elo": 2503.3,
-   "source": "cnn_course_latest_min.pt",
-   "generated_at": "2026-08-16 15:11 UTC"
-  },
-  {
-   "name": "cnn_course_min",
-   "arch": "cnn",
-   "obs_shape": [
-    14,
-    13,
-    13
-   ],
-   "n_players": 2,
-   "global_step": 568000512,
-   "elo": 2240.7,
-   "source": "cnn_course_min.pt",
-   "generated_at": "2026-08-16 15:26 UTC"
-  },
-  {
-   "name": "course_1023m",
-   "arch": "mlp",
-   "obs_shape": [
-    14,
-    13,
-    13
-   ],
-   "n_players": 2,
-   "global_step": 1009975296,
-   "elo": 2893.1,
-   "source": "course_1023m.pt",
-   "generated_at": "2026-08-30 05:17 UTC"
-  },
-  {
-   "name": "course_bc_571m",
-   "arch": "mlp",
-   "obs_shape": [
-    14,
-    13,
-    13
-   ],
-   "n_players": 2,
-   "global_step": 562298880,
-   "elo": 1442.2,
-   "source": "course_bc_571m.pt",
-   "generated_at": "2026-08-30 05:17 UTC"
-  },
-  {
-   "name": "duel_5x3",
-   "arch": "mlp",
-   "obs_shape": [
-    14,
-    13,
-    13
-   ],
-   "n_players": 2,
-   "global_step": 400621568,
-   "elo": 2437.0,
-   "source": "duel_5x3.pt",
-   "generated_at": "2026-08-16 15:11 UTC"
-  },
-  {
-   "name": "duel_cnn",
-   "arch": "cnn",
-   "obs_shape": [
-    14,
-    13,
-    13
-   ],
-   "n_players": 2,
-   "global_step": 300613632,
-   "elo": 2107.3,
-   "source": "duel_cnn.pt",
-   "generated_at": "2026-08-30 05:17 UTC"
-  },
-  {
-   "name": "duel_cnn_cpu",
-   "arch": "cnn",
-   "obs_shape": [
-    14,
-    13,
-    13
-   ],
-   "n_players": 2,
-   "global_step": 300613632,
-   "elo": 2107.3,
-   "source": "duel_cnn_cpu.pt",
-   "generated_at": "2026-08-16 15:11 UTC"
-  },
-  {
-   "name": "duel_cnn_min",
-   "arch": "cnn",
-   "obs_shape": [
-    14,
-    13,
-    13
-   ],
-   "n_players": 2,
-   "global_step": 300613632,
-   "elo": 2107.3,
-   "source": "duel_cnn_min.pt",
-   "generated_at": "2026-08-16 15:11 UTC"
-  },
-  {
-   "name": "duel_course_453M",
-   "arch": "mlp",
-   "obs_shape": [
-    14,
-    13,
-    13
-   ],
-   "n_players": 2,
-   "global_step": 446955520,
-   "elo": 1995.1,
-   "source": "duel_course_453M.pt",
-   "generated_at": "2026-08-30 05:17 UTC"
   },
   {
    "name": "duel_latest_13.67B",
@@ -329,7 +65,7 @@
    "generated_at": "2026-08-16 22:44 UTC"
   },
   {
-   "name": "duel_nobc_3B",
+   "name": "duel_nobc_8b_live",
    "arch": "mlp",
    "obs_shape": [
     14,
@@ -337,27 +73,31 @@
     13
    ],
    "n_players": 2,
-   "global_step": 3001655296,
-   "elo": 3461.2,
-   "source": "duel_nobc_3B.pt",
-   "generated_at": "2026-08-30 05:17 UTC"
+   "global_step": 8003895296,
+   "elo": 4373.2,
+   "source": "duel_nobc_8b_live.pt",
+   "generated_at": "2026-08-16 15:11 UTC"
   },
   {
-   "name": "duel_nobc_4B",
-   "arch": "mlp",
+   "name": "ViTModel2_7.5B",
+   "display_name": "ViTModel2_7.5B",
+   "arch": "transformer",
    "obs_shape": [
     14,
     13,
-    13
+    15
    ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
    "n_players": 2,
-   "global_step": 4000055296,
-   "elo": 3784.9,
-   "source": "duel_nobc_4B.pt",
-   "generated_at": "2026-08-16 15:14 UTC"
+   "it": 889,
+   "global_step": 7457472512,
+   "source": "ViTModel2_889_it00000889.pkl",
+   "generated_at": "2026-08-26 11:21 UTC"
   },
   {
-   "name": "duel_nobc_5.95B",
+   "name": "duel_nobc_6.46B",
    "arch": "mlp",
    "obs_shape": [
     14,
@@ -365,9 +105,9 @@
     13
    ],
    "n_players": 2,
-   "global_step": 5945655296,
-   "elo": 4402.7,
-   "source": "duel_nobc_5.95B.pt",
+   "global_step": 6457655296,
+   "elo": 4389.4,
+   "source": "duel_nobc_6.46B.pt",
    "generated_at": "2026-08-16 15:11 UTC"
   },
   {
@@ -385,7 +125,7 @@
    "generated_at": "2026-08-16 15:11 UTC"
   },
   {
-   "name": "duel_nobc_6.46B",
+   "name": "duel_nobc_5.95B",
    "arch": "mlp",
    "obs_shape": [
     14,
@@ -393,23 +133,9 @@
     13
    ],
    "n_players": 2,
-   "global_step": 6457655296,
-   "elo": 4389.4,
-   "source": "duel_nobc_6.46B.pt",
-   "generated_at": "2026-08-16 15:11 UTC"
-  },
-  {
-   "name": "duel_nobc_8b_live",
-   "arch": "mlp",
-   "obs_shape": [
-    14,
-    13,
-    13
-   ],
-   "n_players": 2,
-   "global_step": 8003895296,
-   "elo": 4373.2,
-   "source": "duel_nobc_8b_live.pt",
+   "global_step": 5945655296,
+   "elo": 4402.7,
+   "source": "duel_nobc_5.95B.pt",
    "generated_at": "2026-08-16 15:11 UTC"
   },
   {
@@ -427,8 +153,53 @@
    "generated_at": "2026-08-16 15:11 UTC"
   },
   {
-   "name": "params_Pre-Train_Test",
-   "display_name": "params_Pre-Train_Test",
+   "name": "ViTModel_500",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 500,
+   "global_step": 4194304000,
+   "source": "params_it00000500.pkl",
+   "generated_at": "2026-08-20 23:10 UTC"
+  },
+  {
+   "name": "duel_nobc_4B",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 4000055296,
+   "elo": 3784.9,
+   "source": "duel_nobc_4B.pt",
+   "generated_at": "2026-08-16 15:14 UTC"
+  },
+  {
+   "name": "duel_nobc_3B",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 3001655296,
+   "elo": 3461.2,
+   "source": "duel_nobc_3B.pt",
+   "generated_at": "2026-08-30 05:17 UTC"
+  },
+  {
+   "name": "params_it00000346_ema",
+   "display_name": "params_it00000346_ema",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -439,10 +210,195 @@
    "patch": 3,
    "depth": 4,
    "n_players": 2,
-   "it": 0,
-   "global_step": 0,
-   "source": "params_Pre-Train_Test.pkl",
-   "generated_at": "2026-08-29 13:00 UTC"
+   "it": 346,
+   "global_step": 2902458368,
+   "source": "params_it00000346_ema.pkl",
+   "generated_at": "2026-08-29 12:49 UTC"
+  },
+  {
+   "name": "ViTModel_340",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 340,
+   "global_step": 2852126720,
+   "source": "params_it00000340.pkl",
+   "generated_at": "2026-08-20 15:31 UTC"
+  },
+  {
+   "name": "ViTModel_238",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 238,
+   "global_step": 1996488704,
+   "source": "params_it00000238.pkl",
+   "generated_at": "2026-08-20 14:06 UTC"
+  },
+  {
+   "name": "ViTModel_204",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 204,
+   "global_step": 1711276032,
+   "source": "params_it00000204.pkl",
+   "generated_at": "2026-08-20 13:28 UTC"
+  },
+  {
+   "name": "ViTModel2_1.1B",
+   "display_name": "ViTModel2_1.1B",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 129,
+   "global_step": 1082130432,
+   "source": "ViTModel2_129_it00000129.pkl",
+   "generated_at": "2026-08-26 11:21 UTC"
+  },
+  {
+   "name": "course_1023m",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 1009975296,
+   "elo": 2893.1,
+   "source": "course_1023m.pt",
+   "generated_at": "2026-08-30 05:17 UTC"
+  },
+  {
+   "name": "params_it00000120",
+   "display_name": "params_it00000120",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 120,
+   "global_step": 1006632960,
+   "source": "params_it00000120.pkl",
+   "generated_at": "2026-09-03 12:41 UTC"
+  },
+  {
+   "name": "params_surgery_it120",
+   "display_name": "params_surgery_it120",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 120,
+   "global_step": 1006632960,
+   "source": "params_surgery_it120.pkl",
+   "generated_at": "2026-09-03 12:41 UTC"
+  },
+  {
+   "name": "params_it00000114",
+   "display_name": "params_it00000114",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 114,
+   "global_step": 956301312,
+   "source": "params_it00000114.pkl",
+   "generated_at": "2026-09-03 12:40 UTC"
+  },
+  {
+   "name": "ViTModel_102",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 102,
+   "global_step": 855638016,
+   "source": "params_it00000102.pkl",
+   "generated_at": "2026-08-20 13:28 UTC"
+  },
+  {
+   "name": "cnn_course_latest_min",
+   "arch": "cnn",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 594214912,
+   "elo": 2503.3,
+   "source": "cnn_course_latest_min.pt",
+   "generated_at": "2026-08-16 15:11 UTC"
+  },
+  {
+   "name": "ViTModel_68",
+   "arch": "transformer",
+   "obs_shape": [
+    13,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 4,
+   "depth": 4,
+   "n_players": 2,
+   "it": 68,
+   "global_step": 570425344,
+   "source": "params_it00000068.pkl",
+   "generated_at": "2026-08-20 13:28 UTC"
   },
   {
    "name": "params_it00000068_hlgauss_top25_patch3_k32",
@@ -517,8 +473,106 @@
    "generated_at": "2026-09-01 08:09 UTC"
   },
   {
-   "name": "params_it00000346_ema",
-   "display_name": "params_it00000346_ema",
+   "name": "cnn_course_min",
+   "arch": "cnn",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 568000512,
+   "elo": 2240.7,
+   "source": "cnn_course_min.pt",
+   "generated_at": "2026-08-16 15:26 UTC"
+  },
+  {
+   "name": "course_bc_571m",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 562298880,
+   "elo": 1442.2,
+   "source": "course_bc_571m.pt",
+   "generated_at": "2026-08-30 05:17 UTC"
+  },
+  {
+   "name": "duel_course_453M",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 446955520,
+   "elo": 1995.1,
+   "source": "duel_course_453M.pt",
+   "generated_at": "2026-08-30 05:17 UTC"
+  },
+  {
+   "name": "duel_5x3",
+   "arch": "mlp",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 400621568,
+   "elo": 2437.0,
+   "source": "duel_5x3.pt",
+   "generated_at": "2026-08-16 15:11 UTC"
+  },
+  {
+   "name": "duel_cnn",
+   "arch": "cnn",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 300613632,
+   "elo": 2107.3,
+   "source": "duel_cnn.pt",
+   "generated_at": "2026-08-30 05:17 UTC"
+  },
+  {
+   "name": "duel_cnn_cpu",
+   "arch": "cnn",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 300613632,
+   "elo": 2107.3,
+   "source": "duel_cnn_cpu.pt",
+   "generated_at": "2026-08-16 15:11 UTC"
+  },
+  {
+   "name": "duel_cnn_min",
+   "arch": "cnn",
+   "obs_shape": [
+    14,
+    13,
+    13
+   ],
+   "n_players": 2,
+   "global_step": 300613632,
+   "elo": 2107.3,
+   "source": "duel_cnn_min.pt",
+   "generated_at": "2026-08-16 15:11 UTC"
+  },
+  {
+   "name": "params_Pre-Train_Test",
+   "display_name": "params_Pre-Train_Test",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -529,10 +583,10 @@
    "patch": 3,
    "depth": 4,
    "n_players": 2,
-   "it": 346,
-   "global_step": 2902458368,
-   "source": "params_it00000346_ema.pkl",
-   "generated_at": "2026-08-29 12:49 UTC"
+   "it": 0,
+   "global_step": 0,
+   "source": "params_Pre-Train_Test.pkl",
+   "generated_at": "2026-08-29 13:00 UTC"
   }
  ]
 }
