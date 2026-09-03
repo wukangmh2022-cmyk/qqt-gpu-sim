@@ -405,10 +405,11 @@
         ? level.crate_rate : 1.0;
       // 宝箱中超级占比（超级威力/泡泡/速度 整体 = 普通爆率的 10% -> 1/11）
       this.superFraction = level.crate_super_fraction || 0;
-      // 属性上限标准化在地图文件里（所有地图威力上限=8, 空场景速上限=2.2）
+      // 属性上限标准化在地图文件里（所有地图威力上限=8, 空场景速上限=2.3, 其他地图=2.25）
       this.bombsMax = level.bombs_max || CFG.growthBombsMax;
       this.blastMax = level.blast_max || CFG.growthBlastMax;
-      this.speedMax = CFG.growthSpeedMax;   // 所有场景的最大速度统一为 2.3
+      this.speedMax = level.speed_max !== undefined ? level.speed_max : CFG.growthSpeedMax;
+      this.speedStep = (this.speedMax - CFG.growthSpeedStart) / 7;
       // 空场景：开局中心十字宝箱直接放地上（踩到必升）
       if (level.initial_crates && level.initial_crates.length) {
         for (const [r, c] of level.initial_crates) {
@@ -668,11 +669,12 @@
           const dmg = hpBefore[p] - this.hp[p];
           if (dmg <= 0 || !alive0[p]) continue;
           // 掉血惩罚：总是每个属性 -1 档（简化并降低惩罚）
+          const spdStep = this.speedStep || CFG.growthSpeedStep;
           const nb = Math.max(this.bombsCap[p] - 1, this.loBombs[p]);
           const nz = Math.max(this.blastCap[p] - 1, this.loBlast[p]);
-          const ns = Math.max(this.spdG[p] - CFG.growthSpeedStep, this.loSpeed[p]);
+          const ns = Math.max(this.spdG[p] - spdStep, this.loSpeed[p]);
           const lost = (this.bombsCap[p] - nb) + (this.blastCap[p] - nz) +
-            Math.round((this.spdG[p] - ns) / CFG.growthSpeedStep);
+            Math.round((this.spdG[p] - ns) / spdStep);
           this.bombsCap[p] = nb; this.blastCap[p] = nz; this.spdG[p] = ns;
           this._scatterRecycle(p, lost);
         }
@@ -735,7 +737,8 @@
           // 满属性溢出，进入墓地
           this.graveyard.push({ type: 2, isSuper: !!isSuper });
         } else {
-          this.spdG[p] = Math.min(this.spdG[p] + add * CFG.growthSpeedStep, this.speedMax);
+          const spdStep = this.speedStep || CFG.growthSpeedStep;
+          this.spdG[p] = Math.min(this.spdG[p] + add * spdStep, this.speedMax);
         }
       }
     }
