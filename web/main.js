@@ -301,46 +301,130 @@
   let enemySel = null, p0Sel = null;
   const modelCache = new Map();      // name → MLPModel/CNNModel/TransformerModel/ORT…（懒加载缓存）
 
+  // 流式下载辅助函数：支持 ReadableStream 字节进度汇报与超时熔断保护
+  async function fetchWithProgress(url, onProgress, timeoutMs = 60000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`网络请求超时 (${timeoutMs / 1000}s)`)), timeoutMs);
+    try {
+      const resp = await fetch(url, { signal: controller.signal });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} (${resp.statusText})`);
+      const contentLength = resp.headers.get('content-length');
+      const total = contentLength ? parseInt(contentLength, 10) : 0;
+      if (!resp.body || typeof resp.body.getReader !== 'function') {
+        const buf = await resp.arrayBuffer();
+        if (onProgress) onProgress(buf.byteLength, buf.byteLength);
+        return buf;
+      }
+      const reader = resp.body.getReader();
+      const chunks = [];
+      let loaded = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        if (onProgress) onProgress(loaded, total);
+      }
+      const all = new Uint8Array(loaded);
+      let off = 0;
+      for (const c of chunks) {
+        all.set(c, off);
+        off += c.length;
+      }
+      return all.buffer;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // 会话创建超时保护
+  async function createOrtSessionWithTimeout(buffer, providers, timeoutMs = 10000) {
+    let timer;
+    const createP = ort.InferenceSession.create(buffer, { executionProviders: providers });
+    const timeoutP = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`ORT 会话初始化超时 (${timeoutMs}ms)`)), timeoutMs);
+    });
+    try {
+      return await Promise.race([createP, timeoutP]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // transformer 模型优先用 onnxruntime（WebGPU→WASM），失败回退纯 JS
-  async function makeOrtModel(name, doc) {
+  async function makeOrtModel(name, meta) {
     const ort = window.ort;
     if (!ort || !ort.InferenceSession) return null;
     ort.env.wasm.wasmPaths = new URL('vendor/ort/', location.href).href;  // 动态 import 需要绝对 URL
-    // COOP/COEP 头存在(crossOriginIsolated) → WASM 可用多线程, 按核数设;
-    // 否则禁线程(WebGPU 不受影响)。单线程跑 7.5M 参数 transformer ~10ms/次,
-    // 多线程可到 ~1ms。
+    // COOP/COEP 头存在(crossOriginIsolated) → WASM 可用多线程, 按核数设
     ort.env.wasm.numThreads = (typeof crossOriginIsolated === 'boolean' && crossOriginIsolated)
       ? Math.min(4, navigator.hardwareConcurrency || 4) : 1;
-    const providers = (typeof navigator !== 'undefined' && navigator.gpu)
-      ? ['webgpu', 'wasm'] : ['wasm'];
-    loadPhase = `正在加载 ONNX 推理引擎（${name}）`;
-    requestAnimationFrame(updateProgress);
-    const session = await ort.InferenceSession.create(`models/${name}.onnx`, {
-      executionProviders: providers,
+
+    // 1. 流式下载 ONNX 权重并展示字节级进度
+    const buffer = await fetchWithProgress(`models/${name}.onnx`, (loaded, total) => {
+      const pct = total ? Math.round((loaded / total) * 100) : 0;
+      const mbLoaded = (loaded / (1024 * 1024)).toFixed(1);
+      const mbTotal = total ? (total / (1024 * 1024)).toFixed(1) : '?';
+      const msg = `下载模型 ${mbLoaded}/${mbTotal}MB (${pct}%)`;
+      if (elCurModel) elCurModel.textContent = `⏳ ${msg}`;
+      if (elStatus) elStatus.innerHTML = `正在下载模型权重：<b>${msg}</b>`;
+      loadPhase = msg;
+      requestAnimationFrame(updateProgress);
     });
+
+    // 2. 初始化推理引擎（优先 WebGPU，超时 8s 自动切 WASM CPU，杜绝黑屏死等）
+    loadPhase = `正在初始化推理引擎（${name}）`;
+    if (elCurModel) elCurModel.textContent = '⚙️ 正在初始化推理引擎...';
+    requestAnimationFrame(updateProgress);
+
+    const hasGpu = typeof navigator !== 'undefined' && !!navigator.gpu;
+    let session = null;
+    if (hasGpu) {
+      try {
+        session = await createOrtSessionWithTimeout(buffer, ['webgpu', 'wasm'], 8000);
+      } catch (err) {
+        console.warn('[ort] WebGPU 初始化超时或失败，平滑降级至 WASM：', err);
+      }
+    }
+    if (!session) {
+      session = await createOrtSessionWithTimeout(buffer, ['wasm'], 15000);
+    }
+
     loadPhase = '';
-    return new ORTTransformerModel(doc, session);
+    return new ORTTransformerModel({ meta }, session);
   }
 
   async function ensureModel(name) {
     let m = modelCache.get(name);
     if (m) return m;
-    loadPhase = `正在加载模型 ${name}`;
-    requestAnimationFrame(updateProgress);
-    const resp = await fetch(`models/${name}.json`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const doc = await resp.json();
-    if (doc.meta.arch === 'transformer') {
-      try { m = await makeOrtModel(name, doc); }
-      catch (e) {
-        console.warn('[ort] 会话创建失败，回退纯 JS 前向：', e);
-        m = new TransformerModel(doc);
-        m._ortError = String(e && e.message ? e.message : e);
+
+    // 获取元数据（优先从已有的 modelList 取，避免为读元数据下载数十兆 JSON）
+    const meta = modelList.find(item => item.name === name) || { name, arch: 'transformer' };
+
+    // 优先路径：若是 transformer 且支持 ORT，直接流式下载 ONNX，不下载与解码 38MB 的纯 JS JSON
+    if (meta.arch === 'transformer' && typeof window.ort !== 'undefined') {
+      try {
+        m = await makeOrtModel(name, meta);
+      } catch (e) {
+        console.warn('[ort] ONNX 路径失败，将尝试纯 JS JSON 回退：', e);
       }
-      if (!m) m = new TransformerModel(doc);
-    } else {
-      m = doc.meta.arch === 'cnn' ? new CNNModel(doc) : new MLPModel(doc);
     }
+
+    // 回退路径：若 ORT 失败或属于 CNN/MLP 模型，下载 JSON 权重
+    if (!m) {
+      loadPhase = `正在下载模型 JSON（${name}）`;
+      if (elCurModel) elCurModel.textContent = `⏳ 正在下载 JSON…`;
+      requestAnimationFrame(updateProgress);
+      const resp = await fetch(`models/${name}.json`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const doc = await resp.json();
+      if (doc.meta.arch === 'transformer') {
+        m = new TransformerModel(doc);
+      } else {
+        m = doc.meta.arch === 'cnn' ? new CNNModel(doc) : new MLPModel(doc);
+      }
+    }
+
     m.inferEvery = elModelLowfreq.checked ? 2 : 1;   // 降频开关即时生效
     modelCache.set(name, m);
     return m;
@@ -1214,8 +1298,10 @@
     await applyModel();            // 预加载默认敌人模型（我方默认同款，已入缓存）
   }
 
+  let isApplyingModel = false;
   // 应用选中的 AI（敌人）：模型名 → 加载权重；规则 Hunter → 无需权重
   async function applyModel() {
+    if (isApplyingModel) return;
     const sel = elEnemyAi.value;
     if (!sel) return;
     if (sel === HUNTER_VAL) {
@@ -1230,7 +1316,12 @@
       elStatus.innerHTML = '敌人：<b>静止</b>（不动不炸）';
       return;
     }
+
+    isApplyingModel = true;
+    if (elApplyModel) elApplyModel.disabled = true;
+    if (elCurModel) elCurModel.textContent = `⏳ 正在连接下载 ${sel}…`;
     elStatus.innerHTML = `正在加载模型 <b>${sel}</b>…`;
+
     try {
       const m = await ensureModel(sel);
       enemySel = sel;
@@ -1238,17 +1329,23 @@
       requestAnimationFrame(updateProgress);
       elCurModel.textContent =
         `${modelDisplayName(m.meta)}（${fmtStep(m.meta.global_step ?? m.meta.it ?? 0)}步 · 导出于 ${(m.meta.generated_at || '').slice(0, 10)}）`;
+      const numParams = m.tensors && Object.keys(m.tensors).length > 0
+        ? Object.values(m.tensors).reduce((s, [, n]) => s + n, 0) : 7500000;
       elStatus.innerHTML =
         `当前模型：<b>${modelDisplayName(m.meta)}</b><br>` +
         `训练步数 ${fmtStep(m.meta.global_step ?? m.meta.it ?? 0)}<br>` +
-        `观测 ${m.meta.obs_shape.join('×')} · 参数 ${Object.values(m.tensors)
-          .reduce((s, [, n]) => s + n, 0).toLocaleString()}<br>` +
+        `观测 ${m.meta && m.meta.obs_shape ? m.meta.obs_shape.join('×') : '14×13×15'} · 参数约 ${numParams.toLocaleString()}<br>` +
         `推理后端：${m.constructor.name === 'ORTTransformerModel'
           ? (navigator.gpu ? 'WebGPU' : 'WASM') : '纯 JS'}` +
         (m._ortError ? `<br><span class="dim">ORT 失败：${m._ortError.slice(0, 120)}</span>` : '') +
         (m._lastInferError ? `<br><span class="dim">推理失败：${m._lastInferError.slice(0, 160)}</span>` : '');
     } catch (e) {
-      elStatus.innerHTML = `模型加载失败：${e.message}`;
+      elCurModel.textContent = '❌ 加载失败（点击「应用」重试）';
+      elStatus.innerHTML = `模型加载失败：${e.message}。请检查网络后点击「应用」重试。`;
+      console.error('[model] 加载失败:', e);
+    } finally {
+      isApplyingModel = false;
+      if (elApplyModel) elApplyModel.disabled = false;
     }
   }
 

@@ -1137,11 +1137,11 @@
   // ---------------------------------------------------------------- 模型
   // 权重 = deploy/export_ckpt.py 导出的 base64(float32 全部张量) + 偏移表。
   class MLPModel {
-    constructor(doc) {
-      this.meta = doc.meta;
-      this.tensors = doc.tensors;
-      this.buf = new Float32Array(decodeB64(doc.flat));
-      this.obsShape = doc.meta.obs_shape;
+    constructor(doc, skipWeights = false) {
+      this.meta = (doc && doc.meta) ? doc.meta : doc;
+      this.tensors = (doc && doc.tensors) ? doc.tensors : {};
+      this.buf = (!skipWeights && doc && doc.flat) ? new Float32Array(decodeB64(doc.flat)) : null;
+      this.obsShape = this.meta ? this.meta.obs_shape : [14, 13, 15];
     }
 
     T(name) {
@@ -1395,44 +1395,46 @@
   // 数值对齐 jax_bomb 训练：LN eps=1e-6，softmax 前 scores 先 round 到 fp32，
   // q/k/v 按 (T,heads,d) 切分后转置成 (heads,T,d)（不能直接 reshape(heads,T,d)）。
   class TransformerModel extends MLPModel {
-    constructor(doc) {
-      super(doc);
-      this.embed = doc.meta.embed;
-      this.patch = doc.meta.patch;
-      this.depth = doc.meta.depth;
+    constructor(doc, skipWeights = false) {
+      super(doc, skipWeights);
+      this.embed = this.meta.embed;
+      this.patch = this.meta.patch;
+      this.depth = this.meta.depth;
       const E = this.embed, P = this.patch;
       const gp = Math.ceil(this.obsShape[1] / P), nTok = gp * gp, T17 = nTok + 1;
       this._nTok = nTok; this._T17 = T17;
-      const F = this.T('b0_ff1_w').length / E;      // ff_factor*E
-      // 一次性分配全部中间缓冲（forward 内零分配；GC 是纯 JS 前向的最大
-      // 隐性开销之一）。容量按 2 玩家（观战批处理）分配，单玩家只用前半。
-      this._x = new Float64Array(2 * nTok * E);
-      this._cur = new Float64Array(2 * T17 * E);
-      this._ln1 = new Float64Array(2 * T17 * E);
-      this._ln2 = new Float64Array(2 * T17 * E);
-      this._q = new Float64Array(2 * T17 * E);
-      this._k = new Float64Array(2 * T17 * E);
-      this._v = new Float64Array(2 * T17 * E);
-      this._scores = new Float64Array(2 * 4 * T17 * T17);
-      this._w = new Float64Array(2 * 4 * T17 * T17);
-      this._att = new Float64Array(2 * T17 * E);
-      this._ff = new Float64Array(2 * T17 * F);
-      this._g = new Float64Array(2 * E);
       this._cSim = null; this._cGen = -1; this._cT = [-1, -1]; this._cA = [null, null];
       this._inferMs = 0;               // 推理耗时累加器（[prof] 每秒读取后清零）
-      // 矩阵乘权重**预转置**成 (N,K) 布局（Float32）：forward 的 4 路展开
-      // 内层按 j 连续读（纯 JS 标量循环约 2.5× 提速，见 matmul 微基准）。
-      this._tokT = this._transpose(this.T('tok_w'), E);
-      this._qT = []; this._kT = []; this._vT = []; this._prT = [];
-      this._ff1T = []; this._ff2T = [];
-      for (let i = 0; i < this.depth; i++) {
-        const p = String(i);
-        this._qT.push(this._transpose(this.T('b' + p + '_q_w'), E));
-        this._kT.push(this._transpose(this.T('b' + p + '_k_w'), E));
-        this._vT.push(this._transpose(this.T('b' + p + '_v_w'), E));
-        this._prT.push(this._transpose(this.T('b' + p + '_proj_w'), E));
-        this._ff1T.push(this._transpose(this.T('b' + p + '_ff1_w'), E));   // (E,F)→(F,E)
-        this._ff2T.push(this._transpose(this.T('b' + p + '_ff2_w'), F));   // (F,E)→(E,F)
+      if (!skipWeights && this.buf) {
+        const F = this.T('b0_ff1_w').length / E;      // ff_factor*E
+        // 一次性分配全部中间缓冲（forward 内零分配；GC 是纯 JS 前向的最大
+        // 隐性开销之一）。容量按 2 玩家（观战批处理）分配，单玩家只用前半。
+        this._x = new Float64Array(2 * nTok * E);
+        this._cur = new Float64Array(2 * T17 * E);
+        this._ln1 = new Float64Array(2 * T17 * E);
+        this._ln2 = new Float64Array(2 * T17 * E);
+        this._q = new Float64Array(2 * T17 * E);
+        this._k = new Float64Array(2 * T17 * E);
+        this._v = new Float64Array(2 * T17 * E);
+        this._scores = new Float64Array(2 * 4 * T17 * T17);
+        this._w = new Float64Array(2 * 4 * T17 * T17);
+        this._att = new Float64Array(2 * T17 * E);
+        this._ff = new Float64Array(2 * T17 * F);
+        this._g = new Float64Array(2 * E);
+        // 矩阵乘权重**预转置**成 (N,K) 布局（Float32）：forward 的 4 路展开
+        // 内层按 j 连续读（纯 JS 标量循环约 2.5× 提速，见 matmul 微基准）。
+        this._tokT = this._transpose(this.T('tok_w'), E);
+        this._qT = []; this._kT = []; this._vT = []; this._prT = [];
+        this._ff1T = []; this._ff2T = [];
+        for (let i = 0; i < this.depth; i++) {
+          const p = String(i);
+          this._qT.push(this._transpose(this.T('b' + p + '_q_w'), E));
+          this._kT.push(this._transpose(this.T('b' + p + '_k_w'), E));
+          this._vT.push(this._transpose(this.T('b' + p + '_v_w'), E));
+          this._prT.push(this._transpose(this.T('b' + p + '_proj_w'), E));
+          this._ff1T.push(this._transpose(this.T('b' + p + '_ff1_w'), E));   // (E,F)→(F,E)
+          this._ff2T.push(this._transpose(this.T('b' + p + '_ff2_w'), F));   // (F,E)→(E,F)
+        }
       }
     }
 
@@ -1783,7 +1785,7 @@
   // session.run 是异步的 → act/bothAct 返回 Promise，游戏 tick 需 await。
   class ORTTransformerModel extends TransformerModel {
     constructor(doc, session) {
-      super(doc);
+      super(doc, true);
       this.session = session;
     }
 
