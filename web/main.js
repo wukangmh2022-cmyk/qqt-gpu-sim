@@ -167,14 +167,7 @@
     for (let i = 0; i < N; i++) blocked[i] = sim.wall[i] || sim.brick[i] || sim.fuse[i] > 0 ? 1 : 0;
     const dist = CFG.stepLen * sim.spdG[0];
     const [ny, nx] = sim._steer(y, x, dir, blocked, dist);
-    // 点击方向是意图，_steer 的返回值才是实际移动。正常直走时更新精灵
-    // 朝向；若受阻后发生垂直侧滑，保留原朝向，不能让侧滑改变人物图案。
-    const movedAsIntended =
-      (dir === MOVE_UP && ny < y - 2 * EPS && Math.abs(nx - x) <= 2 * EPS) ||
-      (dir === MOVE_DOWN && ny > y + 2 * EPS && Math.abs(nx - x) <= 2 * EPS) ||
-      (dir === MOVE_LEFT && nx < x - 2 * EPS && Math.abs(ny - y) <= 2 * EPS) ||
-      (dir === MOVE_RIGHT && nx > x + 2 * EPS && Math.abs(ny - y) <= 2 * EPS);
-    if (movedAsIntended) face[0] = dir;
+    face[0] = dir;
     sim.pos[0] = Math.min(Math.max(ny, CFG.radius), H - CFG.radius);
     sim.pos[1] = Math.min(Math.max(nx, CFG.radius), W - CFG.radius);
   });
@@ -288,6 +281,7 @@
   }
   let replay = null;          // { meta, actions: [[m0,b0,m1,b1], ...], snapshots: [...] }
   const face = [MOVE_DOWN, MOVE_DOWN];
+  let lastAiMove = [MOVE_IDLE, MOVE_IDLE];
   const human = { dirStack: [], latch: new Set(), move: MOVE_IDLE, pendingBomb: false };
   let joyBombDown = false;   // 摇杆放泡按钮按住状态(tick 判断锁存清除用)
   let spaceDownSince = 0, joyDownSince = 0;   // 按下时刻: 长按>180ms 才连放, 点按=1颗
@@ -1230,6 +1224,7 @@
     gameEndT = 0;
     prevPos.set(sim.pos); curPos.set(sim.pos);
     face[0] = MOVE_DOWN; face[1] = MOVE_DOWN;
+    lastAiMove = [MOVE_IDLE, MOVE_IDLE];
     lastTickT = performance.now();
     fpsFrames = 0; fpsT0 = 0; fpsNow = 0;
     running = true;
@@ -1929,10 +1924,11 @@
     dangerCache = sim.dangerMap();
     const dangerMs = performance.now() - dangerT0;
     const postT0 = performance.now();
-    // 朝向：人类玩家（非观战）的朝向由 60Hz 帧级移动维护，10Hz tick 不覆盖
-    //（否则每 tick 把 face[0] 重置成 IDLE → 渲染回退朝下，按左/右后总朝下）
-    if (spectate) face[0] = a0[0];
-    face[1] = a1[0];
+    // 朝向：人类玩家（非观战）的朝向由 60Hz 帧级移动维护，10Hz tick 不覆盖；
+    // AI 做出移动决策时才更新朝向；IDLE 静止时保持上一次朝向，绝不闪回朝下。
+    if (spectate && a0[0] !== MOVE_IDLE) face[0] = a0[0];
+    if (a1[0] !== MOVE_IDLE) face[1] = a1[0];
+    lastAiMove = [a0[0], a1[0]];
     // 音效（以人类玩家为监听者，只播人类相关事件）
     if (info.placed[0]) playSnd('place');
     if (hadCrate && !sim.crate[hr * W + hc]) playSnd('pickup');
@@ -2453,10 +2449,11 @@
 
   // 角色是否在行走（动画帧推进用）
   function humanMoveState(pid) {
-    if (pid === 0) {
-      return !elSpectate.checked && human.move !== MOVE_IDLE && sim.alive[0];
+    if (pid === 0 && !elSpectate.checked) {
+      return human.move !== MOVE_IDLE && sim.alive[0];
     }
-    return face[1] !== MOVE_IDLE && sim.alive[1];
+    const m = pid === 0 ? lastAiMove[0] : lastAiMove[1];
+    return m !== MOVE_IDLE && sim.alive[pid];
   }
 
   function drawHUD() {
@@ -2642,10 +2639,10 @@
       if (mousePush && !mousePushing) mousePush = null;
       human.move = keyMove !== MOVE_IDLE ? keyMove : (mousePushing ? mousePush.dir : MOVE_IDLE);
       if (human.move !== MOVE_IDLE && sim.alive[0]) {
+        // 只要有人类按键意图，立即更新朝向（即使撞墙被阻挡，也必须正确面朝输入目标方向）
+        face[0] = human.move;
         // 顶箱期间禁止玩家自动转向；必须保持同一方向累计推动时间。
         const eff = mousePushing ? human.move : autoTurn(0, human.move);
-        const keepFace = human.move;      // 原始输入方向(自动转向不改行走图朝向)
-        const beforeY = sim.pos[0], beforeX = sim.pos[1];
         frameMove(0, eff, dt);            // 坐标用转向方向滑移
         if (!mousePushing && turnSlideTarget && eff === turnSlide) {
           // 只截断本帧的侧滑轴，不改另一轴碰撞结果。到达中心线后下一帧
@@ -2661,13 +2658,6 @@
           }
         }
         human.move = eff;                 // 动画播放状态按实际移动
-        const movedY = sim.pos[0] - beforeY, movedX = sim.pos[1] - beforeX;
-        const intendedMove =
-          (keepFace === MOVE_UP && movedY < -2 * EPS && Math.abs(movedX) <= 2 * EPS) ||
-          (keepFace === MOVE_DOWN && movedY > 2 * EPS && Math.abs(movedX) <= 2 * EPS) ||
-          (keepFace === MOVE_LEFT && movedX < -2 * EPS && Math.abs(movedY) <= 2 * EPS) ||
-          (keepFace === MOVE_RIGHT && movedX > 2 * EPS && Math.abs(movedY) <= 2 * EPS);
-        if (intendedMove) face[0] = keepFace;
       }
     }
     prof.inputLast = performance.now() - inputT0;
