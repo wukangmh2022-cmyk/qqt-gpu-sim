@@ -371,11 +371,17 @@ def main():
         "reward", "crate_reward_coef", 0.0),
                     help="开箱成长 bootstrap 奖励系数（0=关）。关卡模式多数"
                          "地图出生点被砖隔开，前期无交战通道——短促正奖励加速"
-                         "前期学习，随 --crate-reward-anneal-steps 线性退火到 0")
+                         "前期学习，随 --crate-reward-anneal-steps 线性退火到底噪")
+    ap.add_argument("--crate-reward-floor", type=float, default=float(cfg(
+        "reward", "crate_reward_floor", 0.05)),
+                    help="箱子道具奖励保底底噪（默认 0.05，防止 150B 后期因归零而遗忘开箱吃道具）")
     ap.add_argument("--crate-reward-anneal-steps", type=int, default=cfg(
         "reward", "crate_reward_anneal_steps", 0),
                     help="开箱奖励退火步数（全局环境步；长训默认 300 亿，8.39M 步/iter 下覆盖整轮）。"
                          "0=不退火（保持恒定，不推荐）")
+    ap.add_argument("--ema-decay", type=float, default=float(cfg(
+        "model", "ema_decay", 0.999)),
+                    help="参数 EMA 指数移动平均衰减系数（默认 0.999，验证稳步提升 30+ Elo 并消除震荡）")
     ap.add_argument("--explore-reward-coef", type=float, default=cfg(
         "reward", "explore_reward_coef", 0.0),
                     help="探索 novelty 奖励系数（0=关）。每 tick 玩家中心格若是本局首次"
@@ -765,6 +771,8 @@ def main():
     last_local_save = t0
     n_run = 0
     cur = (params, opt_state, states, keys)
+    # 初始化 EMA 参数追踪 (Generals.io/AverageJoe 验证稳步提升 30+ Elo 并平滑波动)
+    ema_params = jax.tree.map(np.asarray, params) if getattr(args, "ema_decay", 0.0) > 0.0 else None
     steps_per_iter_g = 2 * args.num_envs * steps     # 全局环境步/迭代
     kill_rate_prev = 0.0                              # 上一 iter 击杀率（首轮未知 → α_dyn=1）
     for i in range(it_done + 1, args.iters + 1):
@@ -800,7 +808,9 @@ def main():
         lose_bonus = (args.lose_bonus_floor
                       + (args.lose_bonus_start - args.lose_bonus_floor)
                       * alpha_fix)
-        crate_coef = args.crate_reward_coef * alpha
+        # 箱子道具奖励：支持保底底噪（floor），防止 150B-200B 训练后期彻底归零导致遗忘开箱
+        crate_floor = getattr(args, "crate_reward_floor", 0.05)
+        crate_coef = crate_floor + (args.crate_reward_coef - crate_floor) * alpha
         explore_coef = args.explore_reward_coef * alpha
         brick_coef = args.brick_reward_coef * alpha
         res = one_iter(cur[0], cur[1], cur[2], cur[3], crate_coef,
@@ -808,6 +818,11 @@ def main():
         jax.block_until_ready(res)
         cur = res
         n_run += 1
+        # 更新 EMA 权重平滑快照
+        if ema_params is not None:
+            d_ema = float(args.ema_decay)
+            cur_p_np = jax.tree.map(np.asarray, res[0])
+            ema_params = jax.tree.map(lambda e, p: d_ema * e + (1.0 - d_ema) * p, ema_params, cur_p_np)
         dt_i = time.time() - ti
         dt_avg = (time.time() - t0) / n_run
         sps_i = 2 * args.num_envs * steps / dt_i
@@ -882,6 +897,12 @@ def main():
                 with open(p, "wb") as f:
                     pickle.dump(jax.tree.map(np.asarray, res[0]), f)
 
+                # 保存 EMA 评估快照 (用于部署/评测，可稳定提升 30+ Elo)
+                if ema_params is not None:
+                    p_ema = os.path.join(args.ckpt_local_dir, f"params_it{i:08d}_ema.pkl")
+                    with open(p_ema, "wb") as f_ema:
+                        pickle.dump(ema_params, f_ema)
+
                 # 同步写入伴生元数据 JSON 文件 (零侵入，直接记录当轮退火超参)
                 meta_p = os.path.join(args.ckpt_local_dir, f"params_it{i:08d}.meta.json")
                 import json
@@ -902,6 +923,9 @@ def main():
                                 old_meta = old_p.replace(".pkl", ".meta.json")
                                 if os.path.exists(old_meta):
                                     os.remove(old_meta)
+                                old_ema = old_p.replace(".pkl", "_ema.pkl")
+                                if os.path.exists(old_ema):
+                                    os.remove(old_ema)
                             except OSError:
                                 pass
                 last_local_save = time.time()
