@@ -227,7 +227,26 @@ async function fetchStatus() {
     const res = await fetch('/api/status');
     const data = await res.json();
 
-    // 1. 状态徽标与评估进度
+    // 0. 集群与训练心跳状态
+    const clBadge = document.getElementById('clusterBadge');
+    if (data.heartbeat) {
+      const hb = data.heartbeat;
+      if (hb.status === 'RUNNING') {
+        clBadge.className = 'badge badge-success';
+        clBadge.textContent = `🟢 训练心跳正常 (${hb.idleSeconds}s前)`;
+      } else if (hb.status === 'HANG_SUSPECTED') {
+        clBadge.className = 'badge badge-warning';
+        clBadge.textContent = `🟡 疑似假死卡顿 (停滞 ${hb.idleSeconds}s)`;
+      } else if (hb.status === 'DISCONNECTED') {
+        clBadge.className = 'badge badge-danger';
+        clBadge.textContent = `🔴 集群掉线/断联`;
+      } else {
+        clBadge.className = 'badge badge-secondary';
+        clBadge.textContent = `⚪ 集群空闲 (${hb.mode === 'remote' ? '待命' : '本地未运行'})`;
+      }
+    }
+
+    // 1. 策略状态徽标与评估进度
     const badge = document.getElementById('healthBadge');
     if (data.evalInProgress) {
       badge.className = 'badge badge-warning';
@@ -246,7 +265,7 @@ async function fetchStatus() {
       }
     }
 
-    // 2. 告警浮层
+    // 2. 告警浮层 (支持策略退化告警 与 集群掉线/卡死告警)
     const alertSec = document.getElementById('alertSection');
     if (data.activeAlert) {
       alertSec.classList.remove('hidden');
@@ -255,6 +274,13 @@ async function fetchStatus() {
       issuesList.innerHTML = data.activeAlert.issues.map(i => `<li>${i}</li>`).join('');
       const suggBox = document.getElementById('alertSuggestions');
       suggBox.innerHTML = `<strong>建议介入措施：</strong><br>` + data.activeAlert.suggestedActions.join('<br>');
+    } else if (data.heartbeat && (data.heartbeat.status === 'HANG_SUSPECTED' || data.heartbeat.status === 'DISCONNECTED')) {
+      alertSec.classList.remove('hidden');
+      document.getElementById('alertTitle').textContent = `🚨 [集群状态异常] ${data.heartbeat.message}`;
+      const issuesList = document.getElementById('alertIssues');
+      issuesList.innerHTML = `<li>最新日志输出: ${data.heartbeat.lastLine || '无'}</li><li>最后心跳更新于: ${data.heartbeat.lastHeartbeat} (${data.heartbeat.idleSeconds} 秒前)</li><li>SSH 通信状态: ${data.heartbeat.sshDetail}</li>`;
+      const suggBox = document.getElementById('alertSuggestions');
+      suggBox.innerHTML = `<strong>排查建议：</strong> 检查 GPU 显存 OOM、NCCL 多机通信死锁或 Slurm 节点运行状态；若已确认掉线请点击右上角 [🚀 回滚/重启干预] 重启训练。`;
     } else {
       alertSec.classList.add('hidden');
     }

@@ -12,6 +12,8 @@ from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 MONITOR_DIR = os.path.join(ROOT, "monitor")
 WEB_DIR = os.path.join(MONITOR_DIR, "web")
 CONFIGS_DIR = os.path.join(ROOT, "configs")
@@ -141,6 +143,12 @@ class MonitorHandler(SimpleHTTPRequestHandler):
             ckpts = get_available_ckpts()
             telemetry = get_train_telemetry()
             latest_train = telemetry[-1] if telemetry else None
+            try:
+                import monitor.heartbeat as hb
+                heartbeat = hb.check_heartbeat(enable_remote_ping=True)
+            except Exception as e:
+                heartbeat = {"status": "ERROR", "message": str(e), "color": "gray"}
+
             self._send_json({
                 "status": "online",
                 "evalInProgress": eval_in_progress,
@@ -151,6 +159,7 @@ class MonitorHandler(SimpleHTTPRequestHandler):
                 "totalEvaluated": len(history),
                 "availableCheckpoints": ckpts[:15],
                 "latestTrain": latest_train,
+                "heartbeat": heartbeat,
             })
             return
 
