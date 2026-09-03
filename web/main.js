@@ -670,11 +670,6 @@
     }
     // 随机宝箱（带问号的箱子，原版宝箱道具.GIF）：空场景十字箱 / 掉血回收箱
     const boxQ = iconScale(await loadImage('assets/宝箱道具.png'));
-    const exploArms = {};
-    for (const [key, f] of [['up', '向上爆炸.png'], ['down', '向下爆炸.png'],
-                            ['left', '向左爆炸.png'], ['right', '向右爆炸.png']]) {
-      exploArms[key] = await loadImage('assets/' + f);
-    }
     // 爆炸水泡序列帧素材 (res/flame):
     // C: 中心格 1..2 (0 为透明占位)
     // U, D, L, R: 四方向格 1..6 (1=炸开花边缘, 2-4=中间连续动画帧, 5=伸展边缘, 6=收尾边缘)
@@ -716,8 +711,6 @@
       propIcons, superIcons, boxQ, baseBand,
       point: scaleCanvas(await loadImage('assets/point.png'),
                          Math.round(40 * SCALE * 0.5), Math.round(40 * SCALE * 0.5)),
-      exploCenter: scaleCanvas(await loadImage('assets/爆炸中心.png'), CELL, CELL),
-      exploArms,
       flames: flameFrames,
     };
     // 音效（Web Audio；失败静默）
@@ -2344,14 +2337,6 @@
                 }
               }
             }
-          }
-        } else {
-          // 降级回退 (res.flames 尚未就绪时)
-          for (let i = 0; i < N; i++) {
-            if (!explosionTrig[i]) continue;
-            if (dieFx.has(i)) continue;
-            const r = (i / W) | 0, c = i % W;
-            items.push([r * Z_ROW_STRIDE + 19, res.exploCenter, c * CELL, r * CELL]);
           }
         }
       } else {

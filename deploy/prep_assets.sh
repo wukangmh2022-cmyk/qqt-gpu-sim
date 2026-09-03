@@ -15,11 +15,14 @@ mkdir -p "$OUT/scenes" "$OUT/snd"
 # ---- 通用素材（角色皮肤 / 炸弹 / 爆炸 / 道具 / 无敌罩）----
 # 角色行走图：海王子（默认）+ 小虾米 + 角色c（敌人）+ 火影
 for f in 角色4×4精灵图.png 角色b4×4.png 角色c4×4.png 角色火影4x4.png \
-         bomb1.png 爆炸中心.png 向上爆炸.png 向下爆炸.png \
-         向左爆炸.png 向右爆炸.png 威力道具.png 泡泡数量道具.png 鞋子道具.png \
+         bomb1.png 威力道具.png 泡泡数量道具.png 鞋子道具.png \
          无敌.PNG point.png; do
   cp "$RES/$f" "$OUT/$f"
 done
+
+# 爆炸水泡序列帧素材 (res/flame):
+mkdir -p "$OUT/flame"
+cp "$RES/flame"/*.png "$OUT/flame/"
 
 # 炸弹序列帧：浏览器只读 PNG，不在运行时解码 GIF。
 mkdir -p "$OUT/bomb-default" "$OUT/bomb-custom"
