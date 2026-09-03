@@ -2583,9 +2583,9 @@
       const frame = (moving ? Math.floor(nowS * 8) % 4 : 0);
       const s = rows[row][frame];
       const blitX = Math.round(cx - s.width / 2);
-      // 精灵脚底对齐**碰撞盒底** (gy + radius)，不再是格底 (gy+0.5)：
-      // 穿越一格通道时视觉与碰撞一致，不会差 12px
-      const blitY = Math.min(Math.round(cy + CFG.radius * CELL - s.height), H * CELL - s.height);
+      // 精灵脚底对齐碰撞盒底 (gy + radius)，人物视觉整体上移 6px（纯渲染层，不影响物理 bbox）：
+      const CHAR_VISUAL_OFFSET_Y = 6;
+      const blitY = Math.min(Math.round(cy + CFG.radius * CELL - s.height - CHAR_VISUAL_OFFSET_Y), H * CELL - s.height);
       // 我方箭头位置：**先记录**，进果冻遮挡隐藏后箭头仍显示
       if (pid === 0) p0Arrow = { blitX, blitY, s };
       // 走进果冻结构（房子/灌木/拱门等，可炸或不可炸/小屋元件）内 → 角色隐藏
@@ -2603,10 +2603,11 @@
       // 上一行水泡((r-1)*24+19 = r*24-5 < r*24+18)在角色后画(角色头部帽子盖住上一行水泡)
       const z = Math.floor(gy) * Z_ROW_STRIDE + 18;
       // 角色脚下阴影：位于地面与角色之间 (Z = z - 1)
-      // 影子图片底部与角色碰撞盒底线(blitY + s.height)严格贴齐，bbox 触底时不出格不出画
+      // 阴影相对脚底下移微调（+6px），使鞋底自然踏入椭圆阴影内部；
+      // 且因角色上移 6px 完美抵消，在 bbox 触底时阴影底边缘依然严格贴齐格底，绝不出格
       if (res.shadow) {
         const shadowX = Math.round(cx - res.shadow.width / 2);
-        const shadowY = Math.round(blitY + s.height - res.shadow.height);
+        const shadowY = Math.round(blitY + s.height - res.shadow.height + 6);
         items.push([z - 1, res.shadow, shadowX, shadowY]);
       }
       items.push([z, s, blitX, blitY]);
