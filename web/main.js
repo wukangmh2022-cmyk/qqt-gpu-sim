@@ -201,6 +201,10 @@
   let dieFx = new Map();
   // 掉血回收宝箱飞行动画: {x0,y0,x1,y1,cell,t0} —— 从掉血玩家抛物线飞向落点(100ms)
   let flyFx = [];
+  // 飞鸟道具空投抛物线动画: [{sx, sy, tx, ty, cell, item, t0, dur}]
+  let birdDropFx = [];
+  let birdLastCycle = -1;
+  let gameStartTime = 0;
   let dangerCache = null;           // tick 级危险图缓存（logicTick 每 step 重建）
   let lastTickT = 0;
   let gameSeed = 1;
@@ -700,6 +704,10 @@
         flameFrames[d][f] = c;
       }
     }
+    const birdFrames = [
+      await loadImage('assets/bird1.png'),
+      await loadImage('assets/bird2.png'),
+    ];
     res = {
       levels, levelById, elements, bgImages,
       skins: skinRows,             // 3 种玩家皮肤
@@ -712,6 +720,7 @@
       point: scaleCanvas(await loadImage('assets/point.png'),
                          Math.round(40 * SCALE * 0.5), Math.round(40 * SCALE * 0.5)),
       flames: flameFrames,
+      birdFrames,
     };
     // 音效（Web Audio；失败静默）
     try {
@@ -1190,6 +1199,10 @@
     if (!res || !selectedLevel) return;      // 素材/地图未就绪由 logicTick 兜底等待
     gameSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
     sim = new Sim(gameSeed);
+    sim._manualBird = true;                    // 前端接管飞鸟与空投抛物线动画
+    birdDropFx = [];
+    birdLastCycle = -1;
+    gameStartTime = performance.now();
     window.__sim = sim;                        // 调试钩子：读 sim 状态/帧率用
     sim.reset(selectedLevel, { oldMode: oldModeActive() });  // 旧模型: 13/14列填墙+13宽观测
     if (customStats) {
@@ -2376,6 +2389,9 @@
     for (const f of flyFx) {
       if ((flyNow - f.t0) / 1000 < 0.1) flyTargets.add(f.cell);
     }
+    for (const f of birdDropFx) {
+      flyTargets.add(f.cell);
+    }
     for (let i = 0; i < N; i++) {
       if (!sim.crate[i] || flyTargets.has(i)) continue;
       // 砖还在碎墙动画 (dieFx) 期间，不提前显示该格的道具/宝箱
@@ -2405,6 +2421,91 @@
       // 掉血回收 = 随机宝箱(带?箱子), 原图尺寸居中
       items.push([50000, res.boxQ,
         Math.round(px - res.boxQ.width / 2), Math.round(py - res.boxQ.height / 2)]);
+    }
+
+    // 飞鸟空投抛物线飞行动画（高空飞行物，Z = 55000）
+    for (let k = birdDropFx.length - 1; k >= 0; k--) {
+      const drop = birdDropFx[k];
+      const ageMs = now - drop.t0;
+      const progress = ageMs / drop.dur;
+      if (progress >= 1.0) {
+        // 落地：正式写入地图数据
+        sim.spawnGraveyardDrop(drop.cell, drop.item.type, drop.item.isSuper);
+        birdDropFx.splice(k, 1);
+        continue;
+      }
+      const curX = drop.sx + (drop.tx - drop.sx) * progress;
+      // 抛物线：向上拱起 90px
+      const arc = -90 * 4 * progress * (1 - progress);
+      const curY = drop.sy + (drop.ty - drop.sy) * progress + arc;
+      let icon = drop.item.isSuper ? res.superIcons[drop.item.type] : res.propIcons[drop.item.type];
+      if (!icon) icon = res.boxQ;
+      items.push([55000, icon, Math.round(curX - icon.width / 2), Math.round(curY - icon.height / 2)]);
+    }
+
+    // 飞鸟巡航控制器：30s 一个循环（前 25s 冷却，后 5s 飞行）
+    if (res.birdFrames && running && !sim.done && gameStartTime > 0) {
+      const elapsedS = (now - gameStartTime) / 1000;
+      const cycleIndex = Math.floor(elapsedS / 30);
+      const cycleTime = elapsedS % 30; // 0 ~ 30s
+      if (cycleTime >= 25.0) {
+        const flightTime = cycleTime - 25.0; // 0 ~ 5s
+        // 帧动画：1s 播放一轮（0.5s 一帧）
+        const frameIdx = Math.floor(flightTime * 2) % 2;
+        const birdImg = res.birdFrames[frameIdx];
+
+        // 坐标计算：
+        // 初始位置为画面右侧外 7 个格子 (x = W + 7 = 22)
+        // 0s ~ 2s：从 x = 22 移动到 x = 15 (进入画面右边界)
+        // 2s ~ 5s：从 x = 15 移动到 x = -2.5 (完全飞离画面左边界)
+        let bx;
+        if (flightTime < 2.0) {
+          bx = (22 - 3.5 * flightTime) * CELL;
+        } else {
+          bx = (15 - (17.5 / 3.0) * (flightTime - 2.0)) * CELL;
+        }
+        // y 坐标固定为从上往下第 3.5 个格子 (oy = 3.5 * CELL)
+        const by = 3.5 * CELL;
+
+        // 飞鸟处于最高空 (Z = 60000)
+        items.push([60000, birdImg, Math.round(bx), Math.round(by)]);
+
+        // 第 5 秒（flightTime >= 4.8s）触发空投
+        if (flightTime >= 4.8 && birdLastCycle !== cycleIndex) {
+          birdLastCycle = cycleIndex;
+          if (sim.graveyard && sim.graveyard.length > 0) {
+            // 候选空闲格（无墙、无砖、无道具、无炸弹）
+            const candidates = [];
+            for (let i = 0; i < N; i++) {
+              if (!sim.wall[i] && !sim.brick[i] && !sim.crate[i] && !sim.pushable[i] && sim.fuse[i] <= 0) {
+                candidates.push(i);
+              }
+            }
+            // 随机打乱候选格
+            for (let i = candidates.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              const tmp = candidates[i]; candidates[i] = candidates[j]; candidates[j] = tmp;
+            }
+            const dropCount = Math.min(sim.graveyard.length, candidates.length);
+            const toDrop = sim.graveyard.splice(0, dropCount);
+            for (let k = 0; k < toDrop.length; k++) {
+              const tc = candidates[k];
+              const targetX = (tc % W) * CELL + CELL / 2;
+              const targetY = (((tc / W) | 0) + 0.5) * CELL;
+              birdDropFx.push({
+                sx: bx + birdImg.width / 2,
+                sy: by + birdImg.height / 2,
+                tx: targetX,
+                ty: targetY,
+                cell: tc,
+                item: toDrop[k],
+                t0: now,
+                dur: 700 + Math.random() * 250, // 0.7s ~ 0.95s 抛物线
+              });
+            }
+          }
+        }
+      }
     }
 
     // 角色：z = 脚所在行；帧底边 = 中心格底边；底线不越地图底

@@ -956,6 +956,8 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     # 4. 爆炸与连锁（墙挡火不覆盖；brick 挡火但被覆盖）
     covered, triggered = _resolve_explosions_matrix(fuse, owner, bomb_blast,
                                                     wall, brick)
+    # 爆炸水泡清理地图现有道具
+    crate = jnp.where(covered, jnp.int8(0), crate)
     # 4b. 炸掉的砖/灌木 → 宝箱（JS 语义：被覆盖瞬间按本关 crate_rate 掷爆率，
     #      bush 与 brick 互斥且同规则；open 无砖无灌木恒无操作；踩到必升见 6b）
     if levels.active() is not None:
@@ -1067,7 +1069,7 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     fixed = (kind_code - 1) % 3                  # 1/2/3→0/1/2；4/5/6→0/1/2（超级同种类）
     attr = jnp.where(kind_code == 7, (rb_grow * 3).astype(jnp.int32), fixed)
     is_super = (kind_code >= 4) & (kind_code <= 6)
-    add = jnp.where(is_super, 4, 1).astype(jnp.int32) * hits.astype(jnp.int32)
+    add = jnp.where(is_super, 5, 1).astype(jnp.int32) * hits.astype(jnp.int32)
     add_b = ((attr == 0).astype(jnp.int32)) * add
     add_z = ((attr == 1).astype(jnp.int32)) * add
     add_s = ((attr == 2).astype(jnp.float32)) * add.astype(jnp.float32)

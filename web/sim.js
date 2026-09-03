@@ -158,6 +158,7 @@
       this.superCrate = new Uint8Array(N);   // 1=超级宝箱(拾取+4档)
       this.crateType = new Int8Array(N);    // 宝箱种类: -1=随机(问号), 0/1/2=泡/威/速(炸开时定)
       this.recycle = new Uint8Array(N);
+      this.graveyard = [];                 // 道具墓地：存储被水泡炸毁以及满属性溢出的道具 { type, isSuper }
       this.fuse = new Int16Array(N);
       this.owner = new Int8Array(N);
       this.owner.fill(-1);
@@ -267,6 +268,7 @@
         superCrate: arr(this.superCrate),
         crateType: arr(this.crateType),
         recycle: arr(this.recycle),
+        graveyard: this.graveyard.map((x) => ({ type: x.type, isSuper: !!x.isSuper })),
         fuse: arr(this.fuse),
         owner: arr(this.owner),
         bombBlast: arr(this.bombBlast),
@@ -321,6 +323,7 @@
       if (frame.blastLinger == null) this.blastLinger.fill(0);
       if (frame.brickLinger == null) this.brickLinger.fill(0);
       if (frame.crateType != null) this.crateType = new Int8Array(frame.crateType);
+      this.graveyard = (frame.graveyard || []).map((x) => ({ type: x.type, isSuper: !!x.isSuper }));
       this.pushBoxes = (frame.pushBoxes || []).map((b) => ({
         o: b.o, cells: b.cells.slice(), eid: b.eid, dead: !!b.dead,
       }));
@@ -597,6 +600,16 @@
           }
         }
         if (covered[i] && this.bush[i]) this.bush[i] = 0;
+        // 爆炸水泡清理地图现有道具：消除并进入墓地
+        if (covered[i] && this.crate[i]) {
+          const type = this.crateType[i] >= 0 ? this.crateType[i] : Math.floor(this.rng() * 3);
+          const isSuper = this.superCrate[i] === 1;
+          this.graveyard.push({ type, isSuper });
+          this.crate[i] = 0;
+          this.superCrate[i] = 0;
+          this.recycle[i] = 0;
+          this.crateType[i] = -1;
+        }
       }
 
       // 5. 伤害判定：当前爆炸 + 之前 0.3s 余威覆盖区域均可扣血。
@@ -690,6 +703,11 @@
         if (this.rng() < 1.0) this._grow(p, isSuper, fAttr >= 0 ? fAttr : null);
       }
 
+      // 7. 飞鸟 30s（300 tick）大循环：非 UI 手动接管模式下自动落地墓地道具
+      if (!this._manualBird && this.t > 0 && this.t % 300 === 0 && this.graveyard.length > 0) {
+        this._flushGraveyard();
+      }
+
       const nAlive = (this.alive[0] ? 1 : 0) + (this.alive[1] ? 1 : 0);
       if (nAlive <= 1) {
         this.done = true;
@@ -702,12 +720,31 @@
     }
 
     _grow(p, isSuper, attrFixed) {
-      const add = isSuper ? 4 : 1;                 // 超级宝箱 +4 档
+      const add = isSuper ? 5 : 1;                 // 超级宝箱 +5 档（原 +4，再加一档）
       // 种类：炸开时已定(0/1/2)则用定好的；随机宝箱(问号)踩到才掷
       const attr = attrFixed != null ? attrFixed : Math.floor(this.rng() * 3);
-      if (attr === 0) this.bombsCap[p] = Math.min(this.bombsCap[p] + add, this.bombsMax);
-      else if (attr === 1) this.blastCap[p] = Math.min(this.blastCap[p] + add, this.blastMax);
-      else this.spdG[p] = Math.min(this.spdG[p] + add * CFG.growthSpeedStep, this.speedMax);
+      if (attr === 0) {
+        if (this.bombsCap[p] >= this.bombsMax) {
+          // 满属性溢出，进入墓地
+          this.graveyard.push({ type: 0, isSuper: !!isSuper });
+        } else {
+          this.bombsCap[p] = Math.min(this.bombsCap[p] + add, this.bombsMax);
+        }
+      } else if (attr === 1) {
+        if (this.blastCap[p] >= this.blastMax) {
+          // 满属性溢出，进入墓地
+          this.graveyard.push({ type: 1, isSuper: !!isSuper });
+        } else {
+          this.blastCap[p] = Math.min(this.blastCap[p] + add, this.blastMax);
+        }
+      } else {
+        if (this.spdG[p] >= this.speedMax - 1e-4) {
+          // 满属性溢出，进入墓地
+          this.graveyard.push({ type: 2, isSuper: !!isSuper });
+        } else {
+          this.spdG[p] = Math.min(this.spdG[p] + add * CFG.growthSpeedStep, this.speedMax);
+        }
+      }
     }
 
     _scatterRecycle(p, lost) {
@@ -738,6 +775,35 @@
         this.crate[pool[k]] = 1;
         this.recycle[pool[k]] = 1;
         this.crateType[pool[k]] = -1;   // 回收宝箱=随机(问号)
+      }
+    }
+
+    spawnGraveyardDrop(cell, type, isSuper) {
+      if (cell < 0 || cell >= N) return false;
+      if (this.wall[cell] || this.brick[cell]) return false;
+      this.crate[cell] = 1;
+      this.superCrate[cell] = isSuper ? 1 : 0;
+      this.crateType[cell] = type;
+      this.recycle[cell] = 0;
+      return true;
+    }
+
+    _flushGraveyard() {
+      if (!this.graveyard || this.graveyard.length === 0) return;
+      const candidates = [];
+      for (let i = 0; i < N; i++) {
+        if (!this.wall[i] && !this.brick[i] && !this.crate[i] && this.fuse[i] <= 0) {
+          candidates.push(i);
+        }
+      }
+      for (let i = candidates.length - 1; i > 0; i--) {
+        const j = Math.floor(this.rng() * (i + 1));
+        const tmp = candidates[i]; candidates[i] = candidates[j]; candidates[j] = tmp;
+      }
+      const count = Math.min(this.graveyard.length, candidates.length);
+      const toDrop = this.graveyard.splice(0, count);
+      for (let k = 0; k < toDrop.length; k++) {
+        this.spawnGraveyardDrop(candidates[k], toDrop[k].type, toDrop[k].isSuper);
       }
     }
 
