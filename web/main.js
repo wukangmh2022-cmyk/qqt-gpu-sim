@@ -1714,10 +1714,10 @@
               // 旧录像没有 brickLinger/covered 语义，只能用砖状态差分兼容。
               : frame.brick[i] === 0;
             if (prevFrame.brick[i] === 1 && newlyBurned && l1 && l1[i]) {
-              dieFx.set(i, { eid: Math.abs(l1[i]), until: nowMs + 350 });
+              dieFx.set(i, { eid: Math.abs(l1[i]), until: nowMs + 200 });
             }
             if (prevFrame.bush && prevFrame.bush[i] === 1 && frame.bush[i] === 0 && l0 && l0[i]) {
-              dieFx.set(i, { eid: Math.abs(l0[i]), until: nowMs + 350 });
+              dieFx.set(i, { eid: Math.abs(l0[i]), until: nowMs + 200 });
             }
             // 新出现的回收宝箱 = 掉血散落（对局 _scatterRecycle → flyFx）
             if (prevFrame.crate[i] === 0 && frame.crate[i] === 1 && frame.recycle[i] === 1) {
@@ -1941,10 +1941,10 @@
         const newlyBurned = sim.lastCovered && sim.lastCovered[i] &&
           prevBrickLinger[i] === 0;
         if (prevBrick[i] === 1 && newlyBurned && l1[i]) {
-          dieFx.set(i, { eid: Math.abs(l1[i]), until: performance.now() + 350 });
+          dieFx.set(i, { eid: Math.abs(l1[i]), until: performance.now() + 200 });
         }
         if (prevBush && prevBush[i] === 1 && sim.bush[i] === 0 && l0[i]) {
-          dieFx.set(i, { eid: Math.abs(l0[i]), until: performance.now() + 350 });
+          dieFx.set(i, { eid: Math.abs(l0[i]), until: performance.now() + 200 });
         }
       }
     }
@@ -2224,7 +2224,7 @@
       }
     }
 
-    // 砖被炸毁的中间态 (_die 帧)：短暂显示碎墙 ~0.35s，尾段淡出
+    // 砖/灌木被炸毁的中间态 (_die 帧)：固定 0.2s 碎墙动画，不遮挡水泡且不提前淡出
     if (dieFx.size) {
       const dieNow = performance.now();
       for (const [i, fx] of dieFx) {
@@ -2234,11 +2234,8 @@
         if (!img || !el) continue;
         const r = (i / W) | 0, c = i % W;
         const x = c * CELL - el.xo * SCALE, y = r * CELL - el.yo * SCALE;
-        const fade = Math.min(1, (fx.until - dieNow) / 150);
         items.push([tileZ(r, c) + 1, () => {
-          ctx.globalAlpha = fade;
           ctx.drawImage(img, x, y);
-          ctx.globalAlpha = 1;
         }]);
       }
     }
@@ -2268,6 +2265,7 @@
           // 1. 引爆源格画中心图 (Z = r * Z_ROW_STRIDE + 19)
           for (let i = 0; i < N; i++) {
             if (!explosionTrig[i]) continue;
+            if (dieFx.has(i)) continue;
             const r = (i / W) | 0, c = i % W;
             items.push([r * Z_ROW_STRIDE + 19, centerImg, c * CELL, r * CELL]);
           }
@@ -2333,8 +2331,11 @@
 
               for (let k = 1; k <= activeLen; k++) {
                 const r = sr + dr * k, c = sc + dc * k;
+                const cellIdx = r * W + c;
                 // 如果该格本身是另一个引爆中心格，优先保留中心格显示
-                if (explosionTrig[r * W + c]) continue;
+                if (explosionTrig[cellIdx]) continue;
+                // 当炸弹威力覆盖到可炸毁墙体：在 0.2s 碎墙动画期间不显示水泡，播放完毕后立刻显现水泡
+                if (dieFx.has(cellIdx)) continue;
                 const img = (k === activeLen)
                   ? res.flames[dirKey][tipFrame]
                   : res.flames[dirKey][bodyFrame];
@@ -2348,6 +2349,7 @@
           // 降级回退 (res.flames 尚未就绪时)
           for (let i = 0; i < N; i++) {
             if (!explosionTrig[i]) continue;
+            if (dieFx.has(i)) continue;
             const r = (i / W) | 0, c = i % W;
             items.push([r * Z_ROW_STRIDE + 19, res.exploCenter, c * CELL, r * CELL]);
           }
