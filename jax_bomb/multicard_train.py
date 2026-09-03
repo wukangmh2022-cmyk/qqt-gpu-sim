@@ -254,6 +254,10 @@ def main():
     ap.add_argument("--patch", type=int, default=cfg("model", "patch", 3))
     ap.add_argument("--heads", type=int, default=cfg("model", "heads", 4))
     ap.add_argument("--ff-factor", type=float, default=cfg("model", "ff_factor", 4))
+    ap.add_argument("--init-params", default=os.environ.get(
+        "INIT_PARAMS", cfg("model", "init_params", None)),
+                    help="热启动预训练参数路径（如 ckpt/params_it00000068...pkl）。"
+                         "在拓扑改变（如 16卡->48卡）或开启长周期新阶段时直接注入已收敛的权重")
     ap.add_argument("--num-envs", type=int, default=cfg("rollout", "num_envs", 4096))
     ap.add_argument("--num-steps", type=int, default=cfg("rollout", "num_steps", 256))
     ap.add_argument("--minibatch", type=int, default=cfg("rollout", "minibatch", 4096))
@@ -617,9 +621,16 @@ def main():
             for l in range(n_local)])
         pkey = jrandom.PRNGKey(args.seed + 9999)
         obs_ch = 13 if args.legacy_obs13 else N_OBS_CH
-        params = init_net(pkey, args.arch, obs_ch, H, W,
-                          embed=args.embed, depth=args.depth, patch=args.patch,
-                          heads=args.heads, ff_factor=args.ff_factor)
+        if getattr(args, "init_params", None) and os.path.exists(args.init_params):
+            with open(args.init_params, "rb") as f_init:
+                raw_init = pickle.load(f_init)
+            init_tree = raw_init.get("params", raw_init)
+            params = jax.tree.map(jnp.asarray, init_tree)
+            print(f"[{rank}] ★ Warm-Start: 成功从预训练快照载入基础权重: {args.init_params}", flush=True)
+        else:
+            params = init_net(pkey, args.arch, obs_ch, H, W,
+                              embed=args.embed, depth=args.depth, patch=args.patch,
+                              heads=args.heads, ff_factor=args.ff_factor)
         opt_state = opt.init(params)
         keys = jrandom.split(jrandom.PRNGKey(args.seed * 7919 + rank), n_local)
         write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] RUN start: "

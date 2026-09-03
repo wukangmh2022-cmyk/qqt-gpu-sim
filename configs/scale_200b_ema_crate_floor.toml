@@ -29,6 +29,7 @@ patch = 3
 heads = 4
 ff_factor = 4
 obs_channels = 14                    # 14 通道 (含可推箱通道)
+init_params = "ckpt/params_it00000068_hlgauss_top25foractor_patch3_k32.pkl" # [热启动底模] 继承 it68 (570M步) 战力起点
 ema_decay = 0.999                    # [Generals.io 核心技术] 权重指数平均，提供 +30~50 Elo 平滑增益
 
 [rollout]
