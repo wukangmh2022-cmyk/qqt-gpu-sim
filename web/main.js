@@ -2273,8 +2273,16 @@
           }
 
           // 2. 臂：从引爆源向 4 方向按实际长度画
-          // 中间格动画帧（帧 2, 3, 4 轮播）
-          const bodyFrame = 2 + (Math.floor(age * 20) % 3);
+          // 中间格子：整个 B + C 前 0.25s (0.06s ~ 0.39s 共 330ms) 视为整体，均匀播放 2 -> 3 -> 4 帧 (每帧 110ms)
+          let bodyFrame;
+          if (age < 0.06) {
+            bodyFrame = 2;
+          } else if (age < 0.39) {
+            const bodyProg = (age - 0.06) / 0.33;
+            bodyFrame = 2 + Math.min(2, Math.floor(bodyProg * 3));
+          } else {
+            bodyFrame = 4;
+          }
 
           for (let i = 0; i < N; i++) {
             if (!explosionTrig[i]) continue;
@@ -2293,18 +2301,18 @@
 
               // 根据扩散时间线确定当前有效展示长度 activeLen 与边缘格的帧:
               let activeLen = n;
-              let tipFrame = 5;
+              let tipFrame = 1;
 
               if (age < 0.06) {
                 // A 阶段 [0.00 ~ 0.06s]: 仅波及威力=1 范围，使用帧 1（炸开花初始边缘形态）
                 activeLen = Math.min(n, 1);
                 tipFrame = 1;
               } else if (age < 0.14) {
-                // B 阶段 [0.06 ~ 0.14s]: 扩散到最远处，边缘使用帧 5
+                // B 阶段 [0.06 ~ 0.14s]: 扩散到最远处，边缘使用帧 1（与阶段 C 接续）
                 activeLen = n;
-                tipFrame = 5;
+                tipFrame = 1;
               } else {
-                // C 阶段 [0.14 ~ 0.45s]: 动画消散收汁，边缘按 1 -> 5 -> 1 -> 6 脉动消散
+                // C 阶段 [0.14 ~ 0.45s]: 动画消散收汁，边缘按 1 -> 5 -> 1 -> 6 连贯消散
                 // 后 0.06s (0.39s ~ 0.45s) 收缩回威力=1 范围收尾
                 activeLen = age < 0.39 ? n : Math.min(n, 1);
                 if (age < 0.20) {
