@@ -3,7 +3,7 @@
 长训使用带注释的 TOML 文件作为参数清单，例如：
 
 ```bash
-python3 -m jax_bomb.train_real --config configs/repro_it68_asym_timeout_k64.toml
+python3 -m jax_bomb.train_real --config configs/repro_it68_asym_timeout_k64_failed.toml
 ```
 
 `scripts/launch_8node_it68_hlgauss_top25_patch3.sh` 默认读取同一份配置；

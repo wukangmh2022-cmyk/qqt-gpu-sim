@@ -24,7 +24,7 @@ for mpi in /usr/mpi/gcc/openmpi-*/lib/libmpi.so* /public/software/mpi/*/lib/libm
 done
 export WORLD_SIZE="${WORLD_SIZE:-1}" RANK="${RANK:-0}"
 export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}" MASTER_PORT="${MASTER_PORT:-29520}"
-CONFIG="${TRAIN_CONFIG:-$REPO/configs/repro_it68_asym_timeout_k64.toml}"
+CONFIG="${TRAIN_CONFIG:-$REPO/configs/repro_it68_asym_timeout_k64_failed.toml}"
 if [[ ! -f "$CONFIG" ]]; then
   echo "ERROR: 找不到 TRAIN_CONFIG=$CONFIG" >&2; exit 2
 fi
