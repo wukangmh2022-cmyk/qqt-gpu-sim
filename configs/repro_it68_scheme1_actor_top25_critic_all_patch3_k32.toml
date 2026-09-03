@@ -62,7 +62,6 @@ timeout_trail_penalty = 0.0
 timeout_draw_bonus = 0.0
 adv_top_frac = 0.25                  # [证据] Actor Top25%；Critic 全量
 crate_reward_coef = 0.5              # [证据]
-crate_reward_floor = 0.05            # [150B-200B 规模优化] 10% 终身保底底噪，防止后期遗忘开箱吃道具
 crate_reward_anneal_steps = 30000000000 # [证据]
 explore_reward_coef = 0.0            # [证据]
 explore_reward_anneal_steps = 0      # [证据]
