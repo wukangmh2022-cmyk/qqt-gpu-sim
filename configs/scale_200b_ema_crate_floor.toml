@@ -17,7 +17,7 @@
 
 [run]
 name = "scale_200b_ema_crate_floor_scheme1"
-iters = 24000                         # 24k iters (在 16.78M steps/iter 下约 200B 全局环境步)
+iters = 12000                         # 12k iters (在 16.78M steps/iter 下精准对应 201.3B 全局环境步)
 seed = 42
 fresh = true
 
@@ -33,9 +33,9 @@ init_params = "ckpt/params_it00000068_hlgauss_top25foractor_patch3_k32.pkl" # [�
 ema_decay = 0.999                    # [Generals.io 核心技术] 权重指数平均，提供 +30~50 Elo 平滑增益
 
 [rollout]
-num_envs = 16384                     # 多卡环境并行数
-num_steps = 256                      # 每次采样步长
-minibatch = 16384
+num_envs = 32768                     # 24机48卡集群并行环境数 (单卡 682 envs)
+num_steps = 256                      # 每次采样步长 (单轮 steps = 2 * 32768 * 256 = 16.78M)
+minibatch = 32768
 epochs = 2
 
 [optimizer]
@@ -81,9 +81,9 @@ v_max = 20.0
 sigma = 1.5
 
 [distributed]
-world_size = 8
-local_gpus = 2
-lsgd_k = 32                          # Local-SGD param 模式
+world_size = 24                      # 24 机器
+local_gpus = 2                       # 每机 2 卡 (总计 48 卡)
+lsgd_k = 256                         # Local-SGD 周期 (对齐 launch_24nodes.sh)
 lsgd_mode = "param"
 lsgd_bf16 = false
 lsgd_sync_state = false
@@ -93,7 +93,7 @@ levels = "levels.json"               # 标准 241 张 QQ堂官方地图池
 level_weights = "empty=0.05,功夫=0.1,比武=0.15"
 curriculum_json = ""
 radius = 0.36
-n_total = 16
+n_total = 48                         # 总 GPU 卡数
 map = "13x15"
 
 [runtime]
@@ -109,8 +109,8 @@ eval_every = 0
 
 [checkpoint]
 ckpt_dir = "runs/scale_200b_ema_crate_floor_scheme1/ckpt"
-ckpt_every = 30                      # 每 30 分钟落盘全量断点
-ckpt_max_to_keep = 3                 # 滚动仅保留最新 3 个全量恢复档 (严控磁盘总占用 < 15GB)
+ckpt_every = 30                      # 每 30 分钟落盘全量恢复档 (每卡一份)
+ckpt_max_to_keep = 3                 # 滚动仅保留最新 3 个全量恢复档 (严控云端磁盘总占用 < 15GB)
 ckpt_local_dir = "runs/scale_200b_ema_crate_floor_scheme1/ckpt_local"
-ckpt_local_every = 10                # 每 10 分钟落盘 Rank0 轻量参数快照 (供 Watchdog 评测)
+ckpt_local_every = 15                # 每 15 分钟落盘 Rank0 轻量参数快照 (供 Watchdog 评测与 AI 巡检)
 ckpt_local_max_to_keep = 10          # 滚动仅保留最新 10 个评估快照
