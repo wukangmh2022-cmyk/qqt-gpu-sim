@@ -2444,10 +2444,16 @@
     }
 
     // 飞鸟巡航控制器：30s 一个循环（前 25s 冷却，后 5s 飞行）
-    if (res.birdFrames && running && !sim.done && gameStartTime > 0) {
-      const elapsedS = (now - gameStartTime) / 1000;
-      const cycleIndex = Math.floor(elapsedS / 30);
-      const cycleTime = elapsedS % 30; // 0 ~ 30s
+    // 严格与倒计时时钟（sim.t / 10）绑定对齐：
+    // - 倒计时 180s（t=0）开局；
+    // - 倒计时 155s（t=25s，即 sim.t=250）第一只鸟准时从右侧场外开始向左飞入；
+    // - 倒计时 153s（t=27s，即 sim.t=270）飞鸟头部进入画面右边界；
+    // - 倒计时 150s（t=30s，即 sim.t=300）飞鸟完全飞离画面左边界，并向大地空投墓地道具！
+    if (res.birdFrames && running && !sim.done) {
+      const subTick = Math.min(1.0, Math.max(0.0, (now - lastTickT) / (TICK * 1000)));
+      const matchElapsedS = (sim.t + subTick) / CFG.tickHz;
+      const cycleIndex = Math.floor(matchElapsedS / 30);
+      const cycleTime = matchElapsedS % 30; // 0 ~ 30s
       if (cycleTime >= 25.0) {
         const flightTime = cycleTime - 25.0; // 0 ~ 5s
         // 帧动画：1s 播放一轮（0.5s 一帧）

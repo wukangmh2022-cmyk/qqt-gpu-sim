@@ -41,11 +41,11 @@
     // 成长（corridor 起步）
     growthBombsStart: 2, growthBlastStart: 2, growthSpeedStart: 1.3,
     growthBombsMax: 10, growthBlastMax: 8,
-    growthSpeedMax: 2.1, growthSpeedStep: 0.8 / 7,   // 7档: (2.1-1.3)/7 ≈ 0.1143
+    growthSpeedMax: 2.3, growthSpeedStep: 1.0 / 7,   // 7档: (2.3-1.3)/7 ≈ 0.142857
     // open 关起步 = 上限 80%（与训练一致）
     openGrowthBombs: Math.ceil(10 * 0.8),        // 8
     openGrowthBlast: Math.ceil(7 * 0.8),         // 6
-    openGrowthSpeed: Math.round(2.1 * 0.8 * 100) / 100,  // 1.68
+    openGrowthSpeed: Math.round(2.3 * 0.8 * 100) / 100,  // 1.84
     // 地图
     corridorWidth: 5, topWallRows: 4,
     // 宝箱
@@ -408,7 +408,7 @@
       // 属性上限标准化在地图文件里（所有地图威力上限=8, 空场景速上限=2.2）
       this.bombsMax = level.bombs_max || CFG.growthBombsMax;
       this.blastMax = level.blast_max || CFG.growthBlastMax;
-      this.speedMax = level.speed_max || CFG.growthSpeedMax;
+      this.speedMax = CFG.growthSpeedMax;   // 所有场景的最大速度统一为 2.3
       // 空场景：开局中心十字宝箱直接放地上（踩到必升）
       if (level.initial_crates && level.initial_crates.length) {
         for (const [r, c] of level.initial_crates) {
@@ -667,17 +667,10 @@
         for (let p = 0; p < 2; p++) {
           const dmg = hpBefore[p] - this.hp[p];
           if (dmg <= 0 || !alive0[p]) continue;
-          // 扣减档数: min 1 档, max 2 档, 中间 = 现在属性的 25%
-          //   泡 = 当前泡上限的 25%; 威 = 当前威力的 25%;
-          //   速 = 当前速度相对起点档数的 25%
-          const lossOf = (cur, start, step) =>
-            Math.min(2, Math.max(1, Math.round(0.25 * (cur - start) / step)));
-          const lb = lossOf(this.bombsCap[p], this.loBombs[p], 1);
-          const lz = lossOf(this.blastCap[p], this.loBlast[p], 1);
-          const ls = lossOf(this.spdG[p], this.loSpeed[p], CFG.growthSpeedStep);
-          const nb = Math.max(this.bombsCap[p] - lb, this.loBombs[p]);
-          const nz = Math.max(this.blastCap[p] - lz, this.loBlast[p]);
-          const ns = Math.max(this.spdG[p] - ls * CFG.growthSpeedStep, this.loSpeed[p]);
+          // 掉血惩罚：总是每个属性 -1 档（简化并降低惩罚）
+          const nb = Math.max(this.bombsCap[p] - 1, this.loBombs[p]);
+          const nz = Math.max(this.blastCap[p] - 1, this.loBlast[p]);
+          const ns = Math.max(this.spdG[p] - CFG.growthSpeedStep, this.loSpeed[p]);
           const lost = (this.bombsCap[p] - nb) + (this.blastCap[p] - nz) +
             Math.round((this.spdG[p] - ns) / CFG.growthSpeedStep);
           this.bombsCap[p] = nb; this.blastCap[p] = nz; this.spdG[p] = ns;

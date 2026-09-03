@@ -260,7 +260,7 @@ def main():
             "crate_rate": d["meta"]["crate_rate"],
             "bombs_max": d.get("bombs_max", 10),
             "blast_max": d.get("blast_max", 8),
-            "speed_max": d.get("speed_max", 2.1),
+            "speed_max": 2.3,
             "crate_super_fraction": d["meta"].get("crate_super_fraction", 0),
             "crate_expect": d["meta"].get("crate_expect", {}),
             "crate_coverage": d["meta"]["crate_coverage"],

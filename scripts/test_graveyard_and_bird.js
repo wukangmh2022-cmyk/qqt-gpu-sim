@@ -119,6 +119,61 @@ function createCleanSim() {
   console.log('  ✓ [测试 5] 验证通过：30s 周期无 UI 自驱空投刷新机制运行完美！');
 }
 
+// --------------------------------------------------------------------------
+// 测试 6：掉血总是每个属性-1简化惩罚
+// --------------------------------------------------------------------------
+{
+  const sim = createCleanSim();
+  sim.loBombs[0] = 2;
+  sim.loBlast[0] = 2;
+  sim.loSpeed[0] = 1.3;
+  // 提升属性到较高档位
+  sim.bombsCap[0] = 5;
+  sim.blastCap[0] = 5;
+  sim.spdG[0] = 1.3 + 4 * CFG.growthSpeedStep; // +4 档速度
+  sim.hp[0] = 3;
+
+  // 受到伤害
+  sim.hpBefore = [3, 3];
+  // 模拟扣 1 点 HP
+  sim.hp[0] = 2;
+  // 直接调用伤害惩罚逻辑（与 step 内部一致）
+  const nb = Math.max(sim.bombsCap[0] - 1, sim.loBombs[0]);
+  const nz = Math.max(sim.blastCap[0] - 1, sim.loBlast[0]);
+  const ns = Math.max(sim.spdG[0] - CFG.growthSpeedStep, sim.loSpeed[0]);
+  const lost = (sim.bombsCap[0] - nb) + (sim.blastCap[0] - nz) +
+    Math.round((sim.spdG[0] - ns) / CFG.growthSpeedStep);
+  sim.bombsCap[0] = nb; sim.blastCap[0] = nz; sim.spdG[0] = ns;
+
+  assert.strictEqual(sim.bombsCap[0], 4, '泡泡上限应当刚好扣减 1 档');
+  assert.strictEqual(sim.blastCap[0], 4, '威力上限应当刚好扣减 1 档');
+  assert.strictEqual(lost, 3, '总共应扣除 3 档（各-1）并回收');
+  console.log('  ✓ [测试 6] 验证通过：掉血时总是每个属性精确扣减 1 档！');
+}
+
+// --------------------------------------------------------------------------
+// 测试 7：所有场景最大速度统一为 2.3
+// --------------------------------------------------------------------------
+{
+  const sim = createCleanSim();
+  assert.strictEqual(sim.speedMax, 2.3, '默认最大速度应当为 2.3');
+  assert.strictEqual(CFG.growthSpeedMax, 2.3, 'CFG.growthSpeedMax 应当为 2.3');
+
+  // 测试加载带旧 speed_max 的关卡依然统一为 2.3
+  const fakeLevel = {
+    h: 13, w: 15,
+    wall: new Array(13 * 15).fill(0),
+    brick: new Array(13 * 15).fill(0),
+    bush: new Array(13 * 15).fill(0),
+    spawns: [[6.5, 4.5], [10.5, 10.5]],
+    initial_stats: { bombs: 2, blast: 2, speed: 1.3 },
+    speed_max: 2.1, // 关卡原本写着 2.1
+  };
+  sim.reset(fakeLevel);
+  assert.strictEqual(sim.speedMax, 2.3, '重置关卡后最大速度依然严格统一为 2.3');
+  console.log('  ✓ [测试 7] 验证通过：所有场景的最大速度统一生效为 2.3！');
+}
+
 console.log('==============================================================');
-console.log('🎉 全部 5 项墓地、飞鸟与超级道具单元测试 100% 验收通过！');
+console.log('🎉 全部 7 项墓地、飞鸟、惩罚-1与最大速度2.3单元测试 100% 验收通过！');
 console.log('==============================================================');

@@ -86,11 +86,11 @@ WALL_DENSITY = 0.45          # corridor 边缘连续 brick 段概率
 GROWTH_BOMBS_START, GROWTH_BLAST_START = 2, 2   # corridor 初始
 GROWTH_SPEED_START = 1.0
 GROWTH_BOMBS_MAX, GROWTH_BLAST_MAX = MAX_BOMBS, BLAST   # 上限
-GROWTH_SPEED_MAX = 2.1
+GROWTH_SPEED_MAX = 2.3
 GROWTH_SPEED_STEP = 0.15
 OPEN_GROWTH_BOMBS, OPEN_GROWTH_BLAST, OPEN_GROWTH_SPEED = 3, 3, 0.84  # open 初始
 CRATE_PROB = 0.5             # corridor 炸砖宝箱爆率（open 关恒 1.0 必升）
-HIT_ATTR_PENALTY = 2         # 掉血扣泡/威/速各几层（clamp 回模式起点）
+HIT_ATTR_PENALTY = 1         # 掉血总是每个属性-1（处罚小一些）
 OPEN_CRATE_CROSS = True      # open 关开局中心十字宝箱池（≈46 格，100% 有东西）
 MAX_RECYCLE = 2 * 3 * HIT_ATTR_PENALTY   # 单 tick 掉血回收箱上限（2 玩家 × 3 属性 × 层数）
 
