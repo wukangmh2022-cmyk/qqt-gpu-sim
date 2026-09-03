@@ -500,8 +500,12 @@ function renderTable() {
       ? ` <span class="badge" style="background: #f59e0b; color: #fff; font-size: 0.72rem;" title="${h.milestoneReason || '里程碑'}">👑 里程碑</span>`
       : '';
 
+    const alphaBadge = h.meta?.annealed_hyperparams?.alpha !== undefined
+      ? `<br><small style="color: #38bdf8;">α=${h.meta.annealed_hyperparams.alpha.toFixed(2)}</small>`
+      : '';
+
     tr.innerHTML = `
-      <td><strong>${h.modelName}</strong>${milestoneBadge}</td>
+      <td><strong>${h.modelName}</strong>${milestoneBadge}${alphaBadge}</td>
       <td>${h.timestamp}</td>
       <td>${h.evalDurationSeconds}s</td>
       <td>${ohStr}</td>

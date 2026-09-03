@@ -167,7 +167,7 @@ def newest_ckpt(ckpt_dir, rank):
     return max(files, key=lambda p: int(os.path.basename(p).split("_")[1]))
 
 
-def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg, max_to_keep=3):
+def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg, max_to_keep=3, meta=None):
     """每个 rank 存自己的文件（states/keys 每 rank 不同；params/opt_state
     跨 rank 一致）。host 数组序列化，加载时转回 jax 数组。自动滚动清理旧存档。"""
     path = ckpt_file(ckpt_dir, rank, it)
@@ -178,8 +178,20 @@ def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg, max_to_k
                    "opt_state": jax.tree.map(np.asarray, opt_state),
                    "states": jax.tree.map(np.asarray, states),
                    "keys": np.asarray(keys)}
+        if meta is not None:
+            payload["meta"] = meta
         with open(path, "wb") as f:
             pickle.dump(payload, f)
+
+        # 在 rank0 额外落盘同名伴生 JSON 元数据文件 (方便不解包直接查看超参退火状态)
+        if rank == 0 and meta is not None:
+            import json
+            meta_json_path = os.path.join(ckpt_dir, f"ckpt_{it:08d}.meta.json")
+            try:
+                with open(meta_json_path, "w", encoding="utf-8") as f_meta:
+                    json.dump(meta, f_meta, indent=2, ensure_ascii=False)
+            except Exception as e_meta:
+                print(f"[{rank}] WARN: 伴生元数据写入失败: {e_meta}", flush=True)
 
         # 滚动清理：仅保留本 rank 最新的 max_to_keep 个全量检查点，防止云端磁盘爆满 (保持 <30GB)
         if max_to_keep > 0:
@@ -190,6 +202,11 @@ def save_ckpt(ckpt_dir, rank, it, params, opt_state, states, keys, cfg, max_to_k
                 for old_f in files[:-max_to_keep]:
                     try:
                         os.remove(old_f)
+                        if rank == 0:
+                            old_stem = os.path.basename(old_f).split("_r")[0]
+                            old_meta = os.path.join(ckpt_dir, f"{old_stem}.meta.json")
+                            if os.path.exists(old_meta):
+                                os.remove(old_meta)
                     except OSError:
                         pass
     except Exception as e:
@@ -810,6 +827,34 @@ def main():
         print(f"[{rank}] {line}", flush=True)
         write_result(rank,
                      [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {line}"])
+        # 构造当前轮次真实退火超参与训练遥测元数据快照 (Metadata Snapshot)
+        iter_meta = {
+            "iteration": i,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "global_steps": gs,
+            "curriculum_stage": cur_stage if curriculum is not None else 0,
+            "annealed_hyperparams": {
+                "alpha": float(alpha),
+                "alpha_fix": float(alpha_fix),
+                "alpha_dyn": float(alpha_dyn),
+                "lose_bonus": float(lose_bonus),
+                "crate_coef": float(crate_coef),
+                "explore_coef": float(explore_coef),
+                "brick_coef": float(brick_coef),
+                "lr": float(lr_fn(i)) if "lr_fn" in locals() and callable(lr_fn) else None
+            },
+            "training_telemetry": {
+                "loss": float(loss_i),
+                "mean_reward": float(rew_m),
+                "explore_reward": float(exp_m),
+                "kill_rate": float(kill_r),
+                "sps": float(sps_i),
+                "sps_avg": float(sps_avg),
+                "ep_len": float(ep_len) if not np.isnan(ep_len) else None,
+                "dt": float(dt_i)
+            }
+        }
+
         # 周期存盘（间隔分钟；0=只在结束/信号时存）；末 iter / 信号也存
         if args.ckpt_dir and (i == args.iters or stop_flag["v"]
                               or (args.ckpt_every > 0
@@ -817,7 +862,8 @@ def main():
                                   >= args.ckpt_every * 60)):
             if save_ckpt(args.ckpt_dir, rank, i,
                          res[0], res[1], res[2], res[3], cfg,
-                         max_to_keep=args.ckpt_max_to_keep):
+                         max_to_keep=args.ckpt_max_to_keep,
+                         meta=iter_meta):
                 print(f"[{rank}] ckpt saved: "
                       f"{ckpt_file(args.ckpt_dir, rank, i)}", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
@@ -835,9 +881,16 @@ def main():
                                  f"params_it{i:08d}.pkl")
                 with open(p, "wb") as f:
                     pickle.dump(jax.tree.map(np.asarray, res[0]), f)
-                print(f"[{rank}] params snapshot -> {p}", flush=True)
+
+                # 同步写入伴生元数据 JSON 文件 (零侵入，直接记录当轮退火超参)
+                meta_p = os.path.join(args.ckpt_local_dir, f"params_it{i:08d}.meta.json")
+                import json
+                with open(meta_p, "w", encoding="utf-8") as f_meta:
+                    json.dump(iter_meta, f_meta, indent=2, ensure_ascii=False)
+
+                print(f"[{rank}] params snapshot -> {p} (meta -> {meta_p})", flush=True)
                 write_result(rank, [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                                    f"params snapshot iter {i}"])
+                                    f"params snapshot iter {i} (alpha={alpha:.3f})"])
                 # 滚动清理：仅保留最新 ckpt_local_max_to_keep 个轻量快照，严控云端磁盘 < 30GB
                 if getattr(args, "ckpt_local_max_to_keep", 10) > 0:
                     import glob
@@ -846,6 +899,9 @@ def main():
                         for old_p in local_files[:-args.ckpt_local_max_to_keep]:
                             try:
                                 os.remove(old_p)
+                                old_meta = old_p.replace(".pkl", ".meta.json")
+                                if os.path.exists(old_meta):
+                                    os.remove(old_meta)
                             except OSError:
                                 pass
                 last_local_save = time.time()

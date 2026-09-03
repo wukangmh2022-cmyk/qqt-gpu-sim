@@ -137,10 +137,23 @@ def run_eval(model_name, games=32, workers=4):
     elo_fh = compute_elo(fh_wr, 1500)
     composite_elo = round(0.4 * elo_oh + 0.6 * elo_fh)
 
+    # 检查是否存在伴生元数据 meta.json
+    meta_info = None
+    for d in CKPT_DIRS:
+        meta_cand = os.path.join(d, f"{model_name}.meta.json")
+        if os.path.exists(meta_cand):
+            try:
+                with open(meta_cand, "r", encoding="utf-8") as f_meta:
+                    meta_info = json.load(f_meta)
+                break
+            except Exception:
+                pass
+
     return {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "modelName": model_name,
         "iteration": iteration,
+        "meta": meta_info,
         "elo": {
             "anchor": 1500,
             "vsOpenHunter": elo_oh,

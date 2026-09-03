@@ -68,6 +68,29 @@
       "severity": "info",
       "issues": [],
       "checkedAt": "2026-09-03 09:36:50"
+    },
+    "meta": {
+      "iteration": 68,
+      "timestamp": "2026-09-03 09:36:50",
+      "global_steps": 1676467200,
+      "curriculum_stage": 2,
+      "annealed_hyperparams": {
+        "alpha": 0.32,
+        "alpha_fix": 0.39,
+        "alpha_dyn": 0.82,
+        "lose_bonus": -0.52,
+        "crate_coef": 0.032,
+        "explore_coef": 0.016,
+        "brick_coef": 0.008,
+        "lr": 0.00025
+      },
+      "training_telemetry": {
+        "loss": 1.2872,
+        "mean_reward": 0.0,
+        "kill_rate": 0.89,
+        "sps": 1093779,
+        "ep_len": 229.1
+      }
     }
   }
 ]
