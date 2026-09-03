@@ -37,10 +37,18 @@ header h1 { margin: 6px 0 6px; font-size: 22px; }
 .win-label-p0 {
   color: #ff6b6b;
   font-weight: bold;
+  max-width: 38%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .win-label-p1 {
   color: #5aa7ff;
   font-weight: bold;
+  max-width: 38%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .win-vs {
   font-size: 12px;

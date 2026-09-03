@@ -2358,23 +2358,54 @@
     const aiName = (sel) => sel === HUNTER_VAL ? '规则 Hunter' : (sel || '模型');
     const p0Kind = elSpectate.checked ? aiName(p0Sel) : '你';
     const p1Kind = aiName(enemySel);
-    // 第 1 行：双方状态各自合并成一行（名字 + HP/属性同排），右侧倒计时（无 tick）
+    // 辅助文本截断函数，保证模型名过长时属性不被推出视野
+    function truncateText(text, maxWidth) {
+      if (!text || ctx.measureText(text).width <= maxWidth) return text;
+      let low = 0, high = text.length;
+      let res = text;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        const candidate = text.slice(0, mid) + '…';
+        if (ctx.measureText(candidate).width <= maxWidth) {
+          res = candidate;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      return res;
+    }
+
+    // 第 1 行：双方状态各自合并成一行（名字截断 + HP/属性同排），右侧倒计时（无 tick）
     const colors = ['#ff6b6b', '#5aa7ff'];
-    const leftHalf = BOARD_PX * 0.46;
+    const pWidth = 350; // 单阵营占用上限，右侧保留 180px 供倒计时与地图信息
     for (let p = 0; p < 2; p++) {
       const name = p === 0 ? p0Kind : p1Kind;
       const tag = sim.alive[p] ? `P${p}` : `P${p}·阵亡`;
-      const bx = 18 + p * leftHalf;
-      const nameStr = `${name}（${tag}）`;
+      const bx = 18 + p * pWidth;
+      const tagStr = `（${tag}）`;
+      const attrStr = `HP ${sim.hp[p]}/${CFG.maxHp} · 泡 ${sim.bombsCap[p]} · 威 ${sim.blastCap[p]} · 速 ${sim.spdG[p].toFixed(2)}`;
+
+      ctx.font = '12px sans-serif';
+      const attrW = ctx.measureText(attrStr).width;
+
+      ctx.font = 'bold 13px sans-serif';
+      const tagW = ctx.measureText(tagStr).width;
+
+      // 动态截断模型名字：给属性、标签留足空间（至少保留 40px 名字宽度）
+      const maxNameW = Math.max(40, pWidth - attrW - tagW - 14);
+      const truncatedName = truncateText(name, maxNameW);
+      const nameStr = `${truncatedName}${tagStr}`;
+      const nameW = ctx.measureText(nameStr).width;
+
       ctx.textAlign = 'left'; ctx.textBaseline = 'top';
       ctx.fillStyle = colors[p];
       ctx.font = 'bold 13px sans-serif';
-      const nameW = ctx.measureText(nameStr).width;
       ctx.fillText(nameStr, bx, y0 + 10);
+
       ctx.fillStyle = '#e8e6df';
       ctx.font = '12px sans-serif';
-      ctx.fillText(`HP ${sim.hp[p]}/${CFG.maxHp} · 泡 ${sim.bombsCap[p]} · 威 ${sim.blastCap[p]} · 速 ${sim.spdG[p].toFixed(2)}`,
-                   bx + nameW + 8, y0 + 12);
+      ctx.fillText(attrStr, bx + nameW + 6, y0 + 12);
     }
     // 倒计时（剩余秒，倒着走）
     const remain = Math.max(0, Math.ceil(CFG.maxSteps / CFG.tickHz - sim.t / CFG.tickHz));
@@ -2388,7 +2419,7 @@
     ctx.fillText(`地图：${lvN} · 对局 #${gameSeed % 100000}`,
                  BOARD_PX - 18, y0 + 30);
 
-    // ---- 实时 AI 胜率评估条 (Real-Time Win Probability Bar) ----
+    // ---- 实时 AI 胜率评估 (仅同步更新网页顶部 Header 胜率条，去除底部冗余胜率条) ----
     const em = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
     let p0WinProb = 0.5;
     if (replayExporting && replayWinProb !== null) {
@@ -2406,7 +2437,6 @@
       }
       currentWinProb = p0WinProb;
     }
-    const p1WinProb = 1.0 - p0WinProb;
 
     // 同步更新网页顶部 Header 胜率条 (Header Win Probability Gauge)
     if (elP0WinFill) {
@@ -2420,36 +2450,19 @@
       if (elP1WinName) elP1WinName.textContent = `敌人：${p1Kind}`;
     }
 
-    // 绘制底部 HUD 胜率条
-    const barX = 18;
-    const barY = y0 + 48;
-    const barW = BOARD_PX - 36;
-    const barH = 14;
-    const splitX = barX + Math.round(barW * p0WinProb);
-
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(barX, barY, barW, barH);
-    ctx.fillStyle = '#ff6b6b'; // P0 红色
-    ctx.fillRect(barX, barY, Math.max(0, splitX - barX), barH);
-    ctx.fillStyle = '#5aa7ff'; // P1 蓝色
-    ctx.fillRect(splitX, barY, Math.max(0, barX + barW - splitX), barH);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(splitX - 1, barY - 1, 2, barH + 2);
-
-    ctx.font = 'bold 11px sans-serif';
-    ctx.fillStyle = '#ffffff';
+    // 第 2 行：完整对阵模型明细（辅助文本，替代底部重复胜率条）
     ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`${p0Kind} ${(p0WinProb * 100).toFixed(0)}%`, barX + 6, barY + barH / 2);
-    ctx.textAlign = 'right';
-    ctx.fillText(`${(p1WinProb * 100).toFixed(0)}% ${p1Kind}`, barX + barW - 6, barY + barH / 2);
-
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = '#5a6275';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#64748b';
     ctx.font = '11px sans-serif';
-    ctx.fillText(`敌人：${em ? modelDisplayName(em.meta) + '（' + fmtStep(em.meta.global_step) + '步）' : p1Kind}`,
-                 18, y0 + 78);
+    const p0Full = elSpectate.checked && p0Sel && p0Sel !== HUNTER_VAL && modelCache.get(p0Sel)
+      ? `${modelDisplayName(modelCache.get(p0Sel).meta)}（${fmtStep(modelCache.get(p0Sel).meta.global_step)}步）`
+      : p0Kind;
+    const p1Full = em
+      ? `${modelDisplayName(em.meta)}（${fmtStep(em.meta.global_step)}步）`
+      : p1Kind;
+    const vsInfo = `红方(P0)：${p0Full}   ⚔️   蓝方(P1)：${p1Full}`;
+    ctx.fillText(truncateText(vsInfo, BOARD_PX - 36), 18, y0 + 46);
   }
 
   // ------------------------------------------------------------ 主循环
