@@ -2029,7 +2029,7 @@
   //         （角色盖住结构）；角色中心**完全进入足迹**时才把结构 z 抬到角色
   //         之上（挡在前面），并在进入瞬间播放果冻扭动动画（横/纵不同相位
   //         的缩放，像钻进小房子那样扭一下）。
-  const Z_ROW_STRIDE = 24;                 // 纵向主序步长 (各行严格按 24 隔离，行内：墙体 0..15、道具 16、泡泡 17、人物 18、火焰 19)
+  const Z_ROW_STRIDE = 24;                 // 纵向主序步长 (各行严格按 24 隔离，行内：墙体 0..14、道具 15、泡泡 17、人物 18、水泡/火焰 19)
   function tileZ(r, c) {
     return r * Z_ROW_STRIDE + (W - 1 - c);
   }
@@ -2378,6 +2378,8 @@
     }
     for (let i = 0; i < N; i++) {
       if (!sim.crate[i] || flyTargets.has(i)) continue;
+      // 砖还在碎墙动画 (dieFx) 期间，不提前显示该格的道具/宝箱
+      if (dieFx.has(i)) continue;
       const r = (i / W) | 0, c = i % W;
       // 随机宝箱(带?箱子) / 普通(种类定好) / 超级(种类+超级图标)
       let p;
@@ -2387,7 +2389,8 @@
       // 原图尺寸，格内居中（不拉伸）
       const px = c * CELL + (CELL - p.width) / 2;
       const py = r * CELL + (CELL - p.height) / 2 + bob * 0.5;
-      items.push([r * Z_ROW_STRIDE + 16, p, Math.round(px), Math.round(py)]);
+      // 道具 Z 设为 15，严格低于同一行的水泡 (19)，水泡拥有更高优先级
+      items.push([r * Z_ROW_STRIDE + 15, p, Math.round(px), Math.round(py)]);
     }
 
     // 掉血回收宝箱飞行：从玩家身上抛物线(上拱)飞向落点，100ms 完成

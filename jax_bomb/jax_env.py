@@ -41,6 +41,8 @@ FUSE = 30               # 引信（3 秒）
 BLAST = 8               # 十字威力（不含中心格）；所有地图统一上限
 BLAST_LINGER_SECONDS = 0.3
 BLAST_LINGER_TICKS = max(1, int(round(BLAST_LINGER_SECONDS * TICK_HZ)))
+BRICK_LINGER_SECONDS = 0.4
+BRICK_LINGER_TICKS = max(1, int(round(BRICK_LINGER_SECONDS * TICK_HZ)))
 MAX_BOMBS = 10          # 泡数上限（成长属性 growth_bombs_max）
 MAX_HP = 5
 INVULN = 30             # 被炸伤后无敌 tick
@@ -975,13 +977,13 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     kind = (jax.random.uniform(k2, (H, W)) * 3).astype(jnp.int32)
     crate = jnp.where(drop, (1 + kind + is_super.astype(jnp.int32) * 3)
                            .astype(jnp.int8), crate)
-    # 被炸砖保留为碰撞体，直到与爆炸余威相同的 3 tick 窗口结束；
+    # 被炸砖保留为碰撞体，直到 0.4s（4 tick，水泡快消失时）结束开放通行；
     # 灌木仍在本 tick 直接清除（本来就是可通行物）。
     old_brick_linger = brick_linger
     next_brick_linger = jnp.maximum(old_brick_linger.astype(jnp.int16) - 1, 0)
     brick_expired = (old_brick_linger > 0) & (next_brick_linger == 0)
     brick_linger = jnp.where(covered_brick,
-                             jnp.int8(BLAST_LINGER_TICKS),
+                             jnp.int8(BRICK_LINGER_TICKS),
                              next_brick_linger.astype(jnp.int8))
     brick = brick & ~(brick_expired & ~covered_brick)
     bush = bush & ~destroy

@@ -35,6 +35,7 @@
     tickHz: 10, speed: 3.0, radius: 0.42, maxSteps: 1800,
     fuse: 30, blast: 2, maxBombs: 10, maxChain: 16,
     blastLingerTicks: 3,                 // 爆炸后余威 0.3s（10Hz）
+    brickLingerTicks: 4,                 // 砖块被炸毁后 0.4s 开放通行（10Hz 对应 4 tick，水泡几乎快消失时）
     maxHp: 5, invulnTicks: 30,
     stepLen: 3.0 / 10,                 // 0.3 格/tick
     // 成长（corridor 起步）
@@ -630,11 +631,11 @@
         if (this.blastLinger[i] > 0) this.blastLinger[i]--;
         if (covered[i]) this.blastLinger[i] = CFG.blastLingerTicks;
 
-        // 墙砖残骸与爆炸余威使用同一 3 tick 窗口：
-        // 爆炸 tick 记为 3，后续 tick 依次为 2/1/0；归零时才开放通行。
+        // 墙砖残骸在水泡爆炸 0.4s（4 tick，水泡效果几乎快消失时）开放通行：
+        // 爆炸 tick 记为 4，后续 tick 依次为 3/2/1/0；归零时才开放通行。
         const oldBrickLinger = this.brickLinger[i];
         let nextBrickLinger = oldBrickLinger > 0 ? oldBrickLinger - 1 : 0;
-        if (coveredBrick[i]) nextBrickLinger = CFG.blastLingerTicks;
+        if (coveredBrick[i]) nextBrickLinger = CFG.brickLingerTicks;
         this.brickLinger[i] = nextBrickLinger;
         if (oldBrickLinger > 0 && nextBrickLinger === 0 && !coveredBrick[i]) {
           this.brick[i] = 0;
