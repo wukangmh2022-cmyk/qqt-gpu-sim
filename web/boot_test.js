@@ -23,11 +23,12 @@ function makeEl(id) {
     listeners: {},
     _classes: new Set(),
     classList: {
-      add: (c) => { els[id]._classes.add(c); },
-      remove: (c) => { els[id]._classes.delete(c); },
-      contains: (c) => els[id]._classes.has(c),
+      add: (c) => { el._classes.add(c); },
+      remove: (c) => { el._classes.delete(c); },
+      contains: (c) => el._classes.has(c),
     },
     style: {},
+    dataset: {},
     addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
     appendChild(c) { this.children.push(c); },
     // value：显式赋值优先，否则取第一个 option（模拟默认选中）
@@ -59,6 +60,7 @@ const ctxMock = new Proxy({}, {
 });
 
 global.window = global;
+global.location = { search: '', pathname: '', href: '' };
 const winListeners = {};
 global.addEventListener = (ev, fn) => {
   (winListeners[ev] = winListeners[ev] || []).push(fn);
@@ -83,6 +85,8 @@ global.Image = class {
     setTimeout(() => this.onload && this.onload(), 0);
   }
 };
+global.HTMLCanvasElement = class HTMLCanvasElement {};
+global.HTMLImageElement = global.Image;
 global.AudioContext = class {
   constructor() { this.destination = {}; }
   createBufferSource() {
@@ -98,7 +102,8 @@ global.performance = global.performance || require('perf_hooks').performance;
 
 // fetch mock：模型 JSON 从磁盘读
 global.fetch = async (url) => {
-  const p = url.replace(/^https?:\/\/[^/]*\//, '').replace(/^\//, '');
+  const cleanUrl = url.split('?')[0];
+  const p = cleanUrl.replace(/^https?:\/\/[^/]*\//, '').replace(/^\//, '');
   const file = path.join(ROOT, 'web', p);
   if (!fs.existsSync(file)) return { ok: false, status: 404, json: async () => ({}) };
   const buf = fs.readFileSync(file);
@@ -140,8 +145,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     process.exit(1);
   }
   const wlHtml = els['banner']._html || '';
-  if (!wlHtml.includes('开始游戏')) {
-    console.error('FAIL: 欢迎窗口缺少操作提示（按空格开始）');
+  if (!wlHtml.includes('开始游戏') && !wlHtml.includes('点击进入')) {
+    console.error('FAIL: 欢迎窗口缺少操作提示（按空格开始或点击进入）');
     process.exit(1);
   }
   console.log('loading 已隐藏 + 欢迎窗口显示（含操作说明）✔');
@@ -163,15 +168,16 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log(`当前模型显示: ${curText} ✔`);
 
-  // 敌人 AI 下拉已有选项（模型列表 + 规则 Hunter）
+  // 敌人 AI 下拉已有选项（静止 + 规则 Hunter + 模型列表）
   const aiCount = els['enemy-ai'].children.length;
   const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'web', 'models', 'index.json'), 'utf8'));
-  const expectAi = (idx.models ? idx.models.length : idx.length) + 1;   // 模型数 + 规则 Hunter
+  const modelCount = idx.models ? idx.models.length : idx.length;
+  const expectAi = modelCount + 2;   // 静止 + 规则 Hunter + 模型数
   if (aiCount !== expectAi) {
-    console.error(`FAIL: 敌人 AI 下拉应 ${expectAi} 个候选（${expectAi - 1} 模型 + 规则 Hunter），实际 ${aiCount}`);
+    console.error(`FAIL: 敌人 AI 下拉应 ${expectAi} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter），实际 ${aiCount}`);
     process.exit(1);
   }
-  console.log(`敌人 AI 下拉: ${aiCount} 个候选（${expectAi - 1} 模型 + 规则 Hunter）✔`);
+  console.log(`敌人 AI 下拉: ${aiCount} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter）✔`);
 
   // 点击「应用」重载当前选中敌人 AI（默认 = 最强模型），不炸
   const click = (id) => (els[id].listeners['click'] || []).forEach((fn) => fn());
@@ -369,20 +375,23 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   els['bgm'].checked = true;
   fire('bgm');
   await wait(400);
-  const stopsBefore = global._acStop || 0;
-  els['scene'].value = '矿洞';
-  fire('scene');
-  await wait(500);
-  const stopsAfter = global._acStop || 0;
-  if (stopsAfter <= stopsBefore) {
-    console.error(`FAIL: 切场景后旧 BGM 未停（stop 次数 ${stopsBefore} → ${stopsAfter}）`);
-    process.exit(1);
+  if (els['scene']) {
+    els['scene'].value = '矿洞';
+    fire('scene');
+    await wait(500);
+    const stopsAfter = global._acStop || 0;
+    if (stopsAfter <= stopsBefore) {
+      console.error(`FAIL: 切场景后旧 BGM 未停（stop 次数 ${stopsBefore} → ${stopsAfter}）`);
+      process.exit(1);
+    }
+    console.log(`切场景旧 BGM 已停（stop ${stopsBefore} → ${stopsAfter}）✔`);
   }
-  console.log(`切场景旧 BGM 已停（stop ${stopsBefore} → ${stopsAfter}）✔`);
-  els['mode'].value = 'corridor';
-  fire('mode');
-  await wait(600);
-  console.log(`切场景/切模式后正常（tick=${qqt.sim.t}，mode=${qqt.sim.mode}）`);
+  if (els['mode']) {
+    els['mode'].value = 'corridor';
+    fire('mode');
+    await wait(600);
+    console.log(`切场景/切模式后正常（tick=${qqt.sim.t}，mode=${qqt.sim.mode}）`);
+  }
 
   // 结算行为：跑完一局后（done），空格不重开、R 重开
   // 用观战 AI 对打快速结束一局

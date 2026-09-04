@@ -90,7 +90,7 @@ lsgd_sync_state = false
 
 [environment]
 levels = "levels.json"               # 标准 241 张 QQ堂官方地图池
-level_weights = "empty=0.05,功夫=0.1,比武=0.15"
+level_weights = "configs/map_pool_sparring.toml" # 终局微操与竞技地图加权池 (40% 核心竞技 + 60% 全图泛化)
 curriculum_json = ""
 radius = 0.36
 n_total = 48                         # 总 GPU 卡数

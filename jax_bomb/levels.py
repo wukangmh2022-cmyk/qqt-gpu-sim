@@ -112,21 +112,42 @@ def clear() -> None:
     _ACTIVE = None
 
 
-def _parse_weights(weights: str, names: list[str], themes: list[str]) -> list[float]:
-    """解析权重串（逗号分隔 `token=w`），token 三种：
-      "240=0.2"      关卡 id 精确
-      "empty=0.2"    名字含"空场景"的关（旧语法，= 主题空场景）
-      "功夫=0.1"     主题（theme）精确匹配（非数字非 empty 的 token 按 theme）
-    未指定的关均分剩余权重（默认 0 权重则全部 0）。"""
+def _parse_weights(weights: str | dict, names: list[str], themes: list[str]) -> list[float]:
+    """解析权重配置。
+    weights 支持三种输入形式：
+    1. .toml 文件路径：如 'configs/map_pool.toml'（含 [weights] 或直接顶层 key=val）
+    2. 字典：如 {'empty': 0.05, '比武': 0.15, ...}
+    3. 逗号分隔字符串：如 'empty=0.05,功夫=0.1,比武=0.15'
+
+    token 匹配规则：
+      - "240=0.2": 关卡 id 精确匹配
+      - "empty=0.2": 名字含"空场景"的关
+      - "比武=0.15": 主题精确匹配（若匹配主题，该主题下所有关卡均分该权重）
+      - "功夫01=0.02": 主题不匹配时，回退按名字包含匹配（所有匹配关均分该权重）
+    未指定的关均分剩余权重（若指定权重总和已达 1.0 则其余为 0）。"""
+    if isinstance(weights, str) and weights.strip().endswith(".toml"):
+        import tomllib
+        with open(weights.strip(), "rb") as f:
+            tdata = tomllib.load(f)
+        weights = tdata.get("weights", tdata.get("map_pool", tdata.get("level_weights", tdata)))
+
     n = len(names)
     specs: dict[int, float] = {}
-    for tok in weights.split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
-        id_s, _, w_s = tok.partition("=")
-        w = float(w_s)
-        id_s = id_s.strip().lower()
+
+    if isinstance(weights, dict):
+        items = weights.items()
+    else:
+        items = []
+        for tok in str(weights).split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            id_s, _, w_s = tok.partition("=")
+            items.append((id_s.strip(), float(w_s)))
+
+    for raw_k, raw_w in items:
+        w = float(raw_w)
+        id_s = str(raw_k).strip().lower()
         if id_s == "empty":
             hit = [k for k, nm in enumerate(names) if "空" in nm]
             if not hit:
@@ -138,13 +159,11 @@ def _parse_weights(weights: str, names: list[str], themes: list[str]) -> list[fl
                 raise ValueError(f"关卡 id {idx} 越界 [0,{n})")
             specs[idx] = w
         else:
-            # 主题精确匹配 → 回退名字包含（"空场景"= name 含"空场景"的关）。
-            # 语义：w 是该类**总占比**，类内每关均分 w/len(hit)
             hit = [k for k, th in enumerate(themes) if th.lower() == id_s]
             if not hit:
                 hit = [k for k, nm in enumerate(names) if id_s in nm.lower()]
             if not hit:
-                raise ValueError(f"权重主题 '{id_s}' 不存在（可用: {sorted(set(themes))}）")
+                raise ValueError(f"权重主题/关卡 '{id_s}' 不存在（可用主题: {sorted(set(themes))}）")
             per_level = w / len(hit)
             for k in hit:
                 specs[k] = per_level
@@ -165,7 +184,7 @@ def _parse_weights(weights: str, names: list[str], themes: list[str]) -> list[fl
     return w
 
 
-def set_active(path: str, weights: str = "empty=0.05,功夫=0.1,比武=0.15") -> LevelSet:
+def set_active(path: str, weights: str | dict = "empty=0.05,功夫=0.1,比武=0.15") -> LevelSet:
     """从 levels.json 加载并激活（进程内一次；jit/vmap 前调用）。
 
     默认权重：空场景 5% + 功夫 10% + 比武 15%，其余 70% 均分随机。

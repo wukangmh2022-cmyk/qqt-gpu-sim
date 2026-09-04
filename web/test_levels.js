@@ -43,8 +43,22 @@ function run(level, seed, ticks) {
   }
   // 初始属性校验
   const st = level.initial_stats;
-  assert(sim.bombsCap[0] === st.bombs && sim.blastCap[0] === st.blast &&
-         Math.abs(sim.spdG[0] - st.speed) < 1e-9, `${level.source} 初始属性不符`);
+  const isOpenLevel = (level.id === 240) || (!level.brick || level.brick.every(b => !b));
+  if (isOpenLevel) {
+    const maxB = level.bombs_max || CFG.growthBombsMax;
+    const maxZ = level.blast_max || CFG.growthBlastMax;
+    const maxS = level.speed_max || CFG.growthSpeedMax;
+    assert(sim.bombsCap[0] === sim.bombsCap[1] &&
+           sim.blastCap[0] === sim.blastCap[1] &&
+           sim.spdG[0] === sim.spdG[1], `${level.source} 空场景初始属性 P0/P1 不对称`);
+    assert(sim.bombsCap[0] >= st.bombs && sim.bombsCap[0] <= maxB &&
+           sim.blastCap[0] >= st.blast && sim.blastCap[0] <= maxZ &&
+           sim.spdG[0] >= st.speed - 1e-4 && sim.spdG[0] <= maxS + 1e-4,
+           `${level.source} 空场景域随机化初始属性越界`);
+  } else {
+    assert(sim.bombsCap[0] === st.bombs && sim.blastCap[0] === st.blast &&
+           Math.abs(sim.spdG[0] - st.speed) < 1e-9, `${level.source} 初始属性不符`);
+  }
   // 空场景十字宝箱
   if (level.initial_crates && level.initial_crates.length) {
     let n = 0;

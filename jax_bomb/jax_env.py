@@ -88,7 +88,7 @@ GROWTH_SPEED_START = 1.0
 GROWTH_BOMBS_MAX, GROWTH_BLAST_MAX = MAX_BOMBS, BLAST   # 上限
 GROWTH_SPEED_MAX = 2.4
 GROWTH_SPEED_STEP = 0.15
-OPEN_GROWTH_BOMBS, OPEN_GROWTH_BLAST, OPEN_GROWTH_SPEED = 3, 3, 0.84  # open 初始
+OPEN_GROWTH_BOMBS, OPEN_GROWTH_BLAST, OPEN_GROWTH_SPEED = 5, 4, 1.20  # open 50% 初始
 CRATE_PROB = 0.5             # corridor 炸砖宝箱爆率（open 关恒 1.0 必升）
 HIT_ATTR_PENALTY = 1         # 掉血总是每个属性-1（处罚小一些）
 OPEN_CRATE_CROSS = True      # open 关开局中心十字宝箱池（≈46 格，100% 有东西）
@@ -173,17 +173,14 @@ def _recycle_excl() -> jnp.ndarray:
 
 
 def _cross_crates() -> jnp.ndarray:
-    """open 关开局中心十字宝箱池：(H,W) bool（确定性，不依赖 RNG）。
+    """open 关开局 45 度十字形（对角线 X 形）宝箱池：(H,W) bool。
 
-    横竖各 2 排 —— 行带 {cy-1, cy} 全宽 ∪ 列带 {cx-1, cx} 全高（13×15 →
-    2×13+2×15−4 = 52 格），排除 open 出生点四邻（对齐 torch _open_geometry）。
+    穿过中心 (cy, cx) 的两条 45 度对角线 (c - r == cx - cy 或 c + r == cx + cy)，
+    排除出生点及四邻。
     """
     cy, cx = (H - 1) // 2, (W - 1) // 2
-    cross = jnp.zeros((H, W), jnp.bool_)
-    cross = cross.at[cy - 1, :].set(True)
-    cross = cross.at[cy, :].set(True)
-    cross = cross.at[:, cx - 1].set(True)
-    cross = cross.at[:, cx].set(True)
+    r_grid, c_grid = jnp.indices((H, W))
+    cross = (c_grid - r_grid == cx - cy) | (c_grid + r_grid == cx + cy)
     for rr, cc in _OPEN_CELLS:
         for dr, dc in ((0, 0),) + _DIRS:
             nr, nc = rr + dr, cc + dc
@@ -296,7 +293,8 @@ def _fresh(key) -> BombState:
     未激活：过程式生成（_make_map：纯空/open/corridor 混合 + 十字宝箱池）。
     """
     if levels.active() is not None:
-        s = levels.active().sample(key)
+        k_sample, k_stat = jax.random.split(key)
+        s = levels.active().sample(k_sample)
         fuse = jnp.zeros((H, W), jnp.int32)
         owner = -jnp.ones((H, W), jnp.int32)
         bomb_blast = jnp.zeros((H, W), jnp.int32)
@@ -305,9 +303,23 @@ def _fresh(key) -> BombState:
         alive = jnp.ones((2,), jnp.bool_)
         hp = jnp.full((2,), MAX_HP, jnp.int32)
         invuln = jnp.zeros((2,), jnp.int32)
-        bombs_cap = jnp.full((2,), s.lo[0], jnp.float32)
-        blast_cap = jnp.full((2,), s.lo[1], jnp.float32)
-        spd_g = jnp.full((2,), s.lo[2], jnp.float32)
+
+        # 域随机化初始属性（仅对纯空场景 s.is_open 永久化开启）：
+        # 5 档离散均匀插值（50%~100% 战力），局内 P0/P1 对称一致（同一 alpha），模拟各类终局/残局战力差对决。
+        # 其余地图（功夫、新年瑞兽、比武等）保持 s.lo 初始值，保留开荒发育过程。
+        tier = jax.random.randint(k_stat, (), 0, 5)
+        alpha = tier.astype(jnp.float32) / 4.0
+        rand_b = jnp.round(s.lo[0] + alpha * (s.caps[0] - s.lo[0]))
+        rand_z = jnp.round(s.lo[1] + alpha * (s.caps[1] - s.lo[1]))
+        rand_sp = s.lo[2] + alpha * (s.caps[2] - s.lo[2])
+
+        bombs_init = jnp.where(s.is_open, rand_b, s.lo[0])
+        blast_init = jnp.where(s.is_open, rand_z, s.lo[1])
+        spd_init = jnp.where(s.is_open, rand_sp, s.lo[2])
+
+        bombs_cap = jnp.full((2,), bombs_init, jnp.float32)
+        blast_cap = jnp.full((2,), blast_init, jnp.float32)
+        spd_g = jnp.full((2,), spd_init, jnp.float32)
         buffs = jnp.zeros((2,), jnp.int8)          # 预留位（见 BombState 注释）
         debuffs = jnp.zeros((2,), jnp.int8)
         items = jnp.zeros((2, 4), jnp.int8)
@@ -319,7 +331,8 @@ def _fresh(key) -> BombState:
                          alive, hp, invuln, bombs_cap, blast_cap, spd_g, buffs,
                          debuffs, items, gametype, s.is_open, t, s.level_id,
                          jnp.int32(0), jnp.int32(0), jnp.int32(0))
-    wall, brick, is_open, pos = _make_map(key)
+    k_map, k_stat_proc = jax.random.split(key)
+    wall, brick, is_open, pos = _make_map(k_map)
     fuse = jnp.zeros((H, W), jnp.int32)
     owner = -jnp.ones((H, W), jnp.int32)
     bomb_blast = jnp.zeros((H, W), jnp.int32)
@@ -332,9 +345,15 @@ def _fresh(key) -> BombState:
     alive = jnp.ones((2,), jnp.bool_)
     hp = jnp.full((2,), MAX_HP, jnp.int32)
     invuln = jnp.zeros((2,), jnp.int32)
-    b0 = jnp.where(is_open, OPEN_GROWTH_BOMBS, GROWTH_BOMBS_START)
-    z0 = jnp.where(is_open, OPEN_GROWTH_BLAST, GROWTH_BLAST_START)
-    s0 = jnp.where(is_open, OPEN_GROWTH_SPEED, GROWTH_SPEED_START)
+    tier_p = jax.random.randint(k_stat_proc, (), 0, 5)
+    alpha_p = tier_p.astype(jnp.float32) / 4.0
+    rand_b_open = jnp.round(OPEN_GROWTH_BOMBS + alpha_p * (GROWTH_BOMBS_MAX - OPEN_GROWTH_BOMBS))
+    rand_z_open = jnp.round(OPEN_GROWTH_BLAST + alpha_p * (GROWTH_BLAST_MAX - OPEN_GROWTH_BLAST))
+    rand_s_open = OPEN_GROWTH_SPEED + alpha_p * (GROWTH_SPEED_MAX - OPEN_GROWTH_SPEED)
+
+    b0 = jnp.where(is_open, rand_b_open, GROWTH_BOMBS_START)
+    z0 = jnp.where(is_open, rand_z_open, GROWTH_BLAST_START)
+    s0 = jnp.where(is_open, rand_s_open, GROWTH_SPEED_START)
     bombs_cap = jnp.full((2,), b0, jnp.float32)
     blast_cap = jnp.full((2,), z0, jnp.float32)
     spd_g = jnp.full((2,), s0, jnp.float32)
@@ -834,9 +853,22 @@ def _steer(pos_me, target_dir, alive_me, blocked, spd=1.0, pushable=None):
     moved_dist = jnp.abs(p - pos_me).sum()
     moved = moved_dist > 2 * EPS
     full_step = moved_dist >= (STEP * spd) * 0.95
+    min_y = RADIUS + EPS
+    max_y = H - RADIUS - EPS
+    min_x = RADIUS + EPS
+    max_x = W - RADIUS - EPS
+    hit_boundary = ((target_dir == 0) & (p[0] <= min_y + 2 * EPS)) | \
+                   ((target_dir == 1) & (p[0] >= max_y - 2 * EPS)) | \
+                   ((target_dir == 2) & (p[1] <= min_x + 2 * EPS)) | \
+                   ((target_dir == 3) & (p[1] >= max_x - 2 * EPS))
+    valid_straight = full_step | (hit_boundary & moved)
     y, x = pos_me[0], pos_me[1]
     r0 = jnp.clip(jnp.floor(y).astype(jnp.int32), 0, H - 1)
     c0 = jnp.clip(jnp.floor(x).astype(jnp.int32), 0, W - 1)
+    target_oob = ((target_dir == 0) & (r0 == 0)) | \
+                 ((target_dir == 1) & (r0 == H - 1)) | \
+                 ((target_dir == 2) & (c0 == 0)) | \
+                 ((target_dir == 3) & (c0 == W - 1))
     if pushable is None:
         pushable = jnp.zeros_like(blocked)
     dr = jnp.where(target_dir == 0, -1, jnp.where(target_dir == 1, 1, 0))
@@ -847,49 +879,41 @@ def _steer(pos_me, target_dir, alive_me, blocked, spd=1.0, pushable=None):
     vert = target_dir < 2
     tr = jnp.clip(r0 + jnp.where(target_dir == 0, -1, 1), 0, H - 1)   # 目标行
     tc = jnp.clip(c0 + jnp.where(target_dir == 2, -1, 1), 0, W - 1)   # 目标列
+    target_open_vert = ~blocked[tr, c0]
+    target_open_horz = ~blocked[r0, tc]
+    target_open = jnp.where(vert, target_open_vert, target_open_horz)
+
     diag_l = (c0 - 1 < 0) | blocked[tr, jnp.clip(c0 - 1, 0, W - 1)]
     diag_r = (c0 + 1 >= W) | blocked[tr, jnp.clip(c0 + 1, 0, W - 1)]
     diag_u = (r0 - 1 < 0) | blocked[jnp.clip(r0 - 1, 0, H - 1), tc]
     diag_d = (r0 + 1 >= H) | blocked[jnp.clip(r0 + 1, 0, H - 1), tc]
-    # _PERP 的默认顺序是 左→右 / 上→下。仅一侧开放时优先开放侧；两侧
-    # 状态相同时，按连续坐标朝当前格中心线归中（与 Web Sim._steer 对齐）。
-    same_lr = diag_l == diag_r
-    same_ud = diag_u == diag_d
-    swap_vert = (diag_l & ~diag_r) | (same_lr & (x < c0.astype(jnp.float32) + 0.5))
-    swap_horz = (diag_u & ~diag_d) | (same_ud & (y < r0.astype(jnp.float32) + 0.5))
+
+    is_corner_vert = diag_l != diag_r
+    is_corner_horz = diag_u != diag_d
+    is_corner = jnp.where(vert, is_corner_vert, is_corner_horz)
+
+    # 允许被动转向：目标格是通路（卡门框需滑进门），或单侧外拐角开放
+    can_steer = target_open | is_corner
+
+    swap_vert = jnp.where(target_open, x < c0.astype(jnp.float32) + 0.5, diag_l & ~diag_r)
+    swap_horz = jnp.where(target_open, y < r0.astype(jnp.float32) + 0.5, diag_u & ~diag_d)
     swap = jnp.where(vert, swap_vert, swap_horz)
+
     perp = _PERP[target_dir]                     # (2,)——IDLE 已在出口拦截
     p1 = _move_player(pos_me, perp[0], alive_me, blocked, spd)
     p2 = _move_player(pos_me, perp[1], alive_me, blocked, spd)
-    # 一格宽通道内，侧移只钳制到当前格中心线，防止越过中心后下一 tick
-    # 反向修正形成振荡。仅一侧开放的真正绕障碍场景不做钳制。
-    both_blocked = jnp.where(vert, diag_l & diag_r, diag_u & diag_d)
-    center_x = c0.astype(jnp.float32) + 0.5
-    center_y = r0.astype(jnp.float32) + 0.5
-    p1_vert_x = jnp.where(perp[0] == 2, jnp.maximum(p1[1], center_x),
-                          jnp.minimum(p1[1], center_x))
-    p2_vert_x = jnp.where(perp[1] == 2, jnp.maximum(p2[1], center_x),
-                          jnp.minimum(p2[1], center_x))
-    p1_horz_y = jnp.where(perp[0] == 0, jnp.maximum(p1[0], center_y),
-                          jnp.minimum(p1[0], center_y))
-    p2_horz_y = jnp.where(perp[1] == 0, jnp.maximum(p2[0], center_y),
-                          jnp.minimum(p2[0], center_y))
-    p1 = p1.at[1].set(jnp.where(both_blocked & vert, p1_vert_x, p1[1]))
-    p2 = p2.at[1].set(jnp.where(both_blocked & vert, p2_vert_x, p2[1]))
-    p1 = p1.at[0].set(jnp.where(both_blocked & ~vert, p1_horz_y, p1[0]))
-    p2 = p2.at[0].set(jnp.where(both_blocked & ~vert, p2_horz_y, p2[0]))
     m1 = jnp.abs(p1 - pos_me).sum() > 2 * EPS
     m2 = jnp.abs(p2 - pos_me).sum() > 2 * EPS
     fa = jnp.where(swap, p2, p1)
     ma = jnp.where(swap, m2, m1)
     fb = jnp.where(swap, p1, p2)
     mb = jnp.where(swap, m1, m2)
-    # 顶着可推箱时保持直走结果（通常是原地，接近箱子时可能是半步），让
-    # step 的 push_t 连续累计到 0.3s；不能进入垂直兜底。
+    # 顶着可推箱时保持直走结果；目标出界时抵墙不侧滑；直走有效时不侧滑；
+    # 既非进门也非单侧挂角（can_steer 为 False）时保留直走，严禁开阔地主动归中。
+    slide_pos = jnp.where(ma, fa, jnp.where(mb, fb, jnp.where(moved, p, pos_me)))
     out = jnp.where(push_target, p,
-                    jnp.where(full_step, p,
-                              jnp.where(ma, fa, jnp.where(mb, fb,
-                                        jnp.where(moved, p, pos_me)))))
+                    jnp.where(valid_straight | target_oob | ~can_steer, p,
+                              slide_pos))
     return jnp.where(idle, pos_me, out)
 
 
@@ -1271,14 +1295,28 @@ def legal_mask(state: BombState) -> tuple[jnp.ndarray, jnp.ndarray]:
     # 但 step() 的移动仍用含 brick 的 blocked 挡住玩家（推箱期间贴箱不动，
     # 3 tick 后箱子移走玩家跟进）。
     blocked = (fuse > 0) | wall | (brick & ~pushable)
-    # 目标格查询：cell + DIRS 的 4 个相邻格，blocked 查表（不调 _move_player）
+    # 可推箱方向豁免（供 PPO 累计推进时长）：目标格是可推箱时该方向保持合法
     cell = jnp.clip(pos.astype(jnp.int32), 0, jnp.array([H - 1, W - 1]))
     targets = cell[:, None, :] + jnp.array(_DIRS, jnp.int32)     # (2,4,2)
-    targets = jnp.clip(targets, 0, jnp.array([H - 1, W - 1]))[None, :, :, :]
-    target_idx = targets[..., 0] * W + targets[..., 1]           # (1,2,4)
-    target_blocked = blocked.reshape(-1)[target_idx]             # (1,2,4)
+    oob = (targets[..., 0] < 0) | (targets[..., 0] >= H) | \
+          (targets[..., 1] < 0) | (targets[..., 1] >= W)
+    targets_c = jnp.clip(targets, 0, jnp.array([H - 1, W - 1]))[None, :, :, :]
+    target_idx = targets_c[..., 0] * W + targets_c[..., 1]           # (1,2,4)
+    push_ok = (~oob) & pushable.reshape(-1)[target_idx][0]           # (2,4)
+
+    # 动作空间意图为"向该方向物理微步"：通过直走探针 _move_player 判定该轴向是否能发生有效位移；
+    # 彻底贴死在障碍/角落无法位移才 mask，避免在边缘格（如水泡旁半身微调）被静态网格查表提前误杀。
+    # 探针检测与 Web legalMask 严格对齐。
     move = jnp.zeros((2, 5), jnp.bool_)
-    move = move.at[:, :4].set(~target_blocked[0])
+    for d in range(4):
+        np0 = _move_player(pos[0], d, alive[0], blocked, spd_g[0])
+        m0 = jnp.abs(np0 - pos[0]).sum() > 2 * EPS
+        np1 = _move_player(pos[1], d, alive[1], blocked, spd_g[1])
+        m1 = jnp.abs(np1 - pos[1]).sum() > 2 * EPS
+        leg0 = m0 | push_ok[0, d]
+        leg1 = m1 | push_ok[1, d]
+        move = move.at[0, d].set(leg0 & alive[0])
+        move = move.at[1, d].set(leg1 & alive[1])
     move = move.at[:, 4].set(True)                      # IDLE 恒合法
     move = (move & alive[:, None]) | ~alive[:, None]    # 死亡整行放开
     # 放泡：存活 & 不在墙/砖格 & 脚下无泡 & 在场泡数 < 成长上限

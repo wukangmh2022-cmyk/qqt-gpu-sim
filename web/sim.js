@@ -42,10 +42,10 @@
     growthBombsStart: 2, growthBlastStart: 2, growthSpeedStart: 1.3,
     growthBombsMax: 10, growthBlastMax: 8,
     growthSpeedMax: 2.4, growthSpeedStep: 1.1 / 7,   // 7档: (2.4-1.3)/7 ≈ 0.157143
-    // open 关起步 = 上限 80%（与训练一致）
-    openGrowthBombs: Math.ceil(10 * 0.8),        // 8
-    openGrowthBlast: Math.ceil(7 * 0.8),         // 6
-    openGrowthSpeed: Math.round(2.4 * 0.8 * 100) / 100,  // 1.92
+    // open 关起步 = 上限 50%（与训练一致）
+    openGrowthBombs: Math.round(10 * 0.5),        // 5
+    openGrowthBlast: Math.round(8 * 0.5),         // 4
+    openGrowthSpeed: Math.round(2.4 * 0.5 * 100) / 100,  // 1.20
     // 地图
     corridorWidth: 5, topWallRows: 4,
     // 宝箱
@@ -128,17 +128,20 @@
 
   // ---------------------------------------------------------------- 模拟器
   class Sim {
-    constructor(seed) {
+    constructor(seed, opts) {
       this.seed = seed == null ? 1 : (seed >>> 0);
       this.rng = mulberry32(this.seed);
-      this.reset('open');
+      this.playerModes = (opts && opts.playerModes) ? opts.playerModes.slice() : ['new', 'new'];
+      this.reset('open', opts);
     }
 
     // mode: 'open'（纯空场 + 中心十字宝箱 + 80% 起步）| 'corridor'（顶墙侧砖 + 2/2/1 起步）
     //       | 关卡对象（level: {wall, brick, spawns, initial_stats, crate_rate, ...}）
     // opts.oldMode: 旧 13x13 模型兼容 —— 地图加载后把第 13/14 列填为不可通行墙,
     //               encodeObs 按 13 宽输出(与旧版训练环境一致)。
+    // opts.playerModes: 可选 ['new', 'old'] 或 ['old', 'new'] 供新旧物理/mask 对抗评测
     reset(mode, opts) {
+      this.playerModes = (opts && opts.playerModes) ? opts.playerModes.slice() : (this.playerModes || ['new', 'new']);
       this.oldMode = !!(opts && opts.oldMode);
       // 可推箱运行时状态(所有模式都初始化; 关卡模式在 _loadLevel 填充)
       this.pushable = new Uint8Array(N);
@@ -233,7 +236,11 @@
         // open：无墙无砖
         this.pos[0] = 6.5; this.pos[1] = 4.5;   // (6.5, 4.5)
         this.pos[2] = 6.5; this.pos[3] = 8.5;   // (6.5, 8.5)
-        const b = CFG.openGrowthBombs, z = CFG.openGrowthBlast, s = CFG.openGrowthSpeed;
+        const tier = Math.floor(this.rng() * 5);
+        const alpha = tier / 4.0;
+        const b = Math.round(CFG.openGrowthBombs + alpha * (CFG.growthBombsMax - CFG.openGrowthBombs));
+        const z = Math.round(CFG.openGrowthBlast + alpha * (CFG.growthBlastMax - CFG.openGrowthBlast));
+        const s = +(CFG.openGrowthSpeed + alpha * (CFG.growthSpeedMax - CFG.openGrowthSpeed)).toFixed(3);
         for (let p = 0; p < 2; p++) {
           this.bombsCap[p] = b; this.blastCap[p] = z; this.spdG[p] = s;
           this.loBombs[p] = b; this.loBlast[p] = z; this.loSpeed[p] = s;
@@ -398,15 +405,27 @@
         this.pushBoxes.push({ o, cells, eid: this.pushSprite[o] || 0, dead: false });
         this.pushT[o] = 0;
       }
-      // 初始属性（比武/不足300% → 3/3/1.2；普通 → 2/2/1.2；空场景 → 8/6/1.68）
+      // 初始属性（空场景启用 4 档域随机化；普通图保持原生 initial_stats 走开荒发育）
       const st = level.initial_stats || { bombs: 2, blast: 2, speed: 1.0 };
+      let initB = st.bombs, initZ = st.blast, initS = st.speed;
+      const isOpenLevel = (level.id === 240) || (!level.brick || level.brick.every(b => !b));
+      if (isOpenLevel) {
+        const tier = Math.floor(this.rng() * 5);
+        const alpha = tier / 4.0;
+        const maxB = level.bombs_max || CFG.growthBombsMax;
+        const maxZ = level.blast_max || CFG.growthBlastMax;
+        const maxS = level.speed_max || CFG.growthSpeedMax;
+        initB = Math.round(st.bombs + alpha * (maxB - st.bombs));
+        initZ = Math.round(st.blast + alpha * (maxZ - st.blast));
+        initS = +(st.speed + alpha * (maxS - st.speed)).toFixed(3);
+      }
       for (let p = 0; p < 2; p++) {
-        this.bombsCap[p] = st.bombs;
-        this.blastCap[p] = st.blast;
-        this.spdG[p] = st.speed;
-        this.loBombs[p] = st.bombs;
-        this.loBlast[p] = st.blast;
-        this.loSpeed[p] = st.speed;
+        this.bombsCap[p] = initB;
+        this.blastCap[p] = initZ;
+        this.spdG[p] = initS;
+        this.loBombs[p] = initB;
+        this.loBlast[p] = initZ;
+        this.loSpeed[p] = initS;
       }
       // 出生点：从地图出生点列表里随机挑两个（打乱后取前二，保证不同开局）
       const sp = level.spawns.map((s) => [s[0], s[1]]);
@@ -457,10 +476,10 @@
     }
 
     _placeOpenCrossCrates() {
-      // 中心十字带：行 {cy-1, cy} 全宽 ∪ 列 {cx-1, cx} 全高，扣除出生点及四邻
-      const cy = (H - 1) >> 1, cx = (W - 1) >> 1;   // 6, 6
+      // 45度中心十字形（对角线 X 形）：穿过中心 (cy, cx) 的两条对角线 (c - r == cx - cy || c + r == cx + cy)，扣除出生点及四邻
+      const cy = (H - 1) >> 1, cx = (W - 1) >> 1;   // 6, 7
       const excl = new Set();
-      const spawns = [[6.5, 4.5], [6.5, 8.5]];
+      const spawns = [[6.5, 4.5], [6.5, 8.5], [6.5, 5.5], [6.5, 9.5]];
       for (const [rr, cc] of spawns) {
         const r = Math.floor(rr), c = Math.floor(cc);
         excl.add(r * W + c);
@@ -469,16 +488,12 @@
           if (nr >= 0 && nr < H && nc >= 0 && nc < W) excl.add(nr * W + nc);
         }
       }
-      for (let c = 0; c < W; c++) {
-        for (const rr of [cy - 1, cy]) {
-          const i = rr * W + c;
-          if (!excl.has(i) && !this._crateBlocked(i)) this.crate[i] = 1;
-        }
-      }
       for (let r = 0; r < H; r++) {
-        for (const cc of [cx - 1, cx]) {
-          const i = r * W + cc;
-          if (!excl.has(i) && !this._crateBlocked(i)) this.crate[i] = 1;
+        for (let c = 0; c < W; c++) {
+          if ((c - r === cx - cy) || (c + r === cx + cy)) {
+            const i = r * W + c;
+            if (!excl.has(i) && !this._crateBlocked(i)) this.crate[i] = 1;
+          }
         }
       }
     }
@@ -581,7 +596,7 @@
           }
         }
         // 中心路径硬约束 + 贪婪转向：模型输出=目标相邻格，直走被挡自动试垂直方向
-        const [ny, nx] = this._steer(y, x, mv, blocked, dist);
+        const [ny, nx] = this._steer(y, x, mv, blocked, dist, p);
         this.pos[p * 2] = ny;
         this.pos[p * 2 + 1] = nx;
         // 边界夹紧（防穿出地图）
@@ -1282,63 +1297,114 @@
     }
 
     // 贪婪转向适配器（对齐 JAX _steer）：模型输出=目标相邻格，选第一个能动的
-    // 方向。优先级：直走(mv) > 垂直偏转1 > 垂直偏转2。每 tick 无状态决策——
-    // 不跨 tick 承诺方向，不会振荡。
-    // 垂直回退方向按目标行/列的**斜对角开闭**排序：楔死时朝开口侧滑——朝墙
-    // 侧滑永远进不了目标行/列，会背向目标绕路（点上方开口却左滑绕墙的 bug）。
-    // 两边同开/同堵 → 朝目标格中心线归中。固定偏左/偏上会让角色在目标
-    // 方向受阻时走向错误一侧，尤其是角色中心尚未对齐当前格中心的情况。
-    _steer(y, x, mv, blocked, dist) {
+    // 方向依次尝试。
+    // playerModes[p] === 'old': 老版主动向中线归中逻辑；
+    // playerModes[p] === 'new': 新版被动拐角切向滑移（废除开阔地与平墙主动归中）。
+    _steer(y, x, mv, blocked, dist, p = 0) {
       if (mv >= 4) return [y, x];
+      const mode = (this.playerModes && this.playerModes[p]) || 'new';
       let [ny, nx] = this._tryMove(y, x, mv, blocked, dist);
       const moved = Math.abs(ny - y) + Math.abs(nx - x);
-      // 完整直走直接结束；只走到半步（常见于碰撞盒擦住侧砖）仍需尝试
-      // 垂直修正，否则会卡在砖边缘。推箱目标例外：保留直走动作累计 pushT。
       const fullStep = moved >= dist * 0.95;
       const r0 = Math.max(0, Math.min(H - 1, Math.floor(y)));
       const c0 = Math.max(0, Math.min(W - 1, Math.floor(x)));
       const [dr, dc] = DIRS[mv];
       const tr0 = r0 + dr, tc0 = c0 + dc;
+
       // 可推箱必须持续收到同一方向动作累计 PUSH_TIME。箱子仍属于 blocked，
       // 但这里不能把“顶箱未移动”误判成失败后侧滑，否则计时会中断且角色
       // 产生上下/左右偏移。箱子移走后的下一 tick 会正常直行进入原箱格。
       if (this.pushable && tr0 >= 0 && tr0 < H && tc0 >= 0 && tc0 < W &&
           this.pushable[tr0 * W + tc0]) return [ny, nx];
-      if (fullStep) return [ny, nx];
+
+      if (mode === 'old') {
+        // --- 老版逻辑：主动向中心线归中，开阔地与平墙也强制归中 ---
+        if (fullStep) return [ny, nx];
+        const open = (r, c) => r >= 0 && r < H && c >= 0 && c < W && !blocked[r * W + c];
+        let perp;
+        if (mv < 2) {
+          const tr = r0 + (mv === 0 ? -1 : 1);
+          const leftOpen = open(tr, c0 - 1), rightOpen = open(tr, c0 + 1);
+          if (leftOpen !== rightOpen) perp = rightOpen ? [3, 2] : [2, 3];
+          else perp = x < c0 + 0.5 ? [3, 2] : [2, 3];
+        } else {
+          const tc = c0 + (mv === 2 ? -1 : 1);
+          const upOpen = open(r0 - 1, tc), downOpen = open(r0 + 1, tc);
+          if (upOpen !== downOpen) perp = downOpen ? [1, 0] : [0, 1];
+          else perp = y < r0 + 0.5 ? [1, 0] : [0, 1];
+        }
+        const p1 = this._tryMove(y, x, perp[0], blocked, dist);
+        const p2 = this._tryMove(y, x, perp[1], blocked, dist);
+        if (mv < 2 && !open(r0 + (mv === 0 ? -1 : 1), c0 - 1) &&
+            !open(r0 + (mv === 0 ? -1 : 1), c0 + 1)) {
+          const center = c0 + 0.5;
+          if (perp[0] === MOVE_LEFT) p1[1] = Math.max(p1[1], center);
+          else p1[1] = Math.min(p1[1], center);
+          if (perp[1] === MOVE_LEFT) p2[1] = Math.max(p2[1], center);
+          else p2[1] = Math.min(p2[1], center);
+        } else if (mv >= 2 && !open(r0 - 1, c0 + (mv === 2 ? -1 : 1)) &&
+                   !open(r0 + 1, c0 + (mv === 2 ? -1 : 1))) {
+          const center = r0 + 0.5;
+          if (perp[0] === MOVE_UP) p1[0] = Math.max(p1[0], center);
+          else p1[0] = Math.min(p1[0], center);
+          if (perp[1] === MOVE_UP) p2[0] = Math.max(p2[0], center);
+          else p2[0] = Math.min(p2[0], center);
+        }
+        const moved1 = Math.abs(p1[0] - y) + Math.abs(p1[1] - x) > 2 * EPS;
+        const moved2 = Math.abs(p2[0] - y) + Math.abs(p2[1] - x) > 2 * EPS;
+        if (moved1) return p1;
+        if (moved2) return p2;
+        return [ny, nx];
+      }
+
+      // --- 新版逻辑 (new)：被动拐角圆角滑移，坚决废除开阔地与平墙的主动归中 ---
+      // 地图边界判定：直走撞上世界边界且有实质位移，视为有效直行（已到达世界尽头，无需侧滑）
+      const minY = CFG.radius + EPS, maxY = H - CFG.radius - EPS;
+      const minX = CFG.radius + EPS, maxX = W - CFG.radius - EPS;
+      const hitBoundary = (mv === MOVE_UP && ny <= minY + 2 * EPS) ||
+                          (mv === MOVE_DOWN && ny >= maxY - 2 * EPS) ||
+                          (mv === MOVE_LEFT && nx <= minX + 2 * EPS) ||
+                          (mv === MOVE_RIGHT && nx >= maxX - 2 * EPS);
+      if (fullStep || (hitBoundary && moved > 2 * EPS)) return [ny, nx];
+
+      // 目标已在地图外且当前无法继续前移：世界尽头不可穿越，直接保留直行（禁止贴墙侧滑）
+      if (tr0 < 0 || tr0 >= H || tc0 < 0 || tc0 >= W) return [ny, nx];
+
       const open = (r, c) => r >= 0 && r < H && c >= 0 && c < W && !blocked[r * W + c];
       let perp;
       if (mv < 2) {
-        // 上/下：目标行 tr；左斜(tr,c0-1)堵且右斜(tr,c0+1)开 → 先右滑
+        // 上/下：目标行 tr；
         const tr = r0 + (mv === 0 ? -1 : 1);
+        const targetOpen = open(tr, c0);
         const leftOpen = open(tr, c0 - 1), rightOpen = open(tr, c0 + 1);
-        if (leftOpen !== rightOpen) perp = rightOpen ? [3, 2] : [2, 3];
-        else perp = x < c0 + 0.5 ? [3, 2] : [2, 3];
+        if (targetOpen) {
+          // 目标格开口：若直走受阻，说明身体边缘卡在门框两壁，朝目标格中心滑动进门
+          perp = x < c0 + 0.5 ? [3, 2] : [2, 3];
+        } else if (leftOpen !== rightOpen) {
+          // 目标格受阻且外拐角单侧开放：朝开放侧被动切向滑移
+          perp = rightOpen ? [3, 2] : [2, 3];
+        } else {
+          // 目标格受阻且两侧同开（开阔地撞单障碍）或同堵（平墙）：坚决不主动向障碍归中，保留直走位置
+          return moved > 2 * EPS ? [ny, nx] : [y, x];
+        }
       } else {
-        // 左/右：目标列 tc；上斜(r0-1,tc)堵且下斜(r0+1,tc)开 → 先下滑
+        // 左/右：目标列 tc；
         const tc = c0 + (mv === 2 ? -1 : 1);
+        const targetOpen = open(r0, tc);
         const upOpen = open(r0 - 1, tc), downOpen = open(r0 + 1, tc);
-        if (upOpen !== downOpen) perp = downOpen ? [1, 0] : [0, 1];
-        else perp = y < r0 + 0.5 ? [1, 0] : [0, 1];
+        if (targetOpen) {
+          // 目标格开口：若直走受阻，说明身体边缘卡在门框两壁，朝目标格中心滑动进门
+          perp = y < r0 + 0.5 ? [1, 0] : [0, 1];
+        } else if (upOpen !== downOpen) {
+          // 目标格受阻且外拐角单侧开放：朝开放侧被动切向滑移
+          perp = downOpen ? [1, 0] : [0, 1];
+        } else {
+          // 目标格受阻且两侧同开（开阔地撞单障碍）或同堵（平墙）：坚决不主动向障碍归中，保留直走位置
+          return moved > 2 * EPS ? [ny, nx] : [y, x];
+        }
       }
       const p1 = this._tryMove(y, x, perp[0], blocked, dist);
       const p2 = this._tryMove(y, x, perp[1], blocked, dist);
-      // 目标前方是一格宽通道（两侧都堵）时，侧移只负责归中，不能一次
-      // 越过中心线，否则下一 tick 会反向修正并左右/上下振荡。
-      if (mv < 2 && !open(r0 + (mv === 0 ? -1 : 1), c0 - 1) &&
-          !open(r0 + (mv === 0 ? -1 : 1), c0 + 1)) {
-        const center = c0 + 0.5;
-        if (perp[0] === MOVE_LEFT) p1[1] = Math.max(p1[1], center);
-        else p1[1] = Math.min(p1[1], center);
-        if (perp[1] === MOVE_LEFT) p2[1] = Math.max(p2[1], center);
-        else p2[1] = Math.min(p2[1], center);
-      } else if (mv >= 2 && !open(r0 - 1, c0 + (mv === 2 ? -1 : 1)) &&
-                 !open(r0 + 1, c0 + (mv === 2 ? -1 : 1))) {
-        const center = r0 + 0.5;
-        if (perp[0] === MOVE_UP) p1[0] = Math.max(p1[0], center);
-        else p1[0] = Math.min(p1[0], center);
-        if (perp[1] === MOVE_UP) p2[0] = Math.max(p2[0], center);
-        else p2[0] = Math.min(p2[0], center);
-      }
       const moved1 = Math.abs(p1[0] - y) + Math.abs(p1[1] - x) > 2 * EPS;
       const moved2 = Math.abs(p2[0] - y) + Math.abs(p2[1] - x) > 2 * EPS;
       if (moved1) return p1;
@@ -1346,7 +1412,9 @@
       return moved > 2 * EPS ? [ny, nx] : [y, x];
     }
 
-    // 方向掩码：目标格 blocked 查表（O(1)，不探测碰撞物理——对齐 JAX legal_mask）；
+    // 方向掩码：
+    // playerModes[p] === 'old': 目标格 blocked 静态查表（O(1)，旧版整格查表）；
+    // playerModes[p] === 'new': 动作意图"向该方向移动一步"，物理位移探针 _tryMove 探测；
     // IDLE 恒合法。放泡掩码：中心格可放泡（can_place）；bomb=0 恒合法。
     legalMask() {
       const mm = [[1, 1, 1, 1, 1], [1, 1, 1, 1, 1]];
@@ -1360,6 +1428,7 @@
       }
       for (let p = 0; p < 2; p++) {
         if (!this.alive[p]) continue;
+        const mode = (this.playerModes && this.playerModes[p]) || 'new';
         const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
         const dist = CFG.stepLen * (this.spdG ? this.spdG[p] : 1.0);
         const r0 = Math.max(0, Math.min(H - 1, Math.floor(y)));
@@ -1372,11 +1441,21 @@
             mm[p][mv] = 1;
             continue;
           }
-          // 动作空间意图为"向该方向移动一步"：通过 _steer 探针测试是否能发生位移或自动转向；
-          // 彻底贴死在障碍/角落无法位移才 mask，避免在边缘格（如右侧第14列）被静态邻居查表提前误杀
-          const [ny, nx] = this._steer(y, x, mv, blocked, dist);
-          const moved = Math.abs(ny - y) + Math.abs(nx - x);
-          mm[p][mv] = moved > 2 * EPS ? 1 : 0;
+          if (mode === 'old') {
+            if (tr < 0 || tr >= H || tc < 0 || tc >= W || blocked[tr * W + tc]) {
+              mm[p][mv] = 0;
+            } else {
+              mm[p][mv] = 1;
+            }
+          } else {
+            // 动作空间意图为"向该方向移动一步"：通过直走探针 _tryMove 测试该轴向是否能发生位移；
+            // 彻底贴死在障碍/角落无法位移才 mask，避免在边缘格（如右侧第14列）被静态邻居查表提前误杀。
+            // 注意：不能调用带侧滑转向的 _steer，否则撞墙/贴泡时侧向位移会误判为该受阻方向合法，
+            // 导致 AI 持续输出撞墙动作引发推墙振荡。
+            const [ny, nx] = this._tryMove(y, x, mv, blocked, dist);
+            const moved = Math.abs(ny - y) + Math.abs(nx - x);
+            mm[p][mv] = moved > 2 * EPS ? 1 : 0;
+          }
         }
         const [r, c] = this.centerCell(p);
         const i = r * W + c;
@@ -2265,15 +2344,18 @@
       const cells = new Int32Array(5);
       const dngC = new Float64Array(5), thrC = new Float64Array(5);
       for (let mv = 0; mv < 4; mv++) {
-        let nr = rIdx + DIRS[mv][0], nc = cIdx + DIRS[mv][1];
-        nr = Math.min(Math.max(nr, 0), H - 1);
-        nc = Math.min(Math.max(nc, 0), W - 1);
-        cells[mv] = nr * W + nc;
+        const nr = rIdx + DIRS[mv][0], nc = cIdx + DIRS[mv][1];
+        if (nr < 0 || nr >= H || nc < 0 || nc >= W) {
+          cells[mv] = -1;
+        } else {
+          cells[mv] = nr * W + nc;
+        }
       }
       cells[MOVE_IDLE] = ownIdx;
       for (let mv = 0; mv < 5; mv++) {
-        dngC[mv] = danger[cells[mv]];
-        thrC[mv] = threat[cells[mv]];
+        const c = cells[mv];
+        dngC[mv] = c >= 0 ? danger[c] : 1.0;
+        thrC[mv] = c >= 0 ? threat[c] : 1.0;
       }
       const noise = [];
       for (let mv = 0; mv < 5; mv++) noise.push(0.05 * this.rng());
@@ -2282,8 +2364,9 @@
       const { mm, bm } = sim.legalMask();
       const legal = [];
       for (let mv = 0; mv < 5; mv++) {
-        legal.push(mm[pid][mv] === 1 &&
-          !(sim.wall[cells[mv]] || sim.brick[cells[mv]]));
+        const c = cells[mv];
+        legal.push(c >= 0 && mm[pid][mv] === 1 &&
+          !(sim.wall[c] || sim.brick[c]));
       }
 
       // --- 吃道具层（hunter 专属，高优先级）---
@@ -2302,8 +2385,9 @@
       const inf = Infinity;
       const VoppC = [], VsafeC = [];
       for (let mv = 0; mv < 5; mv++) {
-        VoppC.push(V_opp[cells[mv]]);
-        VsafeC.push(V_safe[cells[mv]]);
+        const c = cells[mv];
+        VoppC.push(c >= 0 ? V_opp[c] : inf);
+        VsafeC.push(c >= 0 ? V_safe[c] : inf);
       }
       let V_crate = null, VcrateC = null;
       if (eatOn) {
@@ -2311,7 +2395,10 @@
         for (let i = 0; i < N; i++) if (sim.crate[i]) crateSrc[i] = 1;
         V_crate = this._dijkstra(crateSrc, danger, blocked);
         VcrateC = [];
-        for (let mv = 0; mv < 5; mv++) VcrateC.push(V_crate[cells[mv]]);
+        for (let mv = 0; mv < 5; mv++) {
+          const c = cells[mv];
+          VcrateC.push(c >= 0 ? V_crate[c] : inf);
+        }
       }
 
       for (let mv = 0; mv < 5; mv++) {

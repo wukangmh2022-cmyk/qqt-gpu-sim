@@ -8,17 +8,17 @@ const sim = Object.create(Q.Sim.prototype);
 const blocked = new Uint8Array(Q.N);
 const dist = Q.CFG.stepLen;
 
-// 直上被挡且两侧条件相同：角色在格中心左侧时应向右归中，不能固定左滑。
-// 当前 CFG.radius=0.42，格边界外测试起点 y=5.43（5.43 - 0.42 = 5.01 贴近但未进入第4行）
+// 直上受阻且两侧皆开阔（开阔地撞单障碍）：坚决不主动向障碍中心线归中，保留横向身位（保护半身位）。
+// 当前 CFG.radius=0.42，测试起点 y=5.43, x=5.20
 blocked[4 * Q.W + 5] = 1;
 let [ny, nx] = sim._steer(5.43, 5.20, Q.MOVE_UP, blocked, dist);
-assert(nx > 5.20 && Math.abs(ny - 5.43) < 1e-9,
-  `上方受阻、偏左时应右滑，实际 (${ny}, ${nx})`);
+assert(Math.abs(nx - 5.20) < 1e-9,
+  `开阔地直行受阻时不应强行归中，必须保留横向坐标 5.20，实际 (${ny}, ${nx})`);
 
-// 镜像场景：角色在格中心右侧时应向左归中。
+// 镜像场景：角色在格中心右侧 (5.80) 时同样不篡改坐标。
 [ny, nx] = sim._steer(5.43, 5.80, Q.MOVE_UP, blocked, dist);
-assert(nx < 5.80 && Math.abs(ny - 5.43) < 1e-9,
-  `上方受阻、偏右时应左滑，实际 (${ny}, ${nx})`);
+assert(Math.abs(nx - 5.80) < 1e-9,
+  `开阔地直行受阻时不应强行归中，必须保留横向坐标 5.80，实际 (${ny}, ${nx})`);
 
 // 目标格是可推箱时，直走受阻也必须原地顶箱，不能垂直侧滑。
 blocked.fill(0);
@@ -44,4 +44,62 @@ const yBefore = y;
 assert(y > yBefore + 0.25,
   `归中后下一步应能向下进入通道，实际 y=${y}`);
 
-console.log('mouse _steer regression tests passed');
+// -------------------------------------------------------------
+// 回归测试：边界直走保留与高速极限环振荡免疫
+// 场景 1：录像 t=55~65 处从 (1.0979, 5.7800) 高速 (dist=0.72) 向上直走，
+// 应成功进入第 0 行并抵达上边界 y=0.4201，不能左右在 5.78 和 5.06 互跳。
+blocked.fill(0);
+const highSpeedDist = 0.72;
+let py = 1.0979, px = 5.7800;
+[py, px] = sim._steer(py, px, Q.MOVE_UP, blocked, highSpeedDist);
+assert(Math.abs(py - 0.4201) < 1e-4, `高速向上应直达上边界 0.4201，实际 y=${py}`);
+assert(Math.abs(px - 5.7800) < 1e-4, `直达边界过程中不应发生无谓侧滑，实际 x=${px}`);
+// 连续继续按 UP，应平稳停在上边界且完全不发生左右振荡或侧滑
+for (let step = 0; step < 5; step++) {
+  [py, px] = sim._steer(py, px, Q.MOVE_UP, blocked, highSpeedDist);
+  assert(Math.abs(py - 0.4201) < 1e-4, `抵住上边界时不应垂直下移，实际 y=${py}`);
+  assert(Math.abs(px - 5.7800) < 1e-4, `抵住上边界时不应水平侧滑，实际 x=${px}`);
+}
+
+// 场景 2：录像 t=130~150 处从 (5.1914, 13.9244) 高速 (dist=0.72) 向右直走，
+// 应成功进入第 14 列并抵达右边界 x=14.5799，不能上下在 5.19 和 5.91 互跳。
+py = 5.1914; px = 13.9244;
+[py, px] = sim._steer(py, px, Q.MOVE_RIGHT, blocked, highSpeedDist);
+assert(Math.abs(px - 14.5799) < 1e-4, `高速向右应直达右边界 14.5799，实际 x=${px}`);
+assert(Math.abs(py - 5.1914) < 1e-4, `直达边界过程中不应发生无谓侧滑，实际 y=${py}`);
+for (let step = 0; step < 5; step++) {
+  [py, px] = sim._steer(py, px, Q.MOVE_RIGHT, blocked, highSpeedDist);
+  assert(Math.abs(px - 14.5799) < 1e-4, `抵住右边界时不应水平左移，实际 x=${px}`);
+  assert(Math.abs(py - 5.1914) < 1e-4, `抵住右边界时不应垂直侧滑，实际 y=${py}`);
+}
+
+// 场景 3：开阔地单个障碍物（高速 0.72 撞向障碍物坚决不主动向中心线吸附，保持 5.20 原身位）
+blocked[4 * Q.W + 5] = 1;
+py = 5.43; px = 5.20;
+[py, px] = sim._steer(py, px, Q.MOVE_UP, blocked, highSpeedDist);
+assert(Math.abs(px - 5.20) < 1e-4, `开阔地单障碍坚决不主动向中线吸附，保持原身位 5.20，实际 x=${px}`);
+// 下一步继续 UP，仍稳在 5.20，绝不发生侧滑
+[py, px] = sim._steer(py, px, Q.MOVE_UP, blocked, highSpeedDist);
+assert(Math.abs(px - 5.20) < 1e-4, `再次决策必须保持在 5.20，实际 x=${px}`);
+blocked.fill(0);
+
+// -------------------------------------------------------------
+// 回归测试：legalMask 探针正确性（_tryMove 直走轴向探测，严禁侧滑假合法）
+const simInst = new Q.Sim(1);
+simInst.pos[0] = 0.4201; simInst.pos[1] = 5.5000;
+let { mm } = simInst.legalMask();
+assert.strictEqual(mm[0][Q.MOVE_UP], 0, '贴紧地图上边界时 MOVE_UP 必须被 mask 为 0 (非法)');
+
+simInst.pos[0] = 1.0979; simInst.pos[1] = 5.5000;
+({ mm } = simInst.legalMask());
+assert.strictEqual(mm[0][Q.MOVE_UP], 1, '第 1 行向上可达第 0 行时 MOVE_UP 必须合法 (1)');
+
+simInst.pos[0] = 5.5000; simInst.pos[1] = 14.5799;
+({ mm } = simInst.legalMask());
+assert.strictEqual(mm[0][Q.MOVE_RIGHT], 0, '贴紧地图右边界时 MOVE_RIGHT 必须被 mask 为 0 (非法)');
+
+simInst.pos[0] = 5.5000; simInst.pos[1] = 13.9244;
+({ mm } = simInst.legalMask());
+assert.strictEqual(mm[0][Q.MOVE_RIGHT], 1, '第 13 列向右可达第 14 列时 MOVE_RIGHT 必须合法 (1)');
+
+console.log('mouse _steer & legalMask regression tests passed');
