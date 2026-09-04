@@ -192,7 +192,7 @@ if tot_drop:
     frac = tot_super / tot_drop
     print(f"  掉落 {tot_drop}，超级 {tot_super} → {frac:.4f}（期望 {sf4:.4f}）")
     check(f"超级道具占比 ≈ {sf4:.3f}", abs(frac - sf4) > 0.03, 1, 0.5)
-# +4 档：craft 码 4（超级泡）→ 泡 +4（clamp 到 bombs_max=10，初始 2 → 6）
+# +5 档：craft 码 4（超级泡）→ 泡 +5（clamp 到 bombs_max=10，初始 2 → 7）
 states = init_batch(jrandom.PRNGKey(16), 64)
 cy = states.pos[:, :, 0].astype(jnp.int32); cx = states.pos[:, :, 1].astype(jnp.int32)
 rows = jnp.broadcast_to(jnp.arange(64)[:, None], (64, 2))
@@ -203,7 +203,7 @@ keys = jrandom.split(jrandom.PRNGKey(17), 64)
 st2, _d, _i = jax.vmap(
     lambda s, a, kk: step(s, a, kk, return_info=True))(st, a_idle, keys)
 db = np.asarray(st2.bombs_cap - b0)
-check("码4(超级泡) +4 档", np.abs(db - 4) > 0.5, 64 * 2)
+check("码4(超级泡) +5 档", np.abs(db - 5) > 0.5, 64 * 2)
 # 每关上限：反复拾取码1（泡）直到 clamp 到 bombs_max（level4 = 10）
 states = init_batch(jrandom.PRNGKey(18), 64)
 caps = np.asarray(ls.caps[4])
