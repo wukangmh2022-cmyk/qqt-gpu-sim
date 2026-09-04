@@ -2449,6 +2449,7 @@
       if (progress >= 1.0) {
         // 落地：正式写入地图数据
         sim.spawnGraveyardDrop(drop.cell, drop.item.type, drop.item.isSuper);
+        if (sim.airdropPayload > 0) sim.airdropPayload--;
         birdDropFx.splice(k, 1);
         continue;
       }
