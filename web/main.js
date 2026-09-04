@@ -196,7 +196,7 @@
   let mapMenuOpen = false;        // 黑屏选图菜单打开时冻结渲染（不再重绘游戏画面）
   let resultShown = false;
   let prevPos = new Float64Array(4), curPos = new Float64Array(4);
-  let explosion = null, explosionTrig = null, explosionT = 0;
+  let activeExplosions = [];       // 活跃爆炸动画队列 [{ covered, triggered, t0 }]
   // 砖被炸毁的中间态(_die 帧)特效: cell -> {eid, until}; 显示约 0.35s
   let dieFx = new Map();
   // 掉血回收宝箱飞行动画: {x0,y0,x1,y1,cell,t0} —— 从掉血玩家抛物线飞向落点(100ms)
@@ -1232,7 +1232,7 @@
     clearTurnSlide();
     tickDebt = 0;                  // 新开局清空节流补偿欠账
     joyMove = null;                    // 摇杆归位（移动端）
-    explosion = null; explosionTrig = null; resultShown = false;
+    activeExplosions = []; resultShown = false;
     dangerCache = null;             // 开局清掉旧危险图缓存
     replay = {
       meta: {
@@ -1607,9 +1607,8 @@
     const oldSim = sim;
     const oldLevel = selectedLevel;
     const oldDanger = dangerCache;
-    const oldExplosion = explosion;
-    const oldExplosionTrig = explosionTrig;
-    const oldExplosionT = explosionT;
+    const oldActiveExplosions = activeExplosions.slice();
+    activeExplosions = [];
     const replayLevel = levels.find((l) => l.id === doc.meta.levelId) ||
       levels.find((l) => l.source === doc.meta.map);
     if (!replayLevel) throw new Error(`找不到录像地图 ${doc.meta.map}`);
@@ -1756,9 +1755,11 @@
         // 危险图默认不录入视频：危险叠层是调试/可视化用途，导出重放不重建
         // dangerCache（置空 → drawDangerOverlay 直接跳过）。
         if (frame.covered && frame.covered.some((v) => v > 0)) {
-          explosion = new Uint8Array(frame.covered);
-          explosionTrig = frame.triggered ? new Uint8Array(frame.triggered) : null;
-          explosionT = performance.now();
+          activeExplosions.push({
+            covered: new Uint8Array(frame.covered),
+            triggered: frame.triggered ? new Uint8Array(frame.triggered) : null,
+            t0: performance.now(),
+          });
           sndRec('boom');
         }
         // 每 tick 的真实时长在 n 个子帧内均分 → 视频时长与对局一致
@@ -1824,9 +1825,7 @@
       sim = oldSim;
       selectedLevel = oldLevel;
       dangerCache = oldDanger;
-      explosion = oldExplosion;
-      explosionTrig = oldExplosionTrig;
-      explosionT = oldExplosionT;
+      activeExplosions = oldActiveExplosions;
       running = oldRunning;
       startBgm();                              // 恢复现场 BGM（走缓存，无网络开销）
     }
@@ -1976,9 +1975,11 @@
     // 只有真的有火焰（任一格被覆盖）才播爆炸音效/显示爆炸特效
     const hasBlast = info.covered && info.covered.some((v) => v > 0);
     if (hasBlast) {
-      explosion = info.covered;
-      explosionTrig = info.triggered;      // 引爆源格（step 内已清场，必须用返回掩码）
-      explosionT = performance.now();
+      activeExplosions.push({
+        covered: info.covered,
+        triggered: info.triggered,      // 引爆源格（step 内已清场，必须用返回掩码）
+        t0: performance.now(),
+      });
       playSnd('boom');
     }
     if (info.died[0]) playSnd('die');
@@ -2293,10 +2294,17 @@
     //   C 阶段 [0.14s ~ 0.45s]：动画收汁消散：
     //     - 边缘格经历 1 -> 5 -> 1 -> 6 脉动消散序列（0.30s 起伤害自然截止）
     //     - 0.39s ~ 0.45s（后 0.06s）回到 A 阶段范围（收缩回威力=1 的范围，边缘使用帧 6）
-    if (explosion) {
-      const age = (now - explosionT) / 1000;
-      if (age <= 0.45 && explosionTrig) {
-        const blast = explosion;
+    if (activeExplosions.length > 0) {
+      for (let ei = activeExplosions.length - 1; ei >= 0; ei--) {
+        const exp = activeExplosions[ei];
+        const age = (now - exp.t0) / 1000;
+        if (age > 0.45) {
+          activeExplosions.splice(ei, 1);
+          continue;
+        }
+        if (!exp.triggered) continue;
+        const blast = exp.covered;
+        const explosionTrig = exp.triggered;
         const maxBlast = 8;   // 成长上限，与 sim/jax_env.py / 地图数据一致
         if (res && res.flames) {
           const DIR_KEYS = ['U', 'D', 'L', 'R'];
@@ -2388,9 +2396,6 @@
             }
           }
         }
-      } else {
-        explosion = null;
-        explosionTrig = null;
       }
     }
 
@@ -3323,7 +3328,8 @@
     get p0Sel() { return p0Sel; },
     get modelCache() { return modelCache; },
     get running() { return running; },
-    get explosion() { return explosion; },
-    get explosionTrig() { return explosionTrig; },
+    get activeExplosions() { return activeExplosions; },
+    get explosion() { return activeExplosions.length ? activeExplosions[activeExplosions.length - 1].covered : null; },
+    get explosionTrig() { return activeExplosions.length ? activeExplosions[activeExplosions.length - 1].triggered : null; },
   };
 })();
