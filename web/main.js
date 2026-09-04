@@ -3074,8 +3074,8 @@
              <div class="mm-stat"><span>最大泡泡 <output id="mm-bombs-max-v"></output></span><input id="mm-bombs-max" type="range" min="1" max="10" step="1"></div>
              <div class="mm-stat"><span>初始威力 <output id="mm-blast-v"></output></span><input id="mm-blast" type="range" min="1" max="8" step="1"></div>
              <div class="mm-stat"><span>最大威力 <output id="mm-blast-max-v"></output></span><input id="mm-blast-max" type="range" min="1" max="8" step="1"></div>
-             <div class="mm-stat"><span>初始速度 <output id="mm-speed-v"></output></span><input id="mm-speed" type="range" min="0.5" max="2.3" step="0.05"></div>
-             <div class="mm-stat"><span>最大速度 <output id="mm-speed-max-v"></output></span><input id="mm-speed-max" type="range" min="0.5" max="2.3" step="0.05"></div>
+             <div class="mm-stat"><span>初始速度 <output id="mm-speed-v"></output></span><input id="mm-speed" type="range" min="0.5" max="2.5" step="0.05"></div>
+             <div class="mm-stat"><span>最大速度 <output id="mm-speed-max-v"></output></span><input id="mm-speed-max" type="range" min="0.5" max="2.5" step="0.05"></div>
            </div>
          </div>
        </div>` +
@@ -3113,6 +3113,9 @@
           speed: 1.3, speedMax: CFG.growthSpeedMax,
         };
       }
+      const sMaxCap = Math.max(2.5, Number(customStats.speedMax || CFG.growthSpeedMax || 2.4));
+      statEls['speed-max'].max = String(sMaxCap);
+      statEls['speed'].max = String(sMaxCap);
       const values = [customStats.bombs, customStats.bombsMax, customStats.blast,
                       customStats.blastMax, customStats.speed, customStats.speedMax];
       statIds.forEach((id, i) => { statEls[id].value = values[i]; statOut[id].textContent = values[i]; });
@@ -3150,6 +3153,9 @@
         blastMax: l.blast_max || CFG.growthBlastMax,
         speedMax: l.speed_max || CFG.growthSpeedMax,
       };
+      const sMaxCap = Math.max(2.5, Number(customStats.speedMax || 2.4));
+      statEls['speed-max'].max = String(sMaxCap);
+      statEls['speed'].max = String(sMaxCap);
       const values = [customStats.bombs, customStats.bombsMax, customStats.blast,
                       customStats.blastMax, customStats.speed, customStats.speedMax];
       statIds.forEach((id, i) => { statEls[id].value = values[i]; statOut[id].textContent = values[i]; });
@@ -3171,7 +3177,8 @@
       let speed = Math.min(n('speed'), speedMax);
       statEls.bombs.value = bombs; statEls.blast.value = blast; statEls.speed.value = speed;
       customStats = { bombs, blast, speed, bombsMax, blastMax, speedMax };
-      const vals = [bombs, bombsMax, blast, blastMax, speed.toFixed(2), speedMax.toFixed(2)];
+      const fmt = (v) => (Number.isInteger(v) ? String(v) : String(Number(v.toFixed(2))));
+      const vals = [bombs, bombsMax, blast, blastMax, fmt(speed), fmt(speedMax)];
       statIds.forEach((id, i) => { statOut[id].textContent = vals[i]; });
     };
     statIds.forEach((id) => statEls[id].addEventListener('input', (ev) => {
