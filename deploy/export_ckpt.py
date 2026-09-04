@@ -385,6 +385,14 @@ def _verify_forward_cnn(ck: dict, tensors: dict, c: int, h: int, w: int) -> bool
         return True
 
 
+# 源头黑名单：已被废弃/删除的实验变体，禁止再次扫入 index.json
+EXCLUDED_MODELS = {
+    "params_it00000068_hlgauss_top25_patch3_k32",
+    "params_it00000068_repro8x2_k32",
+    "params_it00000068_repro14ch",
+}
+
+
 def scan_out_dir(out_dir: str = OUT_DIR) -> list[dict]:
     """扫描 web/models/*.json（除 index.json）的 meta，重建完整模型列表。
 
@@ -396,14 +404,19 @@ def scan_out_dir(out_dir: str = OUT_DIR) -> list[dict]:
     for f in sorted(os.listdir(out_dir)):
         if not f.endswith(".json") or f == "index.json":
             continue
+        stem = f[:-5]
+        if stem in EXCLUDED_MODELS:
+            continue
         try:
             with open(os.path.join(out_dir, f)) as fp:
                 doc = json.load(fp)
-            if doc.get("meta"):
-                metas.append(doc["meta"])
+            meta = doc.get("meta")
+            if meta and meta.get("name") not in EXCLUDED_MODELS:
+                metas.append(meta)
         except Exception:
             continue                       # 半截 json：跳过不阻塞
     return metas
+
 
 
 def main() -> None:

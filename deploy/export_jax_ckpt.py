@@ -330,6 +330,8 @@ def main():
     args = ap.parse_args()
     out_dir = args.out_dir or OUT_DIR
 
+    from export_ckpt import EXCLUDED_MODELS
+
     paths = args.paths
     if not paths:
         if not os.path.isdir(args.ckpt_dir):
@@ -339,7 +341,8 @@ def main():
             os.path.join(args.ckpt_dir, f)
             for f in os.listdir(args.ckpt_dir)
                        if (f.startswith("params_") or f.startswith("ViTModel"))
-                       and f.endswith(".pkl"))
+                       and f.endswith(".pkl")
+                       and f[:-4] not in EXCLUDED_MODELS)
 
     if not paths:
         print("没有可导出的 JAX transformer ckpt")

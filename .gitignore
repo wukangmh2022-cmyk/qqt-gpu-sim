@@ -31,8 +31,8 @@ upload_2x8gpu/
 # 这些文件通常每个几十 MB，批量实验时会迅速膨胀到数 GB，不纳入源码提交。
 web/models/params_*.json
 web/models/params_*.onnx
-!web/models/params_it00000068_*.json
-!web/models/params_it00000068_*.onnx
+!web/models/params_it00000068_hlgauss_top25foractor_patch3_k32.json
+!web/models/params_it00000068_hlgauss_top25foractor_patch3_k32.onnx
 !web/models/params_Pre-Train_Test.*
 !web/models/params_it00000346_ema.*
 params_it*.pkl
