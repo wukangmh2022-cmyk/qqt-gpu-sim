@@ -170,6 +170,10 @@
       // 局外（reset 时）随机一次，整局所有我方炸弹共用红或蓝 custom。
       this.playerBombStyle = (Math.imul(this.seed, 0x9e3779b1) >>> 0) & 1;
       this.blastLinger = new Int8Array(N);
+      this.horzCovered = new Uint8Array(N);
+      this.vertCovered = new Uint8Array(N);
+      this.horzLinger = new Int8Array(N);
+      this.vertLinger = new Int8Array(N);
       // 被炸砖体的残骸计时：砖外观可在爆炸时进入 _die，但碰撞要等余威结束。
       // 与 blastLinger 分开，避免把普通地面火区错误地当成墙体。
       this.brickLinger = new Int8Array(N);
@@ -638,7 +642,13 @@
       // 逐格计时可正确处理不同时间发生、范围重叠的多次爆炸。
       for (let i = 0; i < N; i++) {
         if (this.blastLinger[i] > 0) this.blastLinger[i]--;
-        if (covered[i]) this.blastLinger[i] = CFG.blastLingerTicks;
+        if (this.horzLinger && this.horzLinger[i] > 0) this.horzLinger[i]--;
+        if (this.vertLinger && this.vertLinger[i] > 0) this.vertLinger[i]--;
+        if (covered[i]) {
+          this.blastLinger[i] = CFG.blastLingerTicks;
+          if (this.horzCovered && this.horzCovered[i] && this.horzLinger) this.horzLinger[i] = CFG.blastLingerTicks;
+          if (this.vertCovered && this.vertCovered[i] && this.vertLinger) this.vertLinger[i] = CFG.blastLingerTicks;
+        }
 
         // 墙砖残骸在水泡爆炸 0.4s（4 tick，水泡效果几乎快消失时）开放通行：
         // 爆炸 tick 记为 4，后续 tick 依次为 3/2/1/0；归零时才开放通行。
@@ -807,14 +817,19 @@
     // ------------------------------------------------------- 爆炸与连锁
     _rays(sources /*Uint8Array*/, blastMap /*Int16Array*/, brick /*Uint8Array*/) {
       const covered = new Uint8Array(N);
+      const horzCovered = new Uint8Array(N);
+      const vertCovered = new Uint8Array(N);
       const bombed = new Uint8Array(N);
       for (let i = 0; i < N; i++) if (this.fuse[i] > 0) bombed[i] = 1;
       for (let s = 0; s < N; s++) {
         if (!sources[s]) continue;
         const sr = (s / W) | 0, sc = s % W;
         covered[s] = 1;
+        horzCovered[s] = 1;
+        vertCovered[s] = 1;
         for (let d = 0; d < 4; d++) {
           const [dr, dc] = DIRS[d];
+          const isV = dr !== 0;
           let r = sr, c = sc;
           for (let k = 0; k < blastMap[s]; k++) {
             r += dr; c += dc;
@@ -822,11 +837,13 @@
             const i = r * W + c;
             if (this.wall[i]) break;          // 永久墙：不覆盖、不穿透
             covered[i] = 1;
+            if (isV) vertCovered[i] = 1;
+            else horzCovered[i] = 1;
             if (bombed[i] || brick[i]) break; // 泡/砖：覆盖但挡火
           }
         }
       }
-      return covered;
+      return { covered, horzCovered, vertCovered };
     }
 
     _resolveExplosions() {
@@ -836,13 +853,16 @@
         if (this.fuse[i] === 0 && this.owner[i] >= 0) { triggered[i] = 1; any = true; }
       }
       if (!any) {
+        if (this.horzCovered) this.horzCovered.fill(0);
+        if (this.vertCovered) this.vertCovered.fill(0);
         return { covered: new Uint8Array(N), triggered };
       }
       // 每颗泡自己的威力（0 回退 cfg.blast）
       const blastMap = new Int16Array(N);
       for (let i = 0; i < N; i++) blastMap[i] = this.bombBlast[i] > 0 ? this.bombBlast[i] : CFG.blast;
 
-      let covered = this._rays(triggered, blastMap, this.brick);
+      const r0 = this._rays(triggered, blastMap, this.brick);
+      let covered = r0.covered, horz = r0.horzCovered, vert = r0.vertCovered;
       for (let round = 0; round < CFG.maxChain - 1; round++) {
         const newly = new Uint8Array(N);
         let anyNew = false;
@@ -853,12 +873,18 @@
         }
         if (!anyNew) break;
         const more = this._rays(newly, blastMap, this.brick);
-        for (let i = 0; i < N; i++) if (more[i]) covered[i] = 1;
+        for (let i = 0; i < N; i++) {
+          if (more.covered[i]) covered[i] = 1;
+          if (more.horzCovered[i]) horz[i] = 1;
+          if (more.vertCovered[i]) vert[i] = 1;
+        }
       }
+      this.horzCovered = horz;
+      this.vertCovered = vert;
       return { covered, triggered };
     }
 
-    // 判定玩家 p 是否被爆炸火焰击中（支持 QQ 堂经典半身位避伤、并排连泡破半身与十字交叉角安全）
+    // 判定玩家 p 是否被爆炸火焰击中（支持 QQ 堂经典半身位避伤、并排连泡破半身与十字交叉角绝对安全）
     _isHitByExplosion(p, covered) {
       const y = this.pos[p * 2], x = this.pos[p * 2 + 1];
       const R = CFG.radius;
@@ -870,44 +896,45 @@
       const cMin = Math.max(0, Math.floor(px0));
       const cMax = Math.min(W - 1, Math.floor(px1));
 
-      const isCov = (rr, cc) => rr >= 0 && rr < H && cc >= 0 && cc < W &&
-        (covered[rr * W + cc] || this.blastLinger[rr * W + cc] > 0);
+      const isHorz = (r, c) => r >= 0 && r < H && c >= 0 && c < W &&
+        ((this.horzCovered && this.horzCovered[r * W + c]) || (this.horzLinger && this.horzLinger[r * W + c] > 0));
+
+      const isVert = (r, c) => r >= 0 && r < H && c >= 0 && c < W &&
+        ((this.vertCovered && this.vertCovered[r * W + c]) || (this.vertLinger && this.vertLinger[r * W + c] > 0));
 
       for (let r = rMin; r <= rMax; r++) {
         for (let c = cMin; c <= cMax; c++) {
           const idx = r * W + c;
-          if (!isCov(r, c)) continue;
+          if (!covered[idx] && this.blastLinger[idx] <= 0) continue;
 
-          // 邻域连通性：正交分解为横向与纵向水流，避免十字交叉口角部虚假碰撞
-          const leftOn = isCov(r, c - 1);
-          const rightOn = isCov(r, c + 1);
-          const topOn = isCov(r - 1, c);
-          const bottomOn = isCov(r + 1, c);
+          // 1. 横向水流：中心严格在 y = r + 0.5；角色 bbox 必须触及横向中轴线才命中
+          if (isHorz(r, c)) {
+            if (py0 <= r + 0.5 && r + 0.5 <= py1) return true;
+            // 双横向水流并排（row r 与 row r+1 均有横向水流经过此列 c）：在分界缝隙处连通破半身
+            if (r < H - 1 && isHorz(r + 1, c)) {
+              if (py0 <= r + 1.0 && r + 1.0 <= py1) return true;
+            }
+          }
 
-          // 1. 横向水流：中心在 y = r + 0.5；仅在相邻行存在平行横向水流（并排连锁）时向上下闭合连通
-          const parTop = isCov(r - 1, c) && (isCov(r - 1, c - 1) || isCov(r - 1, c + 1));
-          const parBottom = isCov(r + 1, c) && (isCov(r + 1, c - 1) || isCov(r + 1, c + 1));
-          const hx0 = c + (leftOn ? 0.0 : 0.5);
-          const hx1 = c + (rightOn ? 1.0 : 0.5);
-          const hy0 = r + (parTop ? 0.0 : 0.5);
-          const hy1 = r + (parBottom ? 1.0 : 0.5);
-          const hasHorz = leftOn || rightOn || (!topOn && !bottomOn);
-          const hitHorz = hasHorz && (Math.max(px0, hx0) <= Math.min(px1, hx1)) &&
-                                     (Math.max(py0, hy0) <= Math.min(py1, hy1));
+          // 2. 纵向水流：中心严格在 x = c + 0.5；角色 bbox 必须触及纵向中轴线才命中
+          if (isVert(r, c)) {
+            if (px0 <= c + 0.5 && c + 0.5 <= px1) return true;
+            // 双纵向水流并排（col c 与 col c+1 均有纵向水流经过此行 r）：在分界缝隙处连通破半身
+            if (c < W - 1 && isVert(r, c + 1)) {
+              if (px0 <= c + 1.0 && c + 1.0 <= px1) return true;
+            }
+          }
 
-          // 2. 纵向水流：中心在 x = c + 0.5；仅在相邻列存在平行纵向水流（并排连锁）时向左右闭合连通
-          const parLeft = isCov(r, c - 1) && (isCov(r - 1, c - 1) || isCov(r + 1, c - 1));
-          const parRight = isCov(r, c + 1) && (isCov(r - 1, c + 1) || isCov(r + 1, c + 1));
-          const vx0 = c + (parLeft ? 0.0 : 0.5);
-          const vx1 = c + (parRight ? 1.0 : 0.5);
-          const vy0 = r + (topOn ? 0.0 : 0.5);
-          const vy1 = r + (bottomOn ? 1.0 : 0.5);
-          const hasVert = topOn || bottomOn || (!leftOn && !rightOn);
-          const hitVert = hasVert && (Math.max(px0, vx0) <= Math.min(px1, vx1)) &&
-                                     (Math.max(py0, vy0) <= Math.min(py1, vy1));
-
-          if (hitHorz || hitVert) {
-            return true;
+          // 兜底兼容（若外部静态调用未走 _resolveExplosions 产生方向掩码）
+          if (!this.horzCovered && !this.vertCovered) {
+            const leftOn = c > 0 && (covered[idx - 1] || this.blastLinger[idx - 1] > 0);
+            const rightOn = c < W - 1 && (covered[idx + 1] || this.blastLinger[idx + 1] > 0);
+            const topOn = r > 0 && (covered[idx - W] || this.blastLinger[idx - W] > 0);
+            const bottomOn = r < H - 1 && (covered[idx + W] || this.blastLinger[idx + W] > 0);
+            const hasH = leftOn || rightOn || (!topOn && !bottomOn);
+            const hasV = topOn || bottomOn || (!leftOn && !rightOn);
+            if (hasH && py0 <= r + 0.5 && r + 0.5 <= py1) return true;
+            if (hasV && px0 <= c + 0.5 && c + 0.5 <= px1) return true;
           }
         }
       }

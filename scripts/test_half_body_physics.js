@@ -153,6 +153,27 @@ function createCleanSim() {
   console.log('  ✓ [场景 6] 十字交叉口对角半身验证通过：bbox未到水泡覆盖格中线完全无伤！');
 }
 
+// --------------------------------------------------------------------------
+// 场景 7：用户截图实测场景（3 颗泡链：col 6/8/9 纵向，row 5 横向；R=0.32 与 R=0.42 均无伤）
+// --------------------------------------------------------------------------
+{
+  const savedR = CFG.radius;
+  for (const rTest of [0.32, 0.42]) {
+    CFG.radius = rTest;
+    const sim = createCleanSim();
+    sim.bombBlast[5 * W + 6] = 5; sim.fuse[5 * W + 6] = 1; sim.owner[5 * W + 6] = 1;
+    sim.bombBlast[5 * W + 8] = 5; sim.fuse[5 * W + 8] = 1; sim.owner[5 * W + 8] = 1;
+    sim.bombBlast[5 * W + 9] = 5; sim.fuse[5 * W + 9] = 1; sim.owner[5 * W + 9] = 1;
+
+    sim.pos[0] = 6.0; sim.pos[1] = 7.787;
+    const hpBefore = sim.hp[0];
+    sim.step([[MOVE_IDLE, 0], [MOVE_IDLE, 0]]);
+    assert.strictEqual(sim.hp[0], hpBefore, `用户实测截图场景 (R=${rTest}) 必须完全无伤！`);
+  }
+  CFG.radius = savedR;
+  console.log('  ✓ [场景 7] 用户实测截图多泡连环场景验证通过：R=0.32/0.42 半身位绝对安全！');
+}
+
 console.log('==============================================================');
-console.log('🎉 全部 6 个半身位与交叉物理场景测试 100% 验收通过！');
+console.log('🎉 全部 7 个半身位与交叉物理场景测试 100% 验收通过！');
 console.log('==============================================================');
