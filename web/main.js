@@ -204,6 +204,7 @@
   // 飞鸟道具空投抛物线动画: [{sx, sy, tx, ty, cell, item, t0, dur}]
   let birdDropFx = [];
   let birdLastCycle = -1;
+  let birdPlannedCycle = -1;
   let birdCruiseQueue = [];
   let dangerCache = null;           // tick 级危险图缓存（logicTick 每 step 重建）
   let lastTickT = 0;
@@ -1204,6 +1205,8 @@
     birdDropFx = [];
     birdCruiseQueue = [];
     birdLastCycle = -1;
+    birdPlannedCycle = -1;
+    sim.airdropPayload = 0;
     window.__sim = sim;                        // 调试钩子：读 sim 状态/帧率用
     sim.reset(selectedLevel, { oldMode: oldModeActive() });  // 旧模型: 13/14列填墙+13宽观测
     if (customStats) {
@@ -2475,7 +2478,12 @@
       // 新周期开始：重置本轮空投规划队列
       if (birdLastCycle !== cycleIndex) {
         birdLastCycle = cycleIndex;
+        // 若由于切后台或卡顿导致未投放完，道具回流至墓地下次再投，不丢失
+        if (birdCruiseQueue.length > 0 && sim.graveyard) {
+          for (const d of birdCruiseQueue) sim.graveyard.push(d.item);
+        }
         birdCruiseQueue = [];
+        if (sim) sim.airdropPayload = 0;
       }
 
       if (cycleTime >= 25.0) {
@@ -2499,13 +2507,17 @@
         // 飞鸟处于最高空 (Z = 60000)
         items.push([60000, birdImg, Math.round(bx), Math.round(by)]);
 
-        // 场内飞行阶段（flightTime 2.0s ~ 4.7s）：
-        // 若墓地有积攒道具，按剩余飞行时间均匀规划空投时刻
-        if (flightTime >= 2.0 && flightTime <= 4.7 && sim.graveyard && sim.graveyard.length > 0) {
-          const count = sim.graveyard.length;
+        // 场内飞行规划：每个 30s 周期只在飞鸟即将入场时（flightTime 2.0s ~ 2.2s）
+        // 一次性从墓地提取快照规划本轮空投（单趟最多 6 件，避免瞬间过载倾泻），
+        // 沿 2.25s ~ 4.20s（精确覆盖右侧第 13 列至左侧第 1 列）均匀分布；
+        // 彻底杜绝飞行期间新炸毁的道具在同航次级联重入、堆死在左边界。
+        if (flightTime >= 2.0 && flightTime <= 4.2 && birdPlannedCycle !== cycleIndex && sim.graveyard && sim.graveyard.length > 0) {
+          birdPlannedCycle = cycleIndex;
+          const count = Math.min(sim.graveyard.length, 6);
           const toDrop = sim.graveyard.splice(0, count);
-          const tStart = Math.max(flightTime + 0.05, 2.1);
-          const tEnd = 4.7;
+          sim.airdropPayload = toDrop.length;
+          const tStart = 2.25;
+          const tEnd = 4.20;
           for (let k = 0; k < toDrop.length; k++) {
             const dropT = tStart + ((k + 0.5) / count) * (tEnd - tStart);
             birdCruiseQueue.push({ flightTime: dropT, item: toDrop[k] });
@@ -2513,33 +2525,40 @@
           birdCruiseQueue.sort((a, b) => a.flightTime - b.flightTime);
         }
 
-        // 沿途准时抛出空投道具：飞鸟在其所在 X 处向上下方安全格洒落
-        if (flightTime >= 2.0 && flightTime <= 4.85 && birdCruiseQueue.length > 0) {
+        // 沿途准时抛出空投道具：飞鸟在其所在有效列向上下方安全格洒落
+        if (flightTime >= 2.20 && flightTime <= 4.30 && birdCruiseQueue.length > 0) {
           while (birdCruiseQueue.length > 0 && birdCruiseQueue[0].flightTime <= flightTime) {
             const nextDrop = birdCruiseQueue.shift();
             const birdCenterX = bx + birdImg.width / 2;
             const birdCenterY = by + birdImg.height / 2;
-            const birdCol = Math.round(bx / CELL);
+            // 目标列限制在活跃区域 [1, W - 2]，绝不砸入 0 列或 14 列死角
+            const birdCol = Math.max(1, Math.min(W - 2, Math.round(bx / CELL)));
 
-            // 寻找落点：优先在飞鸟当前经过的列（及其相邻列）的上下方空闲格
+            // 寻找落点：优先在飞鸟当前经过的列（及其相邻列）的上下方空闲格，同时重罚已有道具聚集的列（防扎堆）
             const inFlight = new Set();
             for (const f of birdDropFx) inFlight.add(f.cell);
             const candidates = [];
+            const colCounts = new Array(W).fill(0);
             for (let i = 0; i < N; i++) {
+              if (sim.crate[i] || inFlight.has(i)) colCounts[i % W]++;
               if (!sim.wall[i] && !sim.brick[i] && !sim.crate[i] && !sim.pushable[i] && sim.fuse[i] <= 0 && !inFlight.has(i)) {
                 candidates.push(i);
               }
             }
             if (candidates.length > 0) {
-              // 计算离飞鸟当前列的水平距离，优先同列或就近列
-              let minColDist = 999;
+              let bestScore = 9999;
+              let bestCells = [];
               for (const c of candidates) {
-                const dist = Math.abs((c % W) - birdCol);
-                if (dist < minColDist) minColDist = dist;
+                const col = c % W;
+                const score = Math.abs(col - birdCol) * 2 + colCounts[col] * 3;
+                if (score < bestScore) {
+                  bestScore = score;
+                  bestCells = [c];
+                } else if (score === bestScore) {
+                  bestCells.push(c);
+                }
               }
-              const bestCols = candidates.filter((c) => Math.abs((c % W) - birdCol) === minColDist);
-              // 在最优列集合中，随机挑选一个空闲格（自然分散在上下方）
-              const tc = bestCols[Math.floor(Math.random() * bestCols.length)];
+              const tc = bestCells[Math.floor(Math.random() * bestCells.length)];
               const targetX = (tc % W) * CELL + CELL / 2;
               const targetY = (((tc / W) | 0) + 0.5) * CELL;
               birdDropFx.push({

@@ -1133,12 +1133,13 @@
         // - 墓地无道具或飞鸟未在场内时，该通道全 0；
         // - 保障兼容：旧版模型仅请求 C=13 或 C=14 通道，完全不读 ch14。
         const cycleTick = this.t % 300;
-        const hasProps = (this.graveyard && this.graveyard.length > 0);
+        const payloadCount = (this.graveyard ? this.graveyard.length : 0) + (this.airdropPayload || 0);
+        const hasProps = payloadCount > 0;
         if (cycleTick >= 270 && cycleTick <= 298 && hasProps) {
           const flightTime = (cycleTick - 250) / 10.0;
           const bx = 15.0 - (18.5 / 3.0) * (flightTime - 2.0);
           const birdCol = Math.round(bx);
-          const intensity = Math.min(1.0, this.graveyard.length / 3.0);
+          const intensity = Math.min(1.0, payloadCount / 3.0);
           for (let r = 0; r < H; r++) {
             if (birdCol >= 0 && birdCol < W) {
               o[14 * N + r * W + birdCol] = intensity;
