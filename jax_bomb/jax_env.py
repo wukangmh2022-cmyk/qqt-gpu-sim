@@ -412,7 +412,7 @@ def _spread_all(fw, fd, passable, not_solid):
 
 # ---------------- 爆炸传播（同 sim/blast.py 的距离缓冲 v2） ----------------
 
-def _rays(seed, bombed, blast_map, wall, brick=None):
+def _rays(seed, bombed, blast_map, wall, brick=None, return_dirs: bool = False):
     """从 seed 出发的十字覆盖。泡/brick 挡火但被覆盖；wall 永久墙挡火**且不被
     覆盖**；blast 每格自己的威力。
 
@@ -424,6 +424,8 @@ def _rays(seed, bombed, blast_map, wall, brick=None):
     seed = seed & ~wall & ~(brick if brick is not None
                             else jnp.zeros_like(wall))  # 源不在墙/砖上（防御）
     covered = seed
+    horz_covered = seed
+    vert_covered = seed
     fd = seed.astype(jnp.int8) * jnp.clip(blast_map, 0, 127).astype(jnp.int8)
     one = jnp.ones_like(fd)
     not_wall = (~wall).astype(jnp.int8)
@@ -431,12 +433,20 @@ def _rays(seed, bombed, blast_map, wall, brick=None):
     not_solid = ~solid                   # 泡/brick 挡火（覆盖后不穿透）；墙靠前置置 0
     for drow, dcol in _DIRS:
         fd_p = fd
+        is_vert = (drow != 0)
         for _ in range(BLAST):
             fd1 = _shift(fd_p, drow, dcol) * not_wall   # 墙格置 0（不覆盖不穿透）
-            covered = covered | (fd1 > 0)
+            active = (fd1 > 0)
+            covered = covered | active
+            if is_vert:
+                vert_covered = vert_covered | active
+            else:
+                horz_covered = horz_covered | active
             fd1 = fd1 - one
             fd1 = fd1 * not_solid.astype(jnp.int8)      # 泡/brick 记录后不穿透
             fd_p = fd1
+    if return_dirs:
+        return covered, horz_covered, vert_covered
     return covered
 
 
@@ -550,7 +560,7 @@ def _danger_map(fuse, wall, bomb_blast, brick=None, fuse_max=FUSE,
 
 
 def _resolve_explosions(fuse, owner, bomb_blast, wall, brick=None,
-                        chain_cap=8):
+                        chain_cap=8, return_dirs: bool = False):
     """返回 (covered, triggered)，连锁最多 chain_cap 轮。
 
     **与 torch 生产对齐**（torch_sim._resolve_c 的 chain_cap = chain_cap_rounds
@@ -577,11 +587,14 @@ def _resolve_explosions(fuse, owner, bomb_blast, wall, brick=None,
 
     _, _, covered, triggered = jax.lax.while_loop(
         cond, body, (0, live & covered & ~triggered, covered, triggered))
+    if return_dirs:
+        covered, horz_covered, vert_covered = _rays(triggered, live, blast_map, wall, brick, return_dirs=True)
+        return covered, triggered, horz_covered, vert_covered
     return covered, triggered
 
 
 def _resolve_explosions_matrix(fuse, owner, bomb_blast, wall, brick=None,
-                               chain_cap=8):
+                               chain_cap=8, return_dirs: bool = False):
     """矩阵版爆炸连锁：布尔传递闭包 + 一次 _rays，替代 while 波前接力。
 
     torch 连锁语义（_resolve_c，chain_cap=8）：初始 triggered（fuse==0）泡
@@ -634,8 +647,61 @@ def _resolve_explosions_matrix(fuse, owner, bomb_blast, wall, brick=None,
 
     burst_map = jnp.zeros((H, W), jnp.bool_)
     burst_map = burst_map.at[cr, cc].set(jnp.where(mask, burst, False))
-    covered = _rays(burst_map, live, blast_map, wall, brick)
+    if return_dirs:
+        covered, horz_covered, vert_covered = _rays(burst_map, live, blast_map, wall, brick, return_dirs=True)
+        return covered, burst_map, horz_covered, vert_covered
+    covered = _rays(burst_map, live, blast_map, wall, brick, return_dirs=False)
     return covered, burst_map
+
+
+def _is_hit_by_explosion(pos, horz_active, vert_active, radius=RADIUS):
+    """判定玩家是否被水泡爆炸击中（对齐 Web Sim._isHitByExplosion）。
+
+    严格按照水流真实物理方向与中轴线相交测试：
+      1. 横向水流：中心严格在 y = r + 0.5；角色 bbox 必须触及中轴线才命中。
+         若相邻行 (r+1) 亦有同向横向水流，则在两行分界线 y = r + 1.0 处缝合连通破半身。
+      2. 纵向水流：中心严格在 x = c + 0.5；角色 bbox 必须触及中轴线才命中。
+         若相邻列 (c+1) 亦有同向纵向水流，则在两列分界线 x = c + 1.0 处缝合连通破半身。
+    """
+    y, x = pos[:, 0], pos[:, 1]
+    py0, py1 = y - radius, y + radius
+    px0, px1 = x - radius, x + radius
+
+    r0 = jnp.clip(jnp.floor(py0).astype(jnp.int32), 0, H - 1)
+    r1 = jnp.clip(jnp.floor(py1).astype(jnp.int32), 0, H - 1)
+    c0 = jnp.clip(jnp.floor(px0).astype(jnp.int32), 0, W - 1)
+    c1 = jnp.clip(jnp.floor(px1).astype(jnp.int32), 0, W - 1)
+
+    # 角色碰撞盒最多覆盖 4 格 (P, 4)
+    r = jnp.stack([r0, r0, r1, r1], axis=-1)
+    c = jnp.stack([c0, c1, c0, c1], axis=-1)
+
+    py0_exp = py0[:, None]
+    py1_exp = py1[:, None]
+    px0_exp = px0[:, None]
+    px1_exp = px1[:, None]
+
+    h_act = horz_active[r, c]
+    v_act = vert_active[r, c]
+
+    r_next = jnp.clip(r + 1, 0, H - 1)
+    h_next = (r < H - 1) & horz_active[r_next, c]
+
+    c_next = jnp.clip(c + 1, 0, W - 1)
+    v_next = (c < W - 1) & vert_active[r, c_next]
+
+    rf = r.astype(jnp.float32)
+    cf = c.astype(jnp.float32)
+
+    hit_h_center = (py0_exp <= rf + 0.5) & (rf + 0.5 <= py1_exp)
+    hit_h_seam = h_next & (py0_exp <= rf + 1.0) & (rf + 1.0 <= py1_exp)
+    hit_h = h_act & (hit_h_center | hit_h_seam)
+
+    hit_v_center = (px0_exp <= cf + 0.5) & (cf + 0.5 <= px1_exp)
+    hit_v_seam = v_next & (px0_exp <= cf + 1.0) & (cf + 1.0 <= px1_exp)
+    hit_v = v_act & (hit_v_center | hit_v_seam)
+
+    return (hit_h | hit_v).any(axis=-1)
 
 
 # ---------------- 移动（同 sim/move.py _resolve_axis） ----------------
@@ -954,8 +1020,8 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     newpos = jnp.stack([p0, p1])
 
     # 4. 爆炸与连锁（墙挡火不覆盖；brick 挡火但被覆盖）
-    covered, triggered = _resolve_explosions_matrix(fuse, owner, bomb_blast,
-                                                    wall, brick)
+    covered, triggered, horz_covered, vert_covered = _resolve_explosions_matrix(
+        fuse, owner, bomb_blast, wall, brick, return_dirs=True)
     # 爆炸水泡清理地图现有道具
     crate = jnp.where(covered, jnp.int8(0), crate)
     # 4b. 炸掉的砖/灌木 → 宝箱（JS 语义：被覆盖瞬间按本关 crate_rate 掷爆率，
@@ -992,12 +1058,15 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     pushable = pushable & ~pushable_hit   # 可推箱被炸 → 箱子消失（brick 同步清）
     push_t = jnp.where(pushable_hit, 0.0, push_t)
 
-    # 5. 伤害：当前爆炸 + 之前 0.3s 余威覆盖的中心格均可扣 1 血。
-    #    余威只持续 BLAST_LINGER_TICKS 个后续 tick；invuln 防止重复掉血。
+    # 5. 伤害：当前爆炸 + 之前 0.3s 余威覆盖的区域均可扣 1血。
+    #    支持真实物理中轴线与并排破半身判定（对齐 Web Sim._isHitByExplosion）。
     ccell = newpos.astype(jnp.int32)
-    linger_active = blast_linger > 0
-    damage_covered = covered | linger_active
-    hit = alive0 & damage_covered[ccell[:, 0], ccell[:, 1]]
+    horz_linger_active = (blast_linger >> 4) > 0
+    vert_linger_active = (blast_linger & 0x0F) > 0
+    horz_active = horz_covered | horz_linger_active
+    vert_active = vert_covered | vert_linger_active
+
+    hit = alive0 & _is_hit_by_explosion(newpos, horz_active, vert_active, RADIUS)
     invuln_ok = invuln <= 0
     hit_eff = hit & invuln_ok
     hp_new = jnp.clip(hp - hit_eff.astype(jnp.int32), 0, None)
@@ -1006,10 +1075,12 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     invuln = jnp.clip(invuln - 1, 0, None)
     invuln = jnp.where(hit_eff, INVULN, invuln)
 
-    # 爆炸当前覆盖范围在本 tick 结算后保留为余威；当前爆炸 tick 本身已经
-    # 用 covered 判过一次伤害，后续 tick 只用 blast_linger > 0 判进入伤害。
-    blast_linger = jnp.maximum(blast_linger.astype(jnp.int16) - 1, 0).astype(jnp.int8)
-    blast_linger = jnp.where(covered, jnp.int8(BLAST_LINGER_TICKS), blast_linger)
+    # 爆炸当前覆盖范围在本 tick 结算后保留为余威（高 4 位为横向余威 tick，低 4 位为纵向余威 tick）
+    hl = jnp.maximum((blast_linger >> 4) - 1, 0)
+    vl = jnp.maximum((blast_linger & 0x0F) - 1, 0)
+    hl = jnp.where(horz_covered, BLAST_LINGER_TICKS, hl)
+    vl = jnp.where(vert_covered, BLAST_LINGER_TICKS, vl)
+    blast_linger = ((hl << 4) | vl).astype(jnp.int8)
 
     # 5b. 掉血惩罚 + 宝箱回收（对齐 torch hit_attr_penalty 块）：被炸掉血的
     #     玩家泡/威/速各扣 2 层（clamp 回模式起点），扣掉的以宝箱随机回收
