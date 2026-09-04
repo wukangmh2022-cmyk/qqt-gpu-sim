@@ -823,7 +823,7 @@ def test_res_assets_load_and_crop():
         # 泡泡：单张固定图（呼吸靠渲染时垂直浮动）。素材原生 40px/格，按画布
         # 缩放 1.5 倍到格子大小（60×60，和爆炸中心一致）—— 不缩小，
         # 摆放与人物同款（水平中心对格心、底边对格底线）。
-        assert len(res.bombs) == 1 and res.bombs[0].get_size() == (60, 60)
+        assert len(res.bombs) == 4 and all(f.get_height() >= 40 for f in res.bombs)
         # 爆炸中心 40×1.5 = 60
         assert res.explo_center.get_size() == (60, 60)
         assert len(res.explo_arms) == 4

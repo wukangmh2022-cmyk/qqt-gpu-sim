@@ -548,11 +548,9 @@ def draw_grid(screen, res: Res, sim, obs, rpos, face, anim_frame,
         owner_rc = int(owner[r, c])
         fuse_rc = int(fuse[r, c])
         age = max(0, cfg.fuse - fuse_rc)
-        frame_idx = ((age * 4) // max(1, cfg.tick_hz)) % 4
-        if owner_rc == 0:
-            bomb_surf = res.bomb_custom[res.player_bomb_style][frame_idx]
-        else:
-            bomb_surf = res.bomb_default[frame_idx]
+        frames = res.bomb_custom[res.player_bomb_style % len(res.bomb_custom)] if owner_rc == 0 else res.bomb_default
+        frame_idx = ((age * len(frames)) // max(1, cfg.tick_hz)) % len(frames)
+        bomb_surf = frames[frame_idx]
         # 炸弹帧按原图尺寸渲染：横向居中，底边贴在格子底线；
         # 高于一格的透明/可见部分自然向上溢出，和人物渲染规则一致。
         bx = int(c * CELL + (CELL - bomb_surf.get_width()) / 2)

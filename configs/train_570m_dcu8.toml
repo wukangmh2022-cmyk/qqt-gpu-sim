@@ -1,0 +1,66 @@
+# ============================================================================
+# 570M 验证实验：单机 8 卡 DCU
+# 核心变化：
+# 1. legal_mask 物理位移探针 + _steer 移除开阔地/平墙主动归中
+# 2. 空场景 (empty=0.05) 45度 X 十字箱 + 50% 满配战力 5 档域随机化初始属性
+# 3. map_pool_sparring.toml 地图池加权（比武、珍宝岛、夺宝10、功夫01等）
+# 4. 单机 8 卡（num_envs=16384，每卡 2048，单轮 8.39M 步，68 iters 精准 570.4M）
+# ============================================================================
+
+[run]
+name = "sparring_570m_dcu8_legalmask_nosteer"
+iters = 68                         # 68 iters * 8.39M = 570.4M 步
+seed = 42
+fresh = true
+
+[model]
+arch = "transformer"
+embed = 392
+depth = 4
+patch = 3
+heads = 4
+ff_factor = 4
+obs_channels = 14
+
+[rollout]
+num_envs = 16384                     # 8 卡并行环境数 (单卡 2048 envs)
+num_steps = 256                      # 每次采样步长 (单轮 steps = 2 * 16384 * 256 = 8.39M)
+minibatch = 16384
+epochs = 2
+
+[optimizer]
+lr = 0.0003
+gamma = 0.995
+lam = 0.95
+clip_eps = 0.2
+vf_coef = 0.5
+ent_coef = 0.01
+
+[reward]
+profile = "dense_win10_symmetric_pre_asym"
+step_penalty = 0.001
+hit_reward = 1.5
+win_bonus = 10.0
+lose_bonus_start = 10.0
+lose_bonus_floor = 10.0
+timeout_mode = "hp_diff_scaled"
+timeout_max_bonus = 2.0
+timeout_per_hp = 0.5
+crate_reward_coef = 0.5
+crate_reward_floor = 0.05
+crate_reward_anneal_steps = 30000000000
+explore_reward_coef = 0.0
+brick_reward_coef = 0.0
+reward_anneal_k = 0.0
+
+[environment]
+levels = "levels.json"
+level_weights = "configs/map_pool_sparring.toml"
+
+[checkpoint]
+ckpt_dir = "ckpt"
+ckpt_every = 5
+ckpt_max_to_keep = 5
+ckpt_local_dir = "ckpt_local"
+ckpt_local_every = 5
+ckpt_local_max_to_keep = 10

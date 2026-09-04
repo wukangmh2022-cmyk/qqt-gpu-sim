@@ -40,7 +40,7 @@ def _content_box(surf: pygame.Surface):
     """非透明内容的包围盒 (x0,y0,x1,y1)，全透明返回 None。"""
     import numpy as np
     arr = pygame.surfarray.pixels_alpha(surf)
-    ys, xs = (arr > 100).nonzero()
+    xs, ys = (arr > 100).nonzero()
     if len(xs) == 0:
         return None
     return (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
@@ -55,7 +55,7 @@ def _body_center(surf: pygame.Surface) -> tuple[int, int]:
     """
     import numpy as np
     arr = pygame.surfarray.pixels_alpha(surf)
-    ys, xs = (arr > 40).nonzero()
+    xs, ys = (arr > 40).nonzero()
     if len(xs) == 0:
         w, h = surf.get_size()
         return (w // 2, h // 2)
@@ -83,12 +83,17 @@ class Res:
             cell, "bomb-default",
             ("bomb1_stand_0_0.png", "bomb1_stand_0_1.png",
              "bomb1_stand_0_2.png", "bomb1_stand_0_3.png"))
-        self.bomb_custom = [
-            self._load_bomb_frames(cell, "bomb-custom/png",
-                                   ("red_01.png", "red_02.png", "red_03.png", "red_04.png")),
-            self._load_bomb_frames(cell, "bomb-custom/png",
-                                   ("blue_01.png", "blue_02.png", "blue_03.png", "blue_04.png")),
-        ]
+        custom_dir = os.path.join(RES_DIR, "bomb-custom", "png")
+        self.bomb_custom = []
+        if os.path.isdir(custom_dir):
+            for fname in sorted(os.listdir(custom_dir)):
+                if fname.endswith(".png"):
+                    frames = self._load_bomb_strip(cell, os.path.join("bomb-custom", "png", fname))
+                    if frames:
+                        self.bomb_custom.append(frames)
+        if not self.bomb_custom:
+            self.bomb_custom = [self.bomb_default]
+        self.player_bomb_style = random.randrange(len(self.bomb_custom))
         # 兼容旧调用方；新的 draw_grid 按 owner 选择具体序列帧。
         self.bombs = self.bomb_default
         self.props = self._load_props(cell)     # 道具图：威力/泡泡数量/鞋子
@@ -280,6 +285,31 @@ class Res:
             out.append(frame)
         return out
 
+    def _load_bomb_strip(self, cell: int, relpath: str) -> list[pygame.Surface]:
+        """加载横向雪碧图条带并切分成序列帧（4 帧或 5 帧）。"""
+        try:
+            img = _load(relpath)
+        except (FileNotFoundError, pygame.error):
+            return self.bomb_default
+        w, h = img.get_size()
+        n_frames = 5 if w >= 190 else 4
+        fw = w // n_frames
+        out = []
+        k = cell / 40.0
+        for i in range(n_frames):
+            sub = img.subsurface((i * fw, 0, fw, h)).copy()
+            box = _content_box(sub)
+            if box is not None:
+                x0, y0, x1, y1 = box
+                sub = sub.subsurface((x0, y0, x1 - x0 + 1, y1 - y0 + 1)).copy()
+            w0, h0 = sub.get_size()
+            scaled = pygame.transform.smoothscale(
+                sub, (max(1, round(w0 * k)), max(1, round(h0 * k))))
+            frame = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
+            frame.blit(scaled, (0, 0))
+            out.append(frame)
+        return out
+
     # ---------------- 道具图（宝箱用）：威力 / 泡泡数量 / 鞋子 ----------------
     # 三张 40×40 原生素材，按画布缩放 1.5 倍到格子大小（60×60，和炸弹一致）。
     # 宝箱格渲染时轮流展示（威力→数量→鞋子），上下浮动（呼吸），
@@ -324,12 +354,22 @@ class Res:
             except FileNotFoundError:
                 img = self._fallback_cell((255, 200, 80))
             if horiz:
+                if img.get_width() < length:
+                    tiled = pygame.Surface((length, img.get_height()), pygame.SRCALPHA)
+                    for ox in range(0, length, img.get_width()):
+                        tiled.blit(img, (ox, 0))
+                    img = tiled
                 w, h = img.get_width(), img.get_height()
                 x = 0 if dcol < 0 else w - length   # 向左保留最左 / 向右保留最右
                 sub = img.subsurface((x, 0, length, h))
                 arms[(drow, dcol)] = pygame.transform.smoothscale(
                     sub, (int(length * self.s), cell))
             else:
+                if img.get_height() < length:
+                    tiled = pygame.Surface((img.get_width(), length), pygame.SRCALPHA)
+                    for oy in range(0, length, img.get_height()):
+                        tiled.blit(img, (0, oy))
+                    img = tiled
                 w, h = img.get_width(), img.get_height()
                 y = 0 if drow < 0 else h - length   # 向上保留最上 / 向下保留最下
                 sub = img.subsurface((0, y, w, length))

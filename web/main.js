@@ -42,7 +42,7 @@
   const ctx = canvas.getContext('2d', { alpha: false });
   ctx.imageSmoothingEnabled = false;
   const $ = (id) => document.getElementById(id);
-  const elSkin = $('skin'),
+  const elSkin = $('skin'), elBombSkin = $('bomb-skin'),
         elSpectate = $('spectate'), elDanger = $('danger'), elSound = $('sound'),
         elBgm = $('bgm'), elApplyModel = $('apply-model'), elCurModel = $('cur-model'),
         elEnemyAi = $('enemy-ai'), elP0Ai = $('p0-ai'), elP0AiWrap = $('p0-ai-wrap'),
@@ -621,45 +621,84 @@
     }
     elSkin.value = '海王子';
     const wudi = premulAlpha(await loadImage('assets/无敌.PNG'));
-    // 炸弹序列帧：每组 4 帧，1s 均匀播放（每帧 0.25s），3s 引信循环三组。
-    // 敌方固定 default；我方在每局开始时从红/蓝 custom 随机选一组并固定。
-    async function loadBombFrames(dir, names) {
-      return Promise.all(names.map(async (name) => {
-        const src = await loadImage(`assets/${dir}/${name}`);
-        // 保留原始帧尺寸 × SCALE（40px 原图 → 60px 格子）：42px 高帧
-        // 应渲染为 63px，允许像人物一样从格子顶部上溢，底边仍贴格底。
-        // 先裁掉透明边距，避免蓝色冰泡泡因原图留白看起来偏小。
-        let sx = 0, sy = 0, sw = src.width, sh = src.height;
+    // 泡泡皮肤元数据（21 款经典/定制泡泡素材）：
+    // 横向雪碧图序列帧，自适应 4 帧或 5 帧（足球），含像素级 seam 最优分割边界
+    const BOMB_SKINS = [
+      { name: '经典黄泡泡', file: '经典黄泡泡.png', frames: 4, splits: [0, 38, 73, 112, 156] },
+      { name: '天使之翼', file: '天使之翼.png', frames: 4, splits: [0, 40, 83, 123, 160] },
+      { name: '日炎金乌', file: '日炎金乌.png', frames: 4, splits: [0, 40, 84, 127, 168] },
+      { name: '黄金足球', file: '黄金足球.png', frames: 5, splits: [0, 44, 85, 125, 166, 208] },
+      { name: '璀璨紫粉', file: '璀璨紫粉.png', frames: 4, splits: [0, 40, 85, 126, 165] },
+      { name: '绯红幻彩', file: '绯红幻彩.png', frames: 4, splits: [0, 40, 77, 118, 164] },
+      { name: '翡翠绿晶', file: '翡翠绿晶.png', frames: 4, splits: [0, 39, 86, 126, 163] },
+      { name: '冰雪奇缘', file: '冰雪奇缘.png', frames: 4, splits: [0, 40, 77, 117, 163] },
+      { name: '圣诞红帽', file: '圣诞红帽.png', frames: 4, splits: [0, 45, 90, 134, 178] },
+      { name: '炽热烈焰', file: '炽热烈焰.png', frames: 4, splits: [0, 43, 84, 128, 174] },
+      { name: '幸运草绿', file: '幸运草绿.png', frames: 4, splits: [0, 39, 79, 118, 165] },
+      { name: '幽冥紫火', file: '幽冥紫火.png', frames: 4, splits: [0, 43, 88, 132, 174] },
+      { name: '金黄龙珠', file: '金黄龙珠.png', frames: 4, splits: [0, 39, 79, 118, 165] },
+      { name: '幽蓝冰焰', file: '幽蓝冰焰.png', frames: 4, splits: [0, 43, 84, 128, 174] },
+      { name: '甜心草莓', file: '甜心草莓.png', frames: 4, splits: [0, 42, 88, 130, 167] },
+      { name: '深海漩涡', file: '深海漩涡.png', frames: 4, splits: [0, 39, 81, 121, 156] },
+      { name: '极光黑曜', file: '极光黑曜.png', frames: 4, splits: [0, 40, 77, 118, 164] },
+      { name: '萌趣小蟹', file: '萌趣小蟹.png', frames: 4, splits: [0, 39, 76, 116, 158] },
+      { name: '暗夜玫瑰', file: '暗夜玫瑰.png', frames: 4, splits: [0, 39, 75, 115, 154] },
+      { name: '星月水漾', file: '星月水漾.png', frames: 4, splits: [0, 40, 77, 117, 163] },
+      { name: '挚爱心愿', file: '挚爱心愿.png', frames: 4, splits: [0, 37, 74, 111, 152] },
+    ];
+
+    if (elBombSkin) {
+      elBombSkin.innerHTML = '';
+      for (const bs of BOMB_SKINS) {
+        const opt = document.createElement('option');
+        opt.value = bs.name; opt.textContent = bs.name;
+        elBombSkin.appendChild(opt);
+      }
+      elBombSkin.value = '经典黄泡泡';
+    }
+
+    // 切割横向雪碧图条为每帧 Canvas 列表（自动裁切透明留白）
+    async function loadBombStrip(file, frames, splits) {
+      const src = await loadImage(`assets/bomb-custom/${file}`);
+      const list = [];
+      for (let i = 0; i < frames; i++) {
+        let x0 = splits ? splits[i] : Math.round(i * src.width / frames);
+        let x1 = splits ? splits[i + 1] : Math.round((i + 1) * src.width / frames);
+        let sw = Math.max(1, x1 - x0);
+        let sh = src.height;
+        let sx = x0, sy = 0;
         try {
           const probe = document.createElement('canvas');
-          probe.width = src.width; probe.height = src.height;
+          probe.width = sw; probe.height = sh;
           const pg = probe.getContext('2d');
-          pg.drawImage(src, 0, 0);
-          const d = pg.getImageData(0, 0, src.width, src.height).data;
-          let x0 = src.width, y0 = src.height, x1 = -1, y1 = -1;
-          for (let y = 0; y < src.height; y++) for (let x = 0; x < src.width; x++) {
-            if (d[(y * src.width + x) * 4 + 3] > 8) {
-              if (x < x0) x0 = x; if (x > x1) x1 = x;
-              if (y < y0) y0 = y; if (y > y1) y1 = y;
+          pg.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
+          const d = pg.getImageData(0, 0, sw, sh).data;
+          let px0 = sw, py0 = sh, px1 = -1, py1 = -1;
+          for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+            if (d[(y * sw + x) * 4 + 3] > 8) {
+              if (x < px0) px0 = x; if (x > px1) px1 = x;
+              if (y < py0) py0 = y; if (y > py1) py1 = y;
             }
           }
-          if (x1 >= x0 && y1 >= y0) {
-            sx = x0; sy = y0; sw = x1 - x0 + 1; sh = y1 - y0 + 1;
+          if (px1 >= px0 && py1 >= py0) {
+            sx = x0 + px0; sy = py0; sw = px1 - px0 + 1; sh = py1 - py0 + 1;
           }
-        } catch (e) { /* 透明边界探测失败时使用原图 */ }
+        } catch (e) { /* probe fallback */ }
         const w = Math.max(1, Math.round(sw * SCALE));
         const h = Math.max(1, Math.round(sh * SCALE));
         const c = document.createElement('canvas');
         c.width = w; c.height = h;
         c.getContext('2d').drawImage(src, sx, sy, sw, sh, 0, 0, w, h);
-        return c;
-      }));
+        list.push(c);
+      }
+      return list;
     }
-    const bombNames = ['bomb1_stand_0_0.png', 'bomb1_stand_0_1.png',
-                       'bomb1_stand_0_2.png', 'bomb1_stand_0_3.png'];
-    const iceBombNames = ['blue_01.png', 'blue_02.png', 'blue_03.png', 'blue_04.png'];
-    const bombDefaultFrames = await loadBombFrames('bomb-default', bombNames);
-    const bombIceFrames = await loadBombFrames('bomb-custom', iceBombNames);
+
+    const bombSkins = {};
+    for (const bs of BOMB_SKINS) {
+      bombSkins[bs.name] = await loadBombStrip(bs.file, bs.frames, bs.splits);
+    }
+    const bombDefaultFrames = bombSkins['经典黄泡泡'];
     // 宝箱单图标：威力/泡泡数量/鞋子（炸开时种类已定，不再轮播）
     // 按原图像素 × 场景缩放系数(SCALE) 放大，绘制时格内居中（与整个场景一致）
     const iconScale = (img) => scaleCanvas(img, Math.round(img.width * SCALE), Math.round(img.height * SCALE));
@@ -718,7 +757,9 @@
       enemyRows,                   // 敌人固定角色c（不再染红）
       playerAi: enemyRows,
       wudi: scaleCanvas(wudi, Math.round(85 * SCALE), Math.round(85 * SCALE)),
-      bombFrames: { default: bombDefaultFrames, ice: bombIceFrames },
+      bombSkins,
+      bombDefaultFrames,
+      playerBombFrames: bombSkins[elBombSkin ? elBombSkin.value : '经典黄泡泡'] || bombDefaultFrames,
       propIcons, superIcons, boxQ, baseBand,
       point: scaleCanvas(await loadImage('assets/point.png'),
                          Math.round(40 * SCALE * 0.5), Math.round(40 * SCALE * 0.5)),
@@ -1417,6 +1458,11 @@
     if (res && res.skins) res.players = res.skins[elSkin.value];   // 换皮肤
     startGame();
   });
+  if (elBombSkin) {
+    elBombSkin.addEventListener('change', () => {
+      if (res && res.bombSkins) res.playerBombFrames = res.bombSkins[elBombSkin.value] || res.bombDefaultFrames;
+    });
+  }
   elApplyModel.addEventListener('click', applyModel);
   elSpectate.addEventListener('change', () => {
     // 勾选观战时显示「我方：」下拉（模型 / 规则）
@@ -2476,14 +2522,10 @@
       if (isCellCovered(i)) continue;
       const r = (i / W) | 0, c = i % W;
       const age = Math.max(0, CFG.fuse - sim.fuse[i]);
-      const frame = Math.floor((age / CFG.tickHz) * 4) % 4;
       const owner = sim.owner[i];
-      const useIce = owner === 0 && (
-        sim.playerBombStyle != null ? ((sim.playerBombStyle & 1) === 1)
-                                    : ((sim.bombStyle[i] & 1) === 1)
-      );
-      const frames = useIce ? res.bombFrames.ice : res.bombFrames.default;
-      const img = frames[frame];
+      const frames = (owner === 0 && res.playerBombFrames) ? res.playerBombFrames : res.bombDefaultFrames;
+      const frame = Math.floor((age / CFG.tickHz) * frames.length) % frames.length;
+      const img = frames[frame] || frames[0];
       const bx = c * CELL + (CELL - img.width) / 2;
       const by = (r + 1) * CELL - img.height;
       items.push([r * Z_ROW_STRIDE + 17, img, bx, by]);
