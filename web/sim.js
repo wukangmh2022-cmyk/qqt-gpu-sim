@@ -41,11 +41,11 @@
     // 成长（corridor 起步）
     growthBombsStart: 2, growthBlastStart: 2, growthSpeedStart: 1.3,
     growthBombsMax: 10, growthBlastMax: 8,
-    growthSpeedMax: 2.3, growthSpeedStep: 1.0 / 7,   // 7档: (2.3-1.3)/7 ≈ 0.142857
+    growthSpeedMax: 2.4, growthSpeedStep: 1.1 / 7,   // 7档: (2.4-1.3)/7 ≈ 0.157143
     // open 关起步 = 上限 80%（与训练一致）
     openGrowthBombs: Math.ceil(10 * 0.8),        // 8
     openGrowthBlast: Math.ceil(7 * 0.8),         // 6
-    openGrowthSpeed: Math.round(2.3 * 0.8 * 100) / 100,  // 1.84
+    openGrowthSpeed: Math.round(2.4 * 0.8 * 100) / 100,  // 1.92
     // 地图
     corridorWidth: 5, topWallRows: 4,
     // 宝箱

@@ -653,13 +653,9 @@
     }
     const bombNames = ['bomb1_stand_0_0.png', 'bomb1_stand_0_1.png',
                        'bomb1_stand_0_2.png', 'bomb1_stand_0_3.png'];
-    const customNames = [
-      ['red_01.png', 'red_02.png', 'red_03.png', 'red_04.png'],
-      ['blue_01.png', 'blue_02.png', 'blue_03.png', 'blue_04.png'],
-    ];
+    const iceBombNames = ['blue_01.png', 'blue_02.png', 'blue_03.png', 'blue_04.png'];
     const bombDefaultFrames = await loadBombFrames('bomb-default', bombNames);
-    const bombCustomFrames = await Promise.all(
-      customNames.map((names) => loadBombFrames('bomb-custom', names)));
+    const bombIceFrames = await loadBombFrames('bomb-custom', iceBombNames);
     // 宝箱单图标：威力/泡泡数量/鞋子（炸开时种类已定，不再轮播）
     // 按原图像素 × 场景缩放系数(SCALE) 放大，绘制时格内居中（与整个场景一致）
     const iconScale = (img) => scaleCanvas(img, Math.round(img.width * SCALE), Math.round(img.height * SCALE));
@@ -718,7 +714,7 @@
       enemyRows,                   // 敌人固定角色c（不再染红）
       playerAi: enemyRows,
       wudi: scaleCanvas(wudi, Math.round(85 * SCALE), Math.round(85 * SCALE)),
-      bombFrames: { default: bombDefaultFrames, custom: bombCustomFrames },
+      bombFrames: { default: bombDefaultFrames, ice: bombIceFrames },
       propIcons, superIcons, boxQ, baseBand,
       point: scaleCanvas(await loadImage('assets/point.png'),
                          Math.round(40 * SCALE * 0.5), Math.round(40 * SCALE * 0.5)),
@@ -2386,11 +2382,11 @@
       const age = Math.max(0, CFG.fuse - sim.fuse[i]);
       const frame = Math.floor((age / CFG.tickHz) * 4) % 4;
       const owner = sim.owner[i];
-      const custom = owner === 0
-        ? (sim.playerBombStyle != null ? (sim.playerBombStyle & 1)
-                                       : (sim.bombStyle[i] & 1))
-        : 0;
-      const frames = owner === 0 ? res.bombFrames.custom[custom] : res.bombFrames.default;
+      const useIce = owner === 0 && (
+        sim.playerBombStyle != null ? ((sim.playerBombStyle & 1) === 1)
+                                    : ((sim.bombStyle[i] & 1) === 1)
+      );
+      const frames = useIce ? res.bombFrames.ice : res.bombFrames.default;
       const img = frames[frame];
       const bx = c * CELL + (CELL - img.width) / 2;
       const by = (r + 1) * CELL - img.height;

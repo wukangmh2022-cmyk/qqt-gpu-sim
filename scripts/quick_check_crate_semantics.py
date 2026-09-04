@@ -36,7 +36,9 @@ def check(name, bad, n_total, tol=1e-9):
         fails.append(name)
 
 
-def emp_rate(states, ticks=40, plant=True):
+_step_vmapped = jax.jit(jax.vmap(lambda s, a, kk: step(s, a, kk, return_info=True)))
+
+def emp_rate(states, ticks=35, plant=True):
     """双方不动、p0 首 tick 放泡一次（引信 30 自然引爆）后全停；
     返回 (destroyed, created) 累计。created 排除 rec（掉血回收箱）。
     注意：不能每 tick 按放泡——放泡判定在爆炸结算前（fuse<=0 即重放），
@@ -52,9 +54,8 @@ def emp_rate(states, ticks=40, plant=True):
     for t in range(ticks):
         acts = a_plant if (plant and t == 0) else a_idle
         b0, c0, r0 = states.brick, states.crate, states.rec_crate
-        keys = jrandom.split(jrandom.PRNGKey(1234), n_env)
-        states, _d, info = jax.vmap(
-            lambda s, a, kk: step(s, a, kk, return_info=True))(states, acts, keys)
+        keys = jrandom.split(jrandom.PRNGKey(1234 + t), n_env)
+        states, _d, info = _step_vmapped(states, acts, keys)
         destroyed += int(np.asarray((b0 & ~states.brick).sum()))
         created += int(np.asarray((((states.crate > 0) & (c0 == 0))
                                    & ~states.rec_crate).sum()))

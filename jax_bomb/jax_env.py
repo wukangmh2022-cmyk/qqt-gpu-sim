@@ -86,7 +86,7 @@ WALL_DENSITY = 0.45          # corridor 边缘连续 brick 段概率
 GROWTH_BOMBS_START, GROWTH_BLAST_START = 2, 2   # corridor 初始
 GROWTH_SPEED_START = 1.0
 GROWTH_BOMBS_MAX, GROWTH_BLAST_MAX = MAX_BOMBS, BLAST   # 上限
-GROWTH_SPEED_MAX = 2.3
+GROWTH_SPEED_MAX = 2.4
 GROWTH_SPEED_STEP = 0.15
 OPEN_GROWTH_BOMBS, OPEN_GROWTH_BLAST, OPEN_GROWTH_SPEED = 3, 3, 0.84  # open 初始
 CRATE_PROB = 0.5             # corridor 炸砖宝箱爆率（open 关恒 1.0 必升）
@@ -1054,6 +1054,7 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
 
     bush_hit = bush & covered
     bush = bush & ~bush_hit
+    destroy = covered_brick | bush_hit
     pushable_hit = pushable & covered
     pushable = pushable & ~pushable_hit   # 可推箱被炸 → 箱子消失（brick 同步清）
     push_t = jnp.where(pushable_hit, 0.0, push_t)

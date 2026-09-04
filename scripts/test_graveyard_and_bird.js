@@ -152,12 +152,12 @@ function createCleanSim() {
 }
 
 // --------------------------------------------------------------------------
-// 测试 7：空场景最大速度保持 2.3，其他关卡地图文件最大速度为 2.25
+// 测试 7：空场景最大速度保持 2.4，其他关卡地图文件最大速度为 2.25
 // --------------------------------------------------------------------------
 {
   const sim = createCleanSim();
-  assert.strictEqual(sim.speedMax, 2.3, '默认/空场景最大速度应当为 2.3');
-  assert.strictEqual(CFG.growthSpeedMax, 2.3, 'CFG.growthSpeedMax 应当为 2.3');
+  assert.strictEqual(sim.speedMax, 2.4, '默认/空场景最大速度应当为 2.4');
+  assert.strictEqual(CFG.growthSpeedMax, 2.4, 'CFG.growthSpeedMax 应当为 2.4');
 
   // 测试加载非空场景地图（speed_max = 2.25）
   const normalLevel = {
@@ -172,7 +172,7 @@ function createCleanSim() {
   sim.reset(normalLevel);
   assert.strictEqual(sim.speedMax, 2.25, '普通关卡最大速度应当精确生效为 2.25');
 
-  // 测试加载空场景地图（speed_max = 2.3）
+  // 测试加载空场景地图（speed_max = 2.4）
   const emptyLevel = {
     h: 13, w: 15,
     wall: new Array(13 * 15).fill(0),
@@ -181,13 +181,13 @@ function createCleanSim() {
     spawns: [[6.5, 4.5], [10.5, 10.5]],
     initial_stats: { bombs: 2, blast: 2, speed: 1.3 },
     source: 'empty_scene',
-    speed_max: 2.3,
+    speed_max: 2.4,
   };
   sim.reset(emptyLevel);
-  assert.strictEqual(sim.speedMax, 2.3, '空场景最大速度应当保持为 2.3');
-  console.log('  ✓ [测试 7] 验证通过：空场景保持 2.3，其余地图文件最大速度成功生效为 2.25！');
+  assert.strictEqual(sim.speedMax, 2.4, '空场景最大速度应当保持为 2.4');
+  console.log('  ✓ [测试 7] 验证通过：空场景保持 2.4，其余地图文件最大速度成功生效为 2.25！');
 }
 
 console.log('==============================================================');
-console.log('🎉 全部 7 项墓地、飞鸟、惩罚-1与最大速度2.3单元测试 100% 验收通过！');
+console.log('🎉 全部 7 项墓地、飞鸟、惩罚-1与最大速度2.4单元测试 100% 验收通过！');
 console.log('==============================================================');
