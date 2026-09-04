@@ -39,7 +39,8 @@
   const MOVE_TO_SPRITE_ROW = { [MOVE_DOWN]: 0, [MOVE_LEFT]: 1, [MOVE_RIGHT]: 2, [MOVE_UP]: 3 };
 
   const canvas = document.getElementById('game');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  ctx.imageSmoothingEnabled = false;
   const $ = (id) => document.getElementById(id);
   const elSkin = $('skin'),
         elSpectate = $('spectate'), elDanger = $('danger'), elSound = $('sound'),
@@ -262,12 +263,13 @@
     try {
       if (!canvas.captureStream || !window.MediaRecorder) return;
       const mime = [
-        'video/mp4;codecs=avc1.42E01E', 'video/mp4',
+        'video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1.64002a',
+        'video/mp4;codecs=avc1.4d401f', 'video/mp4;codecs=avc1.42E01E', 'video/mp4',
         'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm',
       ].find((t) => MediaRecorder.isTypeSupported(t));
       if (!mime) return;
       const stream = canvas.captureStream(20);
-      mediaRec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 800000 });
+      mediaRec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 4000000 });
       mediaMime = mime;
       mediaChunks = [];
       mediaStopPromise = null;
@@ -1596,6 +1598,30 @@
     }, 30);
   });
 
+  // 修复 MP4 容器内 Chromium 默认标记的 SMPTE 170M (NTSC gamma 1.96 有限色域 16-235)
+  // 为标准的 BT.709 全色域 (0-255)，彻底消除导出视频在 QuickTime/Safari/Chrome 中泛白失真
+  async function fixMp4ColorTag(blob) {
+    try {
+      const buf = await blob.arrayBuffer();
+      const u8 = new Uint8Array(buf);
+      for (let i = 0; i < Math.min(u8.length - 15, 65536); i++) {
+        if (u8[i] === 99 && u8[i + 1] === 111 && u8[i + 2] === 108 && u8[i + 3] === 114 &&
+            u8[i + 4] === 110 && u8[i + 5] === 99 && u8[i + 6] === 108 && u8[i + 7] === 120) {
+          // 匹配 'colrnclx'：将原 7 字节 [0,6, 0,6, 0,6, 0] 替换为 BT.709 Full Range [0,1, 0,1, 0,1, 128]
+          u8[i + 8] = 0; u8[i + 9] = 1;     // colour_primaries: 1 (BT.709)
+          u8[i + 10] = 0; u8[i + 11] = 1;   // transfer_characteristics: 1 (BT.709)
+          u8[i + 12] = 0; u8[i + 13] = 1;   // matrix_coefficients: 1 (BT.709)
+          u8[i + 14] = 0x80;                // full_range_flag: 1 (0-255 全色阶)
+          break;
+        }
+      }
+      return new Blob([u8], { type: blob.type });
+    } catch (e) {
+      console.warn('fixMp4ColorTag 降级忽略:', e);
+      return blob;
+    }
+  }
+
   async function exportReplayVideo(doc) {
     if (!canvas.captureStream || !window.MediaRecorder) {
       throw new Error('当前浏览器不支持 Canvas 视频录制；JSON 已保存');
@@ -1627,10 +1653,14 @@
     if (audioDst && ac.state === 'suspended') ac.resume().catch(() => {});
     let bgmRecNode = null, bgmRecGain = null;
     const mime = (audioDst ? [
-      'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus', 'video/webm',
+      'video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1.64002a,mp4a.40.2',
+      'video/mp4;codecs=avc1.4d401f,mp4a.40.2', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm',
     ] : []).concat([
-      'video/mp4;codecs=avc1.42E01E', 'video/mp4',
+      'video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1.64002a',
+      'video/mp4;codecs=avc1.4d401f', 'video/mp4;codecs=avc1.42E01E',
+      'video/mp4',
       'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm',
     ]).find((t) => MediaRecorder.isTypeSupported(t));
     if (!mime) throw new Error('当前浏览器没有可用的视频编码器；JSON 已保存');
@@ -1670,7 +1700,7 @@
       for (const t of audioDst.stream.getAudioTracks()) stream.addTrack(t);
     }
     const chunks = [];
-    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 1200000 });
+    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8000000 });
     const stopped = new Promise((resolve, reject) => {
       recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
       recorder.onerror = (e) => reject(e.error || new Error('视频编码失败'));
@@ -1827,6 +1857,8 @@
           lastPos.set(exportSim.pos);
           replayAnim = { moving: animMoving };
           render(performance.now());
+          const vTrack = stream.getVideoTracks()[0];
+          if (vTrack && vTrack.requestFrame) vTrack.requestFrame();
           await new Promise((resolve) => setTimeout(resolve, Math.max(0, frameDelay / n)));
         }
         prevP0 = [exportSim.pos[0], exportSim.pos[1]];
@@ -1835,9 +1867,12 @@
       }
       recorder.stop();
       await stopped;
-      const blob = new Blob(chunks, { type: mime });
+      let blob = new Blob(chunks, { type: mime });
       if (!blob.size) throw new Error('视频编码器没有输出数据；JSON 已保存');
       const isMp4 = mime.includes('mp4');
+      if (isMp4) {
+        blob = await fixMp4ColorTag(blob);
+      }
       const ext = isMp4 ? 'mp4' : 'webm';
       downloadBlob(blob, `video_${doc.meta.mapName || doc.meta.map}_s${doc.meta.seed}_${timeStamp()}.${ext}`);
       return { blob, mime, ext };
@@ -2175,6 +2210,9 @@
   function render(now) {
     if (mapMenuOpen) return;          // 换地图黑屏菜单：保持已清空的画布，不重绘
     if (!sim || !res) return;
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#0c0e13';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     const alpha = Math.min(1, (now - lastTickT) / (TICK * 1000));
     // 顶部半格底色带(最低优先级): 用裁好的水面一行(自然高度, 不压缩),
     // 只露出带内的部分(居中裁取), 横向铺满
@@ -2520,7 +2558,11 @@
       let icon = drop.item.isSuper ? res.superIcons[drop.item.type] : res.propIcons[drop.item.type];
       if (!icon) icon = res.boxQ;
       const targetR = (drop.cell / W) | 0;
-      items.push([targetR * Z_ROW_STRIDE + 15, icon, Math.round(curX - icon.width / 2), Math.round(curY - icon.height / 2)]);
+      // 空中抛物线飞行阶段（progress < 0.85）处于高空，赋予超高优先级（Z = 50000），
+      // 避免被地面较高的墙体或结构截断；接近着陆或落地后（progress >= 0.85）
+      // 平滑回归地面目标格道具优先级（targetR * 24 + 15），被水泡（+17）和火焰（+19）自然覆盖
+      const dropZ = progress < 0.85 ? 50000 : (targetR * Z_ROW_STRIDE + 15);
+      items.push([dropZ, icon, Math.round(curX - icon.width / 2), Math.round(curY - icon.height / 2)]);
     }
 
     // 飞鸟巡航控制器：30s 一个循环（前 25s 冷却，后 5s 飞行）
