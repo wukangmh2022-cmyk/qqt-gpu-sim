@@ -2513,8 +2513,8 @@
         // 彻底杜绝飞行期间新炸毁的道具在同航次级联重入、堆死在左边界。
         if (flightTime >= 2.0 && flightTime <= 4.2 && birdPlannedCycle !== cycleIndex && sim.graveyard && sim.graveyard.length > 0) {
           birdPlannedCycle = cycleIndex;
-          const count = Math.min(sim.graveyard.length, 6);
-          const toDrop = sim.graveyard.splice(0, count);
+          const toDrop = sim.graveyard.splice(0, sim.graveyard.length);
+          const count = toDrop.length;
           sim.airdropPayload = toDrop.length;
           const tStart = 2.25;
           const tEnd = 4.20;
