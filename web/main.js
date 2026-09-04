@@ -2478,7 +2478,7 @@
       // 原图尺寸，格内居中（不拉伸）
       const px = c * CELL + (CELL - p.width) / 2;
       const py = r * CELL + (CELL - p.height) / 2 + bob * 0.5;
-      // 道具 Z 设为 15，严格低于同一行的水泡 (19)，水泡拥有更高优先级
+      // 道具 Z 设为 15，严格低于同一行的水泡 (17) 与爆炸水泡 (19)，水泡拥有更高优先级
       items.push([r * Z_ROW_STRIDE + 15, p, Math.round(px), Math.round(py)]);
     }
 
@@ -2492,11 +2492,13 @@
       // 开口向下的抛物线：弧顶在起点与终点中间上方 48px
       const py = (f.y0 + (f.y1 - f.y0) * tt) * CELL - 48 * 4 * tt * (1 - tt);
       // 掉血回收 = 随机宝箱(带?箱子), 原图尺寸居中
-      items.push([50000, res.boxQ,
+      // Z 优先级：与人物和地面道具一致（targetR * 24 + 15），被目标格的水泡/火焰正确遮盖
+      const targetR = (f.cell / W) | 0;
+      items.push([targetR * Z_ROW_STRIDE + 15, res.boxQ,
         Math.round(px - res.boxQ.width / 2), Math.round(py - res.boxQ.height / 2)]);
     }
 
-    // 飞鸟空投抛物线飞行动画（高空飞行物，Z = 55000）
+    // 飞鸟空投抛物线飞行动画（落点格 Z 优先级与道具一致，被水泡和火焰盖住）
     for (let k = birdDropFx.length - 1; k >= 0; k--) {
       const drop = birdDropFx[k];
       const ageMs = now - drop.t0;
@@ -2517,7 +2519,8 @@
       const curY = drop.sy + (drop.ty - drop.sy) * progress + arc;
       let icon = drop.item.isSuper ? res.superIcons[drop.item.type] : res.propIcons[drop.item.type];
       if (!icon) icon = res.boxQ;
-      items.push([55000, icon, Math.round(curX - icon.width / 2), Math.round(curY - icon.height / 2)]);
+      const targetR = (drop.cell / W) | 0;
+      items.push([targetR * Z_ROW_STRIDE + 15, icon, Math.round(curX - icon.width / 2), Math.round(curY - icon.height / 2)]);
     }
 
     // 飞鸟巡航控制器：30s 一个循环（前 25s 冷却，后 5s 飞行）
