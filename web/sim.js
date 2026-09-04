@@ -325,6 +325,14 @@
         if (frame[name] == null) continue;
         this[name] = new old.constructor(frame[name]);
       }
+      // 灌木 6003 绝不作为不可炸的小屋 cover 遮蔽
+      if (this.level && (this.level.bush || this.level.layers)) {
+        for (let i = 0; i < N; i++) {
+          const isBush = (this.level.bush && this.level.bush[i]) ||
+            (this.level.layers && Math.abs(this.level.layers[0][i] || 0) === BUSH_EID);
+          if (isBush) this.cover[i] = 0;
+        }
+      }
       if (frame.bombStyle == null) this.bombStyle.fill(0);
       if (frame.playerBombStyle != null) this.playerBombStyle = frame.playerBombStyle & 1;
       if (frame.blastLinger == null) this.blastLinger.fill(0);
@@ -353,14 +361,16 @@
       for (let i = 0; i < N; i++) {
         this.wall[i] = level.wall[i];
         this.brick[i] = level.brick[i];
-        if (level.cover) this.cover[i] = level.cover[i];
-        if (level.overhead && level.overhead[i]) this.cover[i] = 1;
         if (level.bush) this.bush[i] = level.bush[i];
         // 旧版 Web 地图导出可能只有 layers，没有同步 bush 布尔层。
         // 野外 6003 是可通行且可炸的躲猫猫草丛，运行时必须补回状态层。
         if (!this.bush[i] && level.layers && Math.abs(level.layers[0][i] || 0) === BUSH_EID) {
           this.bush[i] = 1;
         }
+        if (level.cover) this.cover[i] = level.cover[i];
+        if (level.overhead && level.overhead[i]) this.cover[i] = 1;
+        // 灌木丛可炸毁，绝不能混入永久不可炸的小屋遮蔽层 (this.cover)
+        if (this.bush[i]) this.cover[i] = 0;
       }
       // 旧模型兼容: 多出的两列(13,14)填为不可通行墙 → 环境与旧版 13 宽一致
       if (this.oldMode) {
@@ -608,7 +618,10 @@
             }
           }
         }
-        if (covered[i] && this.bush[i]) this.bush[i] = 0;
+        if (covered[i] && this.bush[i]) {
+          this.bush[i] = 0;
+          this.cover[i] = 0;
+        }
         // 爆炸水泡清理地图现有道具：消除并进入墓地
         if (covered[i] && this.crate[i]) {
           const type = this.crateType[i] >= 0 ? this.crateType[i] : Math.floor(this.rng() * 3);

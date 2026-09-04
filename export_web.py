@@ -243,8 +243,11 @@ def main():
             bush_flat = [int(bool(v) or abs(layers_flat[0][i]) == 6003)
                          for i, v in enumerate(bush_flat)]
         overhead_flat = flat(d["overhead"]) if "overhead" in d else [0] * (w * h)
+        # 灌木 6003 属于可炸毁草丛，不属于永久 overhead/cover 遮蔽物
+        overhead_flat = [int(bool(o) and not bool(b)) for o, b in zip(overhead_flat, bush_flat)]
         cover_flat = flat(d["cover"]) if "cover" in d else [0] * (w * h)
-        cover_flat = [int(bool(c) or bool(o)) for c, o in zip(cover_flat, overhead_flat)]
+        cover_flat = [int((bool(c) or bool(o)) and not bool(b))
+                      for c, o, b in zip(cover_flat, overhead_flat, bush_flat)]
         levels.append({
             "id": int(pt.stem.split("_")[1]),
             "source": d["source"], "name": d.get("map_name", ""),
@@ -325,6 +328,8 @@ def main():
         except Exception as e:
             print(f"  [rand thumb fail]: {e}")
     (OUT_LEVELS / "levels.json").write_text(
+        json.dumps(levels, ensure_ascii=False), encoding="utf-8")
+    (ROOT / "levels.json").write_text(
         json.dumps(levels, ensure_ascii=False), encoding="utf-8")
     print(f"地图缩略图 {n_thumb} 张 -> {THUMB}")
 
