@@ -1308,7 +1308,7 @@
   }
 
   async function loadModelList() {
-    const resp = await fetch('models/index.json?v=20260904-purge-it68-variants');
+    const resp = await fetch('models/index.json?v=20260904-fix-replay-pos');
     modelList = (await resp.json()).models || [];
     // 按时间倒序排列（最新导出的模型排在最前）
     modelList.sort((a, b) => {
@@ -2585,7 +2585,7 @@
       if (!sim.alive[pid]) continue;
       const rows = pid === 0 ? res.players : res.playerAi;
       let gy, gx;
-      if (elSpectate.checked || pid === 0) {
+      if (replayExporting || elSpectate.checked || pid === 0) {
         gy = sim.pos[pid * 2]; gx = sim.pos[pid * 2 + 1];
       } else {
         gy = prevPos[2] + (curPos[2] - prevPos[2]) * alpha;
