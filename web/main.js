@@ -1704,8 +1704,9 @@
           subPtr++;
         }
         const n = Math.min(Math.max(subs.length, 1), 15);
-        const p0HasPath = subs.length > 1 &&
-          subs.some((s) => s[1] !== subs[0][1] || s[2] !== subs[0][2]);
+        const meta = doc.meta || {};
+        const isHumanP0 = !meta.spectate && (meta.p0 == null || meta.p0 === 'human');
+        const p0UseSubs = isHumanP0 && subs.length > 0;
         // 重建对局里由 tick 前后差分产生的事件特效/音效（快照含全部字段）：
         // 砖/灌木炸毁的 _die 中间态帧（炸开散落图 0.35s）、掉血回收宝箱抛物线、
         // 推箱完成、放泡/拾取/死亡音效
@@ -1765,10 +1766,11 @@
         // 每 tick 的真实时长在 n 个子帧内均分 → 视频时长与对局一致
         for (let i = 0; i < n; i++) {
           const a01 = (i + 1) / n;
-          // P0：有 60Hz 轨迹用记录值（帧级转向/滑移的真实路径）；
-          // 静止或旧录像按 tick 间线性插值。P1 恒按 tick 间插值。
-          if (p0HasPath) {
-            exportSim.pos[0] = subs[i][1]; exportSim.pos[1] = subs[i][2];
+          // P0：人类玩家有 60Hz 轨迹时严格采用真实采样点（避免走停时错误插值回退抖动）；
+          // 观战 AI 或旧录像按 tick 间线性插值。P1 恒按 tick 间插值。
+          if (p0UseSubs) {
+            const s = subs[Math.min(i, subs.length - 1)];
+            exportSim.pos[0] = s[1]; exportSim.pos[1] = s[2];
           } else {
             exportSim.pos[0] = prevP0[0] + (frame.pos[0] - prevP0[0]) * a01;
             exportSim.pos[1] = prevP0[1] + (frame.pos[1] - prevP0[1]) * a01;
@@ -1801,7 +1803,7 @@
           render(performance.now());
           await new Promise((resolve) => setTimeout(resolve, Math.max(0, frameDelay / n)));
         }
-        prevP0 = [frame.pos[0], frame.pos[1]];
+        prevP0 = [exportSim.pos[0], exportSim.pos[1]];
         prevP1 = [frame.pos[2], frame.pos[3]];
         prevFrame = frame;
       }
