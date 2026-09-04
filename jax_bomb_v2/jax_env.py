@@ -143,6 +143,9 @@ class BombState(NamedTuple):
     is_open: jnp.ndarray   # () bool 本局 open 关（掉血惩罚起点、爆率；关卡模式=无砖）
     t: jnp.ndarray         # () int32
     level_id: jnp.ndarray = jnp.int32(-1)  # () int32 关卡 id（-1 = 过程式生成）
+    graveyard: jnp.ndarray = jnp.int32(0)        # () int32 道具墓地积攒数
+    airdrop_total: jnp.ndarray = jnp.int32(0)    # () int32 本轮飞鸟计划空投道具总数
+    airdrop_dropped: jnp.ndarray = jnp.int32(0)  # () int32 本轮飞鸟已落地道具数
 
 
 def _recycle_excl() -> jnp.ndarray:
@@ -304,7 +307,8 @@ def _fresh(key) -> BombState:
                          s.pushable, jnp.zeros((H, W), jnp.float32), s.bush,
                          jnp.where(s.crate, 7, 0).astype(jnp.int8), s.rec,
                          alive, hp, invuln, bombs_cap, blast_cap, spd_g, buffs,
-                         debuffs, items, gametype, s.is_open, t, s.level_id)
+                         debuffs, items, gametype, s.is_open, t, s.level_id,
+                         jnp.int32(0), jnp.int32(0), jnp.int32(0))
     wall, brick, is_open, pos = _make_map(key)
     fuse = jnp.zeros((H, W), jnp.int32)
     owner = -jnp.ones((H, W), jnp.int32)
@@ -332,7 +336,8 @@ def _fresh(key) -> BombState:
     return BombState(pos, fuse, owner, bomb_blast, wall, brick, pushable, push_t,
                      bush, crate, rec_crate, alive, hp, invuln, bombs_cap,
                      blast_cap, spd_g, buffs, debuffs, items, gametype,
-                     is_open, t, jnp.int32(-1))
+                     is_open, t, jnp.int32(-1),
+                     jnp.int32(0), jnp.int32(0), jnp.int32(0))
 
 
 def init_batch(key, n: int) -> BombState:
@@ -861,7 +866,8 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     """
     (pos, fuse, owner, bomb_blast, wall, brick, pushable, push_t, bush, crate,
      rec_crate, alive, hp, invuln, bombs_cap, blast_cap, spd_g, _buffs,
-     _debuffs, _items, _gametype, is_open, t, level_id) = state
+     _debuffs, _items, _gametype, is_open, t, level_id,
+     graveyard, airdrop_total, airdrop_dropped) = state
     dirs, bombs = actions[:, 0], actions[:, 1]
     alive0 = alive
 
@@ -940,6 +946,9 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     # 4. 爆炸与连锁（墙挡火不覆盖；brick 挡火但被覆盖）
     covered, triggered = _resolve_explosions_matrix(fuse, owner, bomb_blast,
                                                     wall, brick)
+    # 爆炸水泡清理地图现有道具并回收进墓地
+    destroyed_crates = (covered & (crate > 0)).sum().astype(jnp.int32)
+    crate = jnp.where(covered, jnp.int8(0), crate)
     # 4b. 炸掉的砖/灌木 → 宝箱（JS 语义：被覆盖瞬间按本关 crate_rate 掷爆率，
     #      bush 与 brick 互斥且同规则；open 无砖无灌木恒无操作；踩到必升见 6b）
     if levels.active() is not None:
@@ -1060,6 +1069,58 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
                  + (spd_g - prev_spd_g) / GROWTH_SPEED_STEP)
     crate = crate.at[cy2, cx2].set(0)
     rec_crate = rec_crate.at[cy2, cx2].set(False)
+    overflow_crates = (hits & ~grew).sum().astype(jnp.int32)
+
+    # 6c. 道具墓地与飞鸟 30s（300 tick）空投逻辑：
+    # 炸毁/满属性溢出道具进墓地；周期 tick 270 时进场快照墓地；
+    # 在落地窗口（279~298 tick）沿途各列均匀下落（对应 0.6s 抛物线落地延迟）
+    graveyard = graveyard + destroyed_crates + overflow_crates
+
+    cycle_t = t % 300
+    flight_start = (cycle_t == 270)
+    airdrop_total = jnp.where(flight_start, graveyard, airdrop_total)
+    airdrop_dropped = jnp.where(flight_start, jnp.int32(0), airdrop_dropped)
+    graveyard = jnp.where(flight_start, jnp.int32(0), graveyard)
+
+    idx = cycle_t - 279  # 0 ~ 19
+    target_cum = jnp.round(((idx + 1.0) / 20.0) * airdrop_total.astype(jnp.float32)).astype(jnp.int32)
+    in_landing_window = (cycle_t >= 279) & (cycle_t <= 298) & (airdrop_total > 0)
+    drop_now = jnp.where(in_landing_window, jnp.maximum(0, target_cum - airdrop_dropped), 0)
+
+    # 飞鸟 6 tick 前所在列作为落地点列（右至左 13~1 列）
+    bx = 15.0 - (18.5 / 30.0) * (cycle_t.astype(jnp.float32) - 276.0)
+    target_col = jnp.clip(jnp.round(bx).astype(jnp.int32), 1, W - 2)
+
+    # 寻找落点：优先在目标列安全纯地面格，目标列无空位时就近向邻列扩散
+    valid_drop = ~wall & ~brick & ~pushable & (fuse == 0) & (crate == 0)
+    col_mask = (jnp.arange(W) == target_col)[None, :]
+    in_col_valid = valid_drop & col_mask
+    has_in_col = in_col_valid.any()
+
+    col_dist = jnp.abs(jnp.arange(W) - target_col)
+    col_priority = jnp.maximum(0.0, 5.0 - col_dist.astype(jnp.float32))
+    cell_weights = jnp.where(has_in_col, in_col_valid.astype(jnp.float32),
+                             valid_drop.astype(jnp.float32) * col_priority[None, :])
+    total_w = cell_weights.sum()
+
+    key_d1, key_d2, key_d3 = jax.random.split(key, 3)
+    probs = jnp.where(total_w > 0, cell_weights.reshape(-1) / jnp.maximum(total_w, 1.0),
+                      jnp.ones((H * W,), jnp.float32) / float(H * W))
+    flat_choice = jax.random.choice(key_d1, H * W, p=probs)
+    drop_y = flat_choice // W
+    drop_x = flat_choice % W
+
+    should_drop = (drop_now > 0) & (total_w > 0)
+    is_super = jax.random.uniform(key_d2) < 0.2
+    super_kind = (4 + jax.random.randint(key_d3, (), 0, 3)).astype(jnp.int8)
+    drop_kind = jnp.where(is_super, super_kind, jnp.int8(7))
+
+    crate = jnp.where(should_drop, crate.at[drop_y, drop_x].set(drop_kind), crate)
+    airdrop_dropped = jnp.where(should_drop, airdrop_dropped + 1, airdrop_dropped)
+
+    flight_end = (cycle_t > 298)
+    airdrop_total = jnp.where(flight_end, jnp.int32(0), airdrop_total)
+    airdrop_dropped = jnp.where(flight_end, jnp.int32(0), airdrop_dropped)
 
     # 7. 计步与终局（done 后就地重置 = 正式版 auto_reset）
     t = t + 1
@@ -1068,7 +1129,8 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
     new_state = BombState(newpos, fuse, owner, bomb_blast, wall, brick,
                           pushable, push_t, bush, crate, rec_crate, alive_new,
                           hp_new, invuln, bombs_cap, blast_cap, spd_g, _buffs,
-                          _debuffs, _items, _gametype, is_open, t, level_id)
+                          _debuffs, _items, _gametype, is_open, t, level_id,
+                          graveyard, airdrop_total, airdrop_dropped)
     if auto_reset:
         out = jax.lax.cond(done, lambda _: _fresh(key), lambda _: new_state,
                            None)
@@ -1104,7 +1166,7 @@ def legal_mask(state: BombState) -> tuple[jnp.ndarray, jnp.ndarray]:
     """
     (pos, fuse, owner, _bb, wall, brick, pushable, _pt, _bush, _crate, _rc, alive,
      _hp, _invuln, bombs_cap, _blast_cap, spd_g, _buff, _debuff, _item, _gtype,
-     _is_open, _t, _level_id) = state
+     _is_open, _t, _level_id, *_) = state
     # 推箱格豁免：mask 把朝可推箱方向标记为合法（模型才会选这个方向去推），
     # 但 step() 的移动仍用含 brick 的 blocked 挡住玩家（推箱期间贴箱不动，
     # 3 tick 后箱子移走玩家跟进）。
@@ -1218,7 +1280,8 @@ def make_obs(state: BombState, pid: int, danger=None, channels: int = N_OBS_CH) 
     """
     (pos, fuse, owner, bomb_blast, wall, brick, pushable, _pt, bush, crate, _rc,
      alive, _hp, _invuln, _bombs_cap, _blast_cap, _spd_g, _buff, _debuff,
-     _item, _gtype, _is_open, t, _level_id) = state
+     _item, _gtype, _is_open, t, _level_id,
+     graveyard, airdrop_total, airdrop_dropped) = state
     me, opp = pid, 1 - pid
     fuse_norm = fuse.astype(jnp.float32) / float(FUSE)
     bombed = fuse > 0
@@ -1243,13 +1306,17 @@ def make_obs(state: BombState, pid: int, danger=None, channels: int = N_OBS_CH) 
     if channels >= 15:
         # ch14: 飞鸟空投预判列热力图 (Airdrop Column Heatmap)
         cycle_t = t % 300
-        in_window = (cycle_t >= 270) & (cycle_t <= 298)
+        props_in_flight = jnp.maximum(0, airdrop_total - airdrop_dropped)
+        payload_count = graveyard + props_in_flight
+        has_props = payload_count > 0
+        in_window = (cycle_t >= 270) & (cycle_t <= 298) & has_props
         flight_t = (cycle_t.astype(jnp.float32) - 250.0) / 10.0
         bx = 15.0 - (18.5 / 3.0) * (flight_t - 2.0)
         bird_col = jnp.clip(jnp.round(bx).astype(jnp.int32), 0, W - 1)
         cols = jnp.arange(W)
         dist = jnp.abs(cols - bird_col)
-        col_weights = jnp.where(dist == 0, 1.0, jnp.where(dist == 1, 0.35, 0.0))
+        intensity = jnp.minimum(1.0, payload_count.astype(jnp.float32) / 3.0)
+        col_weights = jnp.where(dist == 0, intensity, jnp.where(dist == 1, intensity * 0.35, 0.0))
         heatmap = jnp.where(in_window, jnp.broadcast_to(col_weights[None, :], (H, W)), jnp.zeros((H, W), jnp.float32))
         obs_list.append(heatmap)
     return jnp.stack(obs_list)

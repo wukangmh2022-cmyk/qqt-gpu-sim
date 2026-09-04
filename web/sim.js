@@ -159,6 +159,9 @@
       this.crateType = new Int8Array(N);    // 宝箱种类: -1=随机(问号), 0/1/2=泡/威/速(炸开时定)
       this.recycle = new Uint8Array(N);
       this.graveyard = [];                 // 道具墓地：存储被水泡炸毁以及满属性溢出的道具 { type, isSuper }
+      this.airdropTotal = 0;
+      this.airdropDropped = 0;
+      this._airdropQueue = [];
       this.fuse = new Int16Array(N);
       this.owner = new Int8Array(N);
       this.owner.fill(-1);
@@ -709,9 +712,50 @@
         if (this.rng() < 1.0) this._grow(p, isSuper, fAttr >= 0 ? fAttr : null);
       }
 
-      // 7. 飞鸟 30s（300 tick）大循环：非 UI 手动接管模式下自动落地墓地道具
-      if (!this._manualBird && this.t > 0 && this.t % 300 === 0 && this.graveyard.length > 0) {
-        this._flushGraveyard();
+      // 7. 飞鸟 30s（300 tick）大循环：非 UI 手动接管模式下沿途各列精准落地墓地道具
+      if (!this._manualBird) {
+        const cycleTick = this.t % 300;
+        if (cycleTick === 270 && this.graveyard && this.graveyard.length > 0) {
+          this.airdropTotal = this.graveyard.length;
+          this.airdropDropped = 0;
+          this._airdropQueue = this.graveyard.splice(0, this.graveyard.length);
+        }
+        if (cycleTick >= 279 && cycleTick <= 298 && this._airdropQueue && this._airdropQueue.length > 0) {
+          const idx = cycleTick - 279;
+          const targetCum = Math.round(((idx + 1) / 20) * this.airdropTotal);
+          const dropNow = Math.max(0, targetCum - this.airdropDropped);
+          if (dropNow > 0 && this._airdropQueue.length > 0) {
+            const nextDrop = this._airdropQueue.shift();
+            const bx = 15.0 - (18.5 / 30.0) * (cycleTick - 276);
+            const targetCol = Math.max(1, Math.min(W - 2, Math.round(bx)));
+
+            const candidates = [];
+            for (let r = 0; r < H; r++) {
+              const cell = r * W + targetCol;
+              if (!this.wall[cell] && !this.brick[cell] && !this.pushable[cell] && !this.crate[cell] && this.fuse[cell] <= 0) {
+                candidates.push(cell);
+              }
+            }
+            if (candidates.length > 0) {
+              const tc = candidates[Math.floor(this.rng() * candidates.length)];
+              this.spawnGraveyardDrop(tc, nextDrop.type, nextDrop.isSuper);
+            } else {
+              this._flushGraveyardSingle(nextDrop);
+            }
+            this.airdropDropped += 1;
+          }
+        }
+        if (cycleTick > 298) {
+          while (this._airdropQueue && this._airdropQueue.length > 0) {
+            this._flushGraveyardSingle(this._airdropQueue.shift());
+          }
+          this.airdropTotal = 0;
+          this.airdropDropped = 0;
+          this._airdropQueue = [];
+        }
+        if (cycleTick === 0 && this.graveyard && this.graveyard.length > 0) {
+          this._flushGraveyard();
+        }
       }
 
       const nAlive = (this.alive[0] ? 1 : 0) + (this.alive[1] ? 1 : 0);
@@ -793,6 +837,19 @@
       this.crateType[cell] = type;
       this.recycle[cell] = 0;
       return true;
+    }
+
+    _flushGraveyardSingle(item) {
+      const candidates = [];
+      for (let i = 0; i < N; i++) {
+        if (!this.wall[i] && !this.brick[i] && !this.crate[i] && !this.pushable[i] && this.fuse[i] <= 0) {
+          candidates.push(i);
+        }
+      }
+      if (candidates.length > 0) {
+        const tc = candidates[Math.floor(this.rng() * candidates.length)];
+        this.spawnGraveyardDrop(tc, item.type, item.isSuper);
+      }
     }
 
     _flushGraveyard() {
@@ -1133,7 +1190,9 @@
         // - 墓地无道具或飞鸟未在场内时，该通道全 0；
         // - 保障兼容：旧版模型仅请求 C=13 或 C=14 通道，完全不读 ch14。
         const cycleTick = this.t % 300;
-        const payloadCount = (this.graveyard ? this.graveyard.length : 0) + (this.airdropPayload || 0);
+        const payloadCount = (this.graveyard ? this.graveyard.length : 0) +
+                             (this.airdropPayload || 0) +
+                             (this._airdropQueue ? this._airdropQueue.length : 0);
         const hasProps = payloadCount > 0;
         if (cycleTick >= 270 && cycleTick <= 298 && hasProps) {
           const flightTime = (cycleTick - 250) / 10.0;
