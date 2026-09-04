@@ -1,0 +1,92 @@
+[2026-09-05 00:45:33] RUN start: world=1 rank=0 n_total=8 arch=transformer embed=392 depth=4 patch=3 envs=16384 steps=256 minibatch=16384 epochs=2 iters=1 lsgd_k=0 lsgd_mode=param lsgd_bf16=False lsgd_sync_state=False params=7,519,087
+[2026-09-05 00:50:26] RUN start: world=1 rank=0 n_total=8 arch=transformer embed=392 depth=4 patch=3 envs=16384 steps=256 minibatch=16384 epochs=2 iters=68 lsgd_k=0 lsgd_mode=param lsgd_bf16=False lsgd_sync_state=False params=7,519,087
+[2026-09-05 00:53:35] iter 1/68 41.196s (41.196s avg) 203,629 sps (avg 203,629) loss=1.5328 rew=0.003 explore=0.000 kill=0.924 α=1.00 lose=10.00 gs=0 ep_len=265.2
+[2026-09-05 00:54:23] iter 2/68 48.496s (45.018s avg) 172,975 sps (avg 186,340) loss=1.6368 rew=0.003 explore=0.000 kill=0.928 α=1.00 lose=10.00 gs=8,388,608 ep_len=184.7
+[2026-09-05 00:55:12] iter 3/68 48.539s (46.203s avg) 172,824 sps (avg 181,560) loss=1.6339 rew=0.003 explore=0.000 kill=0.929 α=1.00 lose=10.00 gs=16,777,216 ep_len=182.0
+[2026-09-05 00:56:01] iter 4/68 48.623s (46.816s avg) 172,523 sps (avg 179,181) loss=1.6504 rew=0.004 explore=0.000 kill=0.924 α=1.00 lose=10.00 gs=25,165,824 ep_len=188.5
+[2026-09-05 00:56:49] iter 5/68 48.652s (47.189s avg) 172,420 sps (avg 177,767) loss=1.6643 rew=0.004 explore=0.000 kill=0.929 α=1.00 lose=10.00 gs=33,554,432 ep_len=190.0
+[2026-09-05 00:57:38] iter 6/68 48.577s (47.425s avg) 172,689 sps (avg 176,883) loss=1.6923 rew=0.004 explore=0.000 kill=0.938 α=1.00 lose=10.00 gs=41,943,040 ep_len=208.3
+[2026-09-05 00:58:26] iter 7/68 48.502s (47.582s avg) 172,953 sps (avg 176,296) loss=1.7050 rew=0.004 explore=0.000 kill=0.944 α=1.00 lose=10.00 gs=50,331,648 ep_len=223.5
+[2026-09-05 00:58:27] ckpt saved iter 7
+[2026-09-05 00:58:27] params snapshot iter 7 (alpha=0.998)
+[2026-09-05 00:59:16] iter 8/68 48.621s (47.776s avg) 172,532 sps (avg 175,584) loss=1.6598 rew=0.004 explore=0.000 kill=0.957 α=1.00 lose=10.00 gs=58,720,256 ep_len=255.0
+[2026-09-05 01:00:04] iter 9/68 48.574s (47.869s avg) 172,699 sps (avg 175,241) loss=1.6412 rew=0.005 explore=0.000 kill=0.963 α=1.00 lose=10.00 gs=67,108,864 ep_len=294.9
+[2026-09-05 01:00:53] iter 10/68 48.535s (47.938s avg) 172,837 sps (avg 174,988) loss=1.6383 rew=0.005 explore=0.000 kill=0.967 α=1.00 lose=10.00 gs=75,497,472 ep_len=349.3
+[2026-09-05 01:01:41] iter 11/68 48.558s (47.998s avg) 172,754 sps (avg 174,771) loss=1.6221 rew=0.005 explore=0.000 kill=0.964 α=1.00 lose=10.00 gs=83,886,080 ep_len=403.8
+[2026-09-05 01:02:30] iter 12/68 48.488s (48.041s avg) 173,004 sps (avg 174,615) loss=1.5990 rew=0.005 explore=0.000 kill=0.968 α=1.00 lose=10.00 gs=92,274,688 ep_len=465.4
+[2026-09-05 01:03:18] iter 13/68 48.459s (48.074s avg) 173,108 sps (avg 174,492) loss=1.5990 rew=0.004 explore=0.000 kill=0.973 α=1.00 lose=10.00 gs=100,663,296 ep_len=515.7
+[2026-09-05 01:04:07] iter 14/68 48.412s (48.100s avg) 173,274 sps (avg 174,399) loss=1.5719 rew=0.004 explore=0.000 kill=0.975 α=1.00 lose=10.00 gs=109,051,904 ep_len=575.7
+[2026-09-05 01:04:07] ckpt saved iter 14
+[2026-09-05 01:04:07] params snapshot iter 14 (alpha=0.996)
+[2026-09-05 01:04:56] iter 15/68 48.490s (48.156s avg) 172,997 sps (avg 174,197) loss=1.5447 rew=0.004 explore=0.000 kill=0.970 α=1.00 lose=10.00 gs=117,440,512 ep_len=659.5
+[2026-09-05 01:05:44] iter 16/68 48.506s (48.180s avg) 172,941 sps (avg 174,108) loss=1.5516 rew=0.004 explore=0.000 kill=0.967 α=1.00 lose=10.00 gs=125,829,120 ep_len=733.3
+[2026-09-05 01:06:33] iter 17/68 48.472s (48.199s avg) 173,061 sps (avg 174,042) loss=1.5396 rew=0.003 explore=0.000 kill=0.971 α=1.00 lose=10.00 gs=134,217,728 ep_len=799.1
+[2026-09-05 01:07:21] iter 18/68 48.525s (48.218s avg) 172,873 sps (avg 173,971) loss=1.5211 rew=0.003 explore=0.000 kill=0.966 α=1.00 lose=10.00 gs=142,606,336 ep_len=831.0
+[2026-09-05 01:08:10] iter 19/68 48.473s (48.233s avg) 173,056 sps (avg 173,918) loss=1.5135 rew=0.003 explore=0.000 kill=0.950 α=0.99 lose=10.00 gs=150,994,944 ep_len=897.2
+[2026-09-05 01:08:58] iter 20/68 48.536s (48.249s avg) 172,833 sps (avg 173,859) loss=1.4957 rew=0.003 explore=0.000 kill=0.927 α=0.99 lose=10.00 gs=159,383,552 ep_len=975.0
+[2026-09-05 01:09:47] iter 21/68 48.562s (48.265s avg) 172,742 sps (avg 173,802) loss=1.4975 rew=0.003 explore=0.000 kill=0.889 α=0.99 lose=10.00 gs=167,772,160 ep_len=1003.9
+[2026-09-05 01:09:47] ckpt saved iter 21
+[2026-09-05 01:09:47] params snapshot iter 21 (alpha=0.994)
+[2026-09-05 01:10:36] iter 22/68 48.562s (48.298s avg) 172,739 sps (avg 173,683) loss=1.4905 rew=0.003 explore=0.000 kill=0.875 α=0.99 lose=10.00 gs=176,160,768 ep_len=1042.8
+[2026-09-05 01:11:25] iter 23/68 48.536s (48.310s avg) 172,831 sps (avg 173,641) loss=1.4925 rew=0.003 explore=0.000 kill=0.835 α=0.99 lose=10.00 gs=184,549,376 ep_len=1130.5
+[2026-09-05 01:12:13] iter 24/68 48.543s (48.321s avg) 172,809 sps (avg 173,603) loss=1.4834 rew=0.002 explore=0.000 kill=0.814 α=0.99 lose=10.00 gs=192,937,984 ep_len=1231.4
+[2026-09-05 01:13:02] iter 25/68 48.578s (48.332s avg) 172,684 sps (avg 173,563) loss=1.4679 rew=0.002 explore=0.000 kill=0.747 α=0.99 lose=10.00 gs=201,326,592 ep_len=1297.7
+[2026-09-05 01:13:50] iter 26/68 48.443s (48.337s avg) 173,163 sps (avg 173,545) loss=1.4408 rew=0.002 explore=0.000 kill=0.718 α=0.99 lose=10.00 gs=209,715,200 ep_len=1355.6
+[2026-09-05 01:14:39] iter 27/68 48.434s (48.341s avg) 173,197 sps (avg 173,529) loss=1.4342 rew=0.002 explore=0.000 kill=0.672 α=0.99 lose=10.00 gs=218,103,808 ep_len=1467.6
+[2026-09-05 01:15:27] iter 28/68 48.472s (48.347s avg) 173,060 sps (avg 173,509) loss=1.4273 rew=0.002 explore=0.000 kill=0.615 α=0.99 lose=10.00 gs=226,492,416 ep_len=1549.4
+[2026-09-05 01:15:28] ckpt saved iter 28
+[2026-09-05 01:15:28] params snapshot iter 28 (alpha=0.992)
+[2026-09-05 01:16:16] iter 29/68 48.555s (48.369s avg) 172,766 sps (avg 173,429) loss=1.4383 rew=0.002 explore=0.000 kill=0.546 α=0.99 lose=10.00 gs=234,881,024 ep_len=1644.8
+[2026-09-05 01:17:05] iter 30/68 48.537s (48.376s avg) 172,828 sps (avg 173,405) loss=1.4406 rew=0.002 explore=0.000 kill=0.499 α=0.99 lose=10.00 gs=243,269,632 ep_len=1639.0
+[2026-09-05 01:17:53] iter 31/68 48.493s (48.380s avg) 172,985 sps (avg 173,388) loss=1.4408 rew=0.002 explore=0.000 kill=0.430 α=0.99 lose=10.00 gs=251,658,240 ep_len=1620.7
+[2026-09-05 01:18:42] iter 32/68 48.533s (48.386s avg) 172,842 sps (avg 173,369) loss=1.4480 rew=0.002 explore=0.000 kill=0.379 α=0.99 lose=10.00 gs=260,046,848 ep_len=1688.5
+[2026-09-05 01:19:30] iter 33/68 48.534s (48.391s avg) 172,839 sps (avg 173,350) loss=1.4763 rew=0.001 explore=0.000 kill=0.328 α=0.99 lose=10.00 gs=268,435,456 ep_len=1651.3
+[2026-09-05 01:20:19] iter 34/68 48.533s (48.396s avg) 172,843 sps (avg 173,333) loss=1.4479 rew=0.002 explore=0.000 kill=0.274 α=0.99 lose=10.00 gs=276,824,064 ep_len=1709.2
+[2026-09-05 01:21:07] iter 35/68 48.541s (48.401s avg) 172,815 sps (avg 173,315) loss=1.4402 rew=0.002 explore=0.000 kill=0.247 α=0.99 lose=10.00 gs=285,212,672 ep_len=1711.3
+[2026-09-05 01:21:08] ckpt saved iter 35
+[2026-09-05 01:21:08] params snapshot iter 35 (alpha=0.990)
+[2026-09-05 01:21:56] iter 36/68 48.545s (48.417s avg) 172,799 sps (avg 173,256) loss=1.4501 rew=0.002 explore=0.000 kill=0.228 α=0.99 lose=10.00 gs=293,601,280 ep_len=1736.1
+[2026-09-05 01:22:45] iter 37/68 48.548s (48.422s avg) 172,788 sps (avg 173,240) loss=1.4370 rew=0.002 explore=0.000 kill=0.185 α=0.99 lose=10.00 gs=301,989,888 ep_len=1743.3
+[2026-09-05 01:23:34] iter 38/68 48.564s (48.426s avg) 172,733 sps (avg 173,224) loss=1.4377 rew=0.002 explore=0.000 kill=0.204 α=0.99 lose=10.00 gs=310,378,496 ep_len=1616.9
+[2026-09-05 01:24:22] iter 39/68 48.486s (48.428s avg) 173,012 sps (avg 173,217) loss=1.4385 rew=0.002 explore=0.000 kill=0.230 α=0.99 lose=10.00 gs=318,767,104 ep_len=1603.3
+[2026-09-05 01:25:11] iter 40/68 48.409s (48.429s avg) 173,285 sps (avg 173,216) loss=1.4159 rew=0.003 explore=0.000 kill=0.236 α=0.99 lose=10.00 gs=327,155,712 ep_len=1579.8
+[2026-09-05 01:25:59] iter 41/68 48.440s (48.429s avg) 173,176 sps (avg 173,213) loss=1.4275 rew=0.003 explore=0.000 kill=0.277 α=0.99 lose=10.00 gs=335,544,320 ep_len=1561.5
+[2026-09-05 01:26:47] iter 42/68 48.361s (48.428s avg) 173,459 sps (avg 173,218) loss=1.4147 rew=0.003 explore=0.000 kill=0.298 α=0.99 lose=10.00 gs=343,932,928 ep_len=1605.8
+[2026-09-05 01:26:48] ckpt saved iter 42
+[2026-09-05 01:26:48] params snapshot iter 42 (alpha=0.989)
+[2026-09-05 01:27:36] iter 43/68 48.480s (48.440s avg) 173,031 sps (avg 173,176) loss=1.4256 rew=0.003 explore=0.000 kill=0.299 α=0.99 lose=10.00 gs=352,321,536 ep_len=1687.8
+[2026-09-05 01:28:25] iter 44/68 48.437s (48.440s avg) 173,187 sps (avg 173,174) loss=1.4291 rew=0.003 explore=0.000 kill=0.302 α=0.99 lose=10.00 gs=360,710,144 ep_len=1736.1
+[2026-09-05 01:29:13] iter 45/68 48.475s (48.442s avg) 173,050 sps (avg 173,169) loss=1.4222 rew=0.003 explore=0.000 kill=0.281 α=0.99 lose=10.00 gs=369,098,752 ep_len=1689.2
+[2026-09-05 01:30:02] iter 46/68 48.484s (48.443s avg) 173,019 sps (avg 173,164) loss=1.4138 rew=0.002 explore=0.000 kill=0.300 α=0.99 lose=10.00 gs=377,487,360 ep_len=1619.4
+[2026-09-05 01:30:50] iter 47/68 48.506s (48.445s avg) 172,938 sps (avg 173,158) loss=1.4096 rew=0.002 explore=0.000 kill=0.256 α=0.99 lose=10.00 gs=385,875,968 ep_len=1665.7
+[2026-09-05 01:31:39] iter 48/68 48.530s (48.447s avg) 172,853 sps (avg 173,150) loss=1.4047 rew=0.002 explore=0.000 kill=0.242 α=0.99 lose=10.00 gs=394,264,576 ep_len=1669.7
+[2026-09-05 01:32:27] iter 49/68 48.535s (48.449s avg) 172,837 sps (avg 173,142) loss=1.3795 rew=0.003 explore=0.000 kill=0.238 α=0.99 lose=10.00 gs=402,653,184 ep_len=1681.8
+[2026-09-05 01:32:28] ckpt saved iter 49
+[2026-09-05 01:32:28] params snapshot iter 49 (alpha=0.987)
+[2026-09-05 01:33:16] iter 50/68 48.547s (48.460s avg) 172,793 sps (avg 173,103) loss=1.3687 rew=0.003 explore=0.000 kill=0.207 α=0.99 lose=10.00 gs=411,041,792 ep_len=1781.8
+[2026-09-05 01:34:05] iter 51/68 48.512s (48.462s avg) 172,918 sps (avg 173,097) loss=1.3690 rew=0.003 explore=0.000 kill=0.209 α=0.99 lose=10.00 gs=419,430,400 ep_len=1814.1
+[2026-09-05 01:34:53] iter 52/68 48.492s (48.463s avg) 172,990 sps (avg 173,093) loss=1.3610 rew=0.003 explore=0.000 kill=0.180 α=0.99 lose=10.00 gs=427,819,008 ep_len=1740.4
+[2026-09-05 01:35:42] iter 53/68 48.549s (48.465s avg) 172,788 sps (avg 173,086) loss=1.3532 rew=0.003 explore=0.000 kill=0.174 α=0.99 lose=10.00 gs=436,207,616 ep_len=1648.1
+[2026-09-05 01:36:31] iter 54/68 48.547s (48.467s avg) 172,794 sps (avg 173,079) loss=1.3405 rew=0.003 explore=0.000 kill=0.169 α=0.99 lose=10.00 gs=444,596,224 ep_len=1674.4
+[2026-09-05 01:37:19] iter 55/68 48.530s (48.469s avg) 172,853 sps (avg 173,073) loss=1.3385 rew=0.003 explore=0.000 kill=0.153 α=0.98 lose=10.00 gs=452,984,832 ep_len=1725.3
+[2026-09-05 01:38:08] iter 56/68 48.487s (48.469s avg) 173,007 sps (avg 173,071) loss=1.3439 rew=0.003 explore=0.000 kill=0.161 α=0.98 lose=10.00 gs=461,373,440 ep_len=1716.2
+[2026-09-05 01:38:08] ckpt saved iter 56
+[2026-09-05 01:38:08] params snapshot iter 56 (alpha=0.985)
+[2026-09-05 01:38:57] iter 57/68 48.485s (48.477s avg) 173,015 sps (avg 173,042) loss=1.3492 rew=0.003 explore=0.000 kill=0.157 α=0.98 lose=10.00 gs=469,762,048 ep_len=1776.5
+[2026-09-05 01:39:45] iter 58/68 48.553s (48.479s avg) 172,772 sps (avg 173,035) loss=1.3655 rew=0.003 explore=0.000 kill=0.158 α=0.98 lose=10.00 gs=478,150,656 ep_len=1802.5
+[2026-09-05 01:40:34] iter 59/68 48.530s (48.480s avg) 172,852 sps (avg 173,031) loss=1.3642 rew=0.003 explore=0.000 kill=0.180 α=0.98 lose=10.00 gs=486,539,264 ep_len=1682.4
+[2026-09-05 01:41:22] iter 60/68 48.643s (48.483s avg) 172,454 sps (avg 173,020) loss=1.3725 rew=0.003 explore=0.000 kill=0.186 α=0.98 lose=10.00 gs=494,927,872 ep_len=1607.6
+[2026-09-05 01:42:11] iter 61/68 48.444s (48.483s avg) 173,160 sps (avg 173,021) loss=1.3821 rew=0.004 explore=0.000 kill=0.212 α=0.98 lose=10.00 gs=503,316,480 ep_len=1621.9
+[2026-09-05 01:42:59] iter 62/68 48.471s (48.483s avg) 173,064 sps (avg 173,021) loss=1.3854 rew=0.003 explore=0.000 kill=0.220 α=0.98 lose=10.00 gs=511,705,088 ep_len=1704.3
+[2026-09-05 01:43:48] iter 63/68 48.621s (48.486s avg) 172,532 sps (avg 173,012) loss=1.3811 rew=0.003 explore=0.000 kill=0.180 α=0.98 lose=10.00 gs=520,093,696 ep_len=1746.2
+[2026-09-05 01:43:48] ckpt saved iter 63
+[2026-09-05 01:43:48] params snapshot iter 63 (alpha=0.983)
+[2026-09-05 01:44:37] iter 64/68 48.621s (48.495s avg) 172,529 sps (avg 172,980) loss=1.3886 rew=0.003 explore=0.000 kill=0.174 α=0.98 lose=10.00 gs=528,482,304 ep_len=1816.5
+[2026-09-05 01:45:26] iter 65/68 48.493s (48.495s avg) 172,985 sps (avg 172,978) loss=1.3963 rew=0.003 explore=0.000 kill=0.156 α=0.98 lose=10.00 gs=536,870,912 ep_len=1879.2
+[2026-09-05 01:46:14] iter 66/68 48.479s (48.495s avg) 173,037 sps (avg 172,977) loss=1.3935 rew=0.003 explore=0.000 kill=0.149 α=0.98 lose=10.00 gs=545,259,520 ep_len=1727.5
+[2026-09-05 01:47:03] iter 67/68 48.535s (48.496s avg) 172,836 sps (avg 172,974) loss=1.3781 rew=0.003 explore=0.000 kill=0.147 α=0.98 lose=10.00 gs=553,648,128 ep_len=1649.4
+[2026-09-05 01:47:51] iter 68/68 48.606s (48.498s avg) 172,584 sps (avg 172,967) loss=1.3783 rew=0.004 explore=0.000 kill=0.152 α=0.98 lose=10.00 gs=562,036,736 ep_len=1585.7
+[2026-09-05 01:47:52] ckpt saved iter 68
+[2026-09-05 01:47:52] params snapshot iter 68 (alpha=0.981)
+[2026-09-05 01:47:52] RUN end: dt=48.505 s/iter × 68 sps=172,944 (2×16384×256 frames/iter) iter=68/68
+[2026-09-05 01:47:52] consistency=PASS n_total=8 digest=5.28963183593750000e+03
