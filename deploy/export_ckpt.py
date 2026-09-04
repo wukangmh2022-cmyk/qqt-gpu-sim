@@ -390,6 +390,9 @@ EXCLUDED_MODELS = {
     "params_it00000068_hlgauss_top25_patch3_k32",
     "params_it00000068_repro8x2_k32",
     "params_it00000068_repro14ch",
+    "params_it00000120",
+    "params_surgery_it120",
+    "params_it00000114",
 }
 
 

@@ -264,10 +264,12 @@ def main():
         if not os.path.isdir(args.ckpt_dir):
             print(f"没有 ckpt 目录 {args.ckpt_dir}")
             return 1
+        from export_ckpt import EXCLUDED_MODELS
         paths = sorted(os.path.join(args.ckpt_dir, f)
                        for f in os.listdir(args.ckpt_dir)
                        if (f.startswith("params_") or f.startswith("ViTModel"))
-                       and f.endswith(".pkl"))
+                       and f.endswith(".pkl")
+                       and f[:-4] not in EXCLUDED_MODELS)
     if not paths:
         print("没有可导出的 JAX transformer ckpt")
         return 1
