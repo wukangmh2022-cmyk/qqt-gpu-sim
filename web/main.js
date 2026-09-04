@@ -176,6 +176,7 @@
   let sim = null, modelList = [], res = null;
   let replayExporting = false;
   let replayWinProb = null;
+  let replaySubTick = 0;
   let currentWinProb = 0.5;
   let replayAnim = null;   // 视频导出中非 null：{moving:[pid0,pid1]} —— 行走动画按导出帧间位移驱动
   let rng = null;
@@ -1687,6 +1688,8 @@
     const lastPos = Float64Array.from(exportSim.pos);
     const animMoving = [false, false];
     dangerCache = null;                // 危险图默认不录入：清掉现场缓存, 重放也不重建
+    birdDropFx = [];
+    replaySubTick = 0;
     try {
       elBanner.innerHTML = '⏳ 正在重放录制中…<span class="tip">按完整状态帧逐帧渲染，请勿切换标签页</span>';
       recorder.start();
@@ -1739,6 +1742,28 @@
                 });
               }
             }
+            // 新出现的飞鸟空投宝箱：非掉血回收、且原格无砖（空地直接生箱）
+            if (prevFrame.crate[i] === 0 && frame.crate[i] === 1 && (!frame.recycle || frame.recycle[i] === 0)) {
+              const hadBrick = (prevFrame.brick && prevFrame.brick[i] === 1) || (prevFrame.brickLinger && prevFrame.brickLinger[i] > 0);
+              if (!hadBrick) {
+                const targetX = (i % W) * CELL + CELL / 2;
+                const targetY = (((i / W) | 0) + 0.5) * CELL;
+                const birdAltitude = 3.5 * CELL + (res && res.birdFrames ? res.birdFrames[0].height / 2 : 20);
+                birdDropFx.push({
+                  sx: targetX,
+                  sy: birdAltitude,
+                  tx: targetX,
+                  ty: targetY,
+                  cell: i,
+                  item: {
+                    type: frame.crateType ? frame.crateType[i] : -1,
+                    isSuper: !!(frame.superCrate && frame.superCrate[i]),
+                  },
+                  t0: nowMs,
+                  dur: 400, // 0.4s 垂直抛物线下落
+                });
+              }
+            }
             // 箱子从格上消失 = 一次推动完成（对局只在人推时响，这里一并收录）
             if (!pushDone && prevFrame.pushBoxAt[i] >= 0 && frame.pushBoxAt[i] === -1) {
               pushDone = true;
@@ -1765,6 +1790,7 @@
         }
         // 每 tick 的真实时长在 n 个子帧内均分 → 视频时长与对局一致
         for (let i = 0; i < n; i++) {
+          replaySubTick = i / n;
           const a01 = (i + 1) / n;
           // P0：人类玩家有 60Hz 轨迹时严格采用真实采样点（避免走停时错误插值回退抖动）；
           // 观战 AI 或旧录像按 tick 间线性插值。P1 恒按 tick 间插值。
@@ -1822,6 +1848,8 @@
       replayExporting = false;
       replayWinProb = null;
       replayAnim = null;
+      replaySubTick = 0;
+      birdDropFx = [];
       face[0] = oldFace[0]; face[1] = oldFace[1];
       elBanner.innerHTML = oldBanner;
       sim = oldSim;
@@ -2474,15 +2502,18 @@
       const ageMs = now - drop.t0;
       const progress = ageMs / drop.dur;
       if (progress >= 1.0) {
-        // 落地：正式写入地图数据
-        sim.spawnGraveyardDrop(drop.cell, drop.item.type, drop.item.isSuper);
-        if (sim.airdropPayload > 0) sim.airdropPayload--;
+        // 落地：正式写入地图数据（回放导出中地图数据已由快照恢复，不重复写入）
+        if (!replayExporting) {
+          sim.spawnGraveyardDrop(drop.cell, drop.item.type, drop.item.isSuper);
+          if (sim.airdropPayload > 0) sim.airdropPayload--;
+        }
         birdDropFx.splice(k, 1);
         continue;
       }
-      const curX = drop.sx + (drop.tx - drop.sx) * progress;
-      // 抛物线：向上拱起 90px
-      const arc = -90 * 4 * progress * (1 - progress);
+      // 抛物线动画：X 方向保持与落点对齐（无 X 方向横向动量），仅在 Y 方向做抛物线下落
+      const curX = drop.tx;
+      // 抛物线：向上拱起 60px 后重力下落
+      const arc = -60 * 4 * progress * (1 - progress);
       const curY = drop.sy + (drop.ty - drop.sy) * progress + arc;
       let icon = drop.item.isSuper ? res.superIcons[drop.item.type] : res.propIcons[drop.item.type];
       if (!icon) icon = res.boxQ;
@@ -2497,8 +2528,10 @@
     // - 倒计时 153s ~ 150s（flightTime 2.0s ~ 4.7s）：
     //   飞鸟横跨场内飞行期间，沿途向所经之处上下方均匀洒落墓地道具；
     // - 倒计时 150s（t=30s，即 sim.t=300）飞鸟完全飞离画面左边界，完成本轮周期。
-    if (res.birdFrames && running && !sim.done) {
-      const subTick = Math.min(1.0, Math.max(0.0, (now - lastTickT) / (TICK * 1000)));
+    if (res.birdFrames && (running || replayExporting) && !sim.done) {
+      const subTick = replayExporting
+        ? replaySubTick
+        : Math.min(1.0, Math.max(0.0, (now - lastTickT) / (TICK * 1000)));
       const matchElapsedS = (sim.t + subTick) / CFG.tickHz;
       const cycleIndex = Math.floor(matchElapsedS / 30);
       const cycleTime = matchElapsedS % 30; // 0 ~ 30s
@@ -2535,11 +2568,8 @@
         // 飞鸟处于最高空 (Z = 60000)
         items.push([60000, birdImg, Math.round(bx), Math.round(by)]);
 
-        // 场内飞行规划：每个 30s 周期只在飞鸟即将入场时（flightTime 2.0s ~ 2.2s）
-        // 一次性从墓地提取快照规划本轮空投（单趟最多 6 件，避免瞬间过载倾泻），
-        // 沿 2.25s ~ 4.20s（精确覆盖右侧第 13 列至左侧第 1 列）均匀分布；
-        // 彻底杜绝飞行期间新炸毁的道具在同航次级联重入、堆死在左边界。
-        if (flightTime >= 2.0 && flightTime <= 4.2 && birdPlannedCycle !== cycleIndex && sim.graveyard && sim.graveyard.length > 0) {
+        // 场内飞行规划：仅在实时对局中规划与触发新空投；视频导出中空投已由历史状态帧差分精确还原
+        if (!replayExporting && flightTime >= 2.0 && flightTime <= 4.2 && birdPlannedCycle !== cycleIndex && sim.graveyard && sim.graveyard.length > 0) {
           birdPlannedCycle = cycleIndex;
           const toDrop = sim.graveyard.splice(0, sim.graveyard.length);
           const count = toDrop.length;
@@ -2553,14 +2583,14 @@
           birdCruiseQueue.sort((a, b) => a.flightTime - b.flightTime);
         }
 
-        // 沿途准时抛出空投道具：飞鸟在其所在有效列向上下方安全格洒落
-        if (flightTime >= 2.20 && flightTime <= 4.30 && birdCruiseQueue.length > 0) {
+        // 沿途准时抛出空投道具：仅在实时对局中从队列弹出
+        if (!replayExporting && flightTime >= 2.20 && flightTime <= 4.30 && birdCruiseQueue.length > 0) {
           while (birdCruiseQueue.length > 0 && birdCruiseQueue[0].flightTime <= flightTime) {
             const nextDrop = birdCruiseQueue.shift();
             const birdCenterX = bx + birdImg.width / 2;
             const birdCenterY = by + birdImg.height / 2;
-            // 目标列限制在活跃区域 [1, W - 2]，绝不砸入 0 列或 14 列死角
-            const birdCol = Math.max(1, Math.min(W - 2, Math.round(bx / CELL)));
+            // 目标列优先匹配飞鸟中心当前所在列
+            const birdCol = Math.max(1, Math.min(W - 2, Math.round(birdCenterX / CELL)));
 
             // 寻找落点：优先在飞鸟当前经过的列（及其相邻列）的上下方空闲格，同时重罚已有道具聚集的列（防扎堆）
             const inFlight = new Set();
@@ -2578,7 +2608,7 @@
               let bestCells = [];
               for (const c of candidates) {
                 const col = c % W;
-                const score = Math.abs(col - birdCol) * 2 + colCounts[col] * 3;
+                const score = Math.abs(col - birdCol) * 3 + colCounts[col] * 2;
                 if (score < bestScore) {
                   bestScore = score;
                   bestCells = [c];
@@ -2590,14 +2620,14 @@
               const targetX = (tc % W) * CELL + CELL / 2;
               const targetY = (((tc / W) | 0) + 0.5) * CELL;
               birdDropFx.push({
-                sx: birdCenterX,
+                sx: targetX,
                 sy: birdCenterY,
                 tx: targetX,
                 ty: targetY,
                 cell: tc,
                 item: nextDrop.item,
                 t0: now,
-                dur: 600, // 0.6s 抛物线落地
+                dur: 500, // 0.5s 垂直抛物线下落
               });
             }
           }
