@@ -783,7 +783,6 @@ def _steer(pos_me, target_dir, alive_me, blocked, spd=1.0, pushable=None):
                    ((target_dir == 1) & (p[0] >= max_y - 2 * EPS)) | \
                    ((target_dir == 2) & (p[1] <= min_x + 2 * EPS)) | \
                    ((target_dir == 3) & (p[1] >= max_x - 2 * EPS))
-    valid_straight = full_step | (hit_boundary & moved)
     y, x = pos_me[0], pos_me[1]
     r0 = jnp.clip(jnp.floor(y).astype(jnp.int32), 0, H - 1)
     c0 = jnp.clip(jnp.floor(x).astype(jnp.int32), 0, W - 1)
@@ -805,6 +804,11 @@ def _steer(pos_me, target_dir, alive_me, blocked, spd=1.0, pushable=None):
     target_open_horz = ~blocked[r0, tc]
     target_open = jnp.where(vert, target_open_vert, target_open_horz)
 
+    entered_target = jnp.where(vert,
+                               jnp.floor(p[0]).astype(jnp.int32) == tr,
+                               jnp.floor(p[1]).astype(jnp.int32) == tc)
+    valid_straight = full_step | (hit_boundary & moved) | (target_open & entered_target)
+
     diag_l = (c0 - 1 < 0) | blocked[tr, jnp.clip(c0 - 1, 0, W - 1)]
     diag_r = (c0 + 1 >= W) | blocked[tr, jnp.clip(c0 + 1, 0, W - 1)]
     diag_u = (r0 - 1 < 0) | blocked[jnp.clip(r0 - 1, 0, H - 1), tc]
@@ -824,6 +828,18 @@ def _steer(pos_me, target_dir, alive_me, blocked, spd=1.0, pushable=None):
     perp = _PERP[target_dir]                     # (2,)——IDLE 已在出口拦截
     p1 = _move_player(pos_me, perp[0], alive_me, blocked, spd)
     p2 = _move_player(pos_me, perp[1], alive_me, blocked, spd)
+    center_x = c0.astype(jnp.float32) + 0.5
+    center_y = r0.astype(jnp.float32) + 0.5
+    clamp_x1 = jnp.where(x < center_x, jnp.minimum(p1[1], center_x), jnp.maximum(p1[1], center_x))
+    clamp_y1 = jnp.where(y < center_y, jnp.minimum(p1[0], center_y), jnp.maximum(p1[0], center_y))
+    p1 = jnp.where(target_open & vert, p1.at[1].set(clamp_x1), p1)
+    p1 = jnp.where(target_open & ~vert, p1.at[0].set(clamp_y1), p1)
+
+    clamp_x2 = jnp.where(x < center_x, jnp.minimum(p2[1], center_x), jnp.maximum(p2[1], center_x))
+    clamp_y2 = jnp.where(y < center_y, jnp.minimum(p2[0], center_y), jnp.maximum(p2[0], center_y))
+    p2 = jnp.where(target_open & vert, p2.at[1].set(clamp_x2), p2)
+    p2 = jnp.where(target_open & ~vert, p2.at[0].set(clamp_y2), p2)
+
     m1 = jnp.abs(p1 - pos_me).sum() > 2 * EPS
     m2 = jnp.abs(p2 - pos_me).sum() > 2 * EPS
     fa = jnp.where(swap, p2, p1)

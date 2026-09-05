@@ -1365,17 +1365,18 @@
                           (mv === MOVE_DOWN && ny >= maxY - 2 * EPS) ||
                           (mv === MOVE_LEFT && nx <= minX + 2 * EPS) ||
                           (mv === MOVE_RIGHT && nx >= maxX - 2 * EPS);
-      if (fullStep || (hitBoundary && moved > 2 * EPS)) return [ny, nx];
+      const open = (r, c) => r >= 0 && r < H && c >= 0 && c < W && !blocked[r * W + c];
+      const targetOpen = open(tr0, tc0);
+      const enteredTarget = (mv < 2 && Math.floor(ny) === tr0) || (mv >= 2 && Math.floor(nx) === tc0);
+      if (fullStep || (hitBoundary && moved > 2 * EPS) || (targetOpen && enteredTarget)) return [ny, nx];
 
       // 目标已在地图外且当前无法继续前移：世界尽头不可穿越，直接保留直行（禁止贴墙侧滑）
       if (tr0 < 0 || tr0 >= H || tc0 < 0 || tc0 >= W) return [ny, nx];
 
-      const open = (r, c) => r >= 0 && r < H && c >= 0 && c < W && !blocked[r * W + c];
       let perp;
       if (mv < 2) {
         // 上/下：目标行 tr；
-        const tr = r0 + (mv === 0 ? -1 : 1);
-        const targetOpen = open(tr, c0);
+        const tr = tr0;
         const leftOpen = open(tr, c0 - 1), rightOpen = open(tr, c0 + 1);
         if (targetOpen) {
           // 目标格开口：若直走受阻，说明身体边缘卡在门框两壁，朝目标格中心滑动进门
@@ -1389,8 +1390,7 @@
         }
       } else {
         // 左/右：目标列 tc；
-        const tc = c0 + (mv === 2 ? -1 : 1);
-        const targetOpen = open(r0, tc);
+        const tc = tc0;
         const upOpen = open(r0 - 1, tc), downOpen = open(r0 + 1, tc);
         if (targetOpen) {
           // 目标格开口：若直走受阻，说明身体边缘卡在门框两壁，朝目标格中心滑动进门
@@ -1405,6 +1405,18 @@
       }
       const p1 = this._tryMove(y, x, perp[0], blocked, dist);
       const p2 = this._tryMove(y, x, perp[1], blocked, dist);
+      // 进门归中保护：向中线微调时，禁止单步大速度直接穿刺超调过中线（防止 5Hz 谐振振荡）
+      if (targetOpen) {
+        if (mv < 2) {
+          const center = c0 + 0.5;
+          if (perp[0] === MOVE_LEFT) p1[1] = Math.max(p1[1], center); else p1[1] = Math.min(p1[1], center);
+          if (perp[1] === MOVE_LEFT) p2[1] = Math.max(p2[1], center); else p2[1] = Math.min(p2[1], center);
+        } else {
+          const center = r0 + 0.5;
+          if (perp[0] === MOVE_UP) p1[0] = Math.max(p1[0], center); else p1[0] = Math.min(p1[0], center);
+          if (perp[1] === MOVE_UP) p2[0] = Math.max(p2[0], center); else p2[0] = Math.min(p2[0], center);
+        }
+      }
       const moved1 = Math.abs(p1[0] - y) + Math.abs(p1[1] - x) > 2 * EPS;
       const moved2 = Math.abs(p2[0] - y) + Math.abs(p2[1] - x) > 2 * EPS;
       if (moved1) return p1;

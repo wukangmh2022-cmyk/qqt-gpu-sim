@@ -102,4 +102,15 @@ simInst.pos[0] = 5.5000; simInst.pos[1] = 13.9244;
 ({ mm } = simInst.legalMask());
 assert.strictEqual(mm[0][Q.MOVE_RIGHT], 1, '第 13 列向右可达第 14 列时 MOVE_RIGHT 必须合法 (1)');
 
+// -------------------------------------------------------------
+// 回归测试：22debug 开阔地直走远端障碍不触发受阻侧滑与 5Hz 超调震荡
+// 场景：从 (6.9001, 8.0999) 高速向左移动，目标列 7 为开阔通路，隔列 (6,6) 有泡。
+// 直走迈进 0.6798 格（94.4% 步长）已成功跨入第 7 列，必须判定为有效直行，严禁清零并上下侧滑震荡。
+blocked.fill(0);
+blocked[6 * Q.W + 6] = 1; // (6,6) 处有障碍
+let p22y = 6.9001, p22x = 8.0999;
+[p22y, p22x] = sim._steer(p22y, p22x, Q.MOVE_LEFT, blocked, highSpeedDist);
+assert(Math.abs(p22y - 6.9001) < 1e-4, `向左跨入通路列时绝不应发生垂直超调侧滑，实际 y=${p22y}`);
+assert(p22x < 7.5, `应成功跨入第 7 列 (x < 7.5)，实际 x=${p22x}`);
+
 console.log('mouse _steer & legalMask regression tests passed');

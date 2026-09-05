@@ -130,3 +130,15 @@ def test_legal_mask_out_of_bounds_is_masked():
     assert bool(mm[1, 4]), "P1 IDLE 必须合法"
 
 
+def test_22debug_open_corridor_not_oscillating():
+    # 场景：22debug 录像中 P0 从 (6.9001, 8.0999) 向左大踏步走向开阔列 7，
+    # 隔列 (6, 6) 有障碍。向左迈出 0.6798 格（94.4% 步长）已成功跨入第 7 列，
+    # 必须认定为有效直行，严禁清零并垂直侧滑震荡。
+    blocked = jnp.zeros((H, W), dtype=jnp.bool_).at[6, 6].set(True)
+    pos = jnp.array([6.9001, 8.0999], dtype=jnp.float32)
+    out = _steer(pos, jnp.int32(2), jnp.bool_(True), blocked, spd=2.4)
+    assert float(out[0]) == pytest.approx(6.9001, abs=1e-4), f"绝不应发生垂直超调侧滑，实际 y={float(out[0])}"
+    assert float(out[1]) < 7.5, f"应成功跨入第 7 列 (x < 7.5)，实际 x={float(out[1])}"
+
+
+
