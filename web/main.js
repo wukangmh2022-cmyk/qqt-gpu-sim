@@ -305,10 +305,10 @@
   const NUKEMAN_VAL = '__nukeman__';       // 兼容别名
   const IDLE_VAL = '__idle__';      // 静止敌人(不动不炸)哨兵
   const isRuleAi = (sel) => sel === HUNTER_VAL || sel === TIME_ASTAR_VAL || sel === TIME_ASTAR_HUNT_VAL || sel === TIME_ASTAR_ROAM_VAL || sel === NUKEMAN_VAL || sel === IDLE_VAL;
-  const LATEST_VIT = 'ViTModel2_31.9B';       // 最新 ViT 模型(默认敌人)
+  const LATEST_VIT = 'ViTModel2_31.9B';       // 最新 ViT 模型
 
-  // 敌/我方 AI 选择：'__hunter__'（规则）、'__nukeman__'（时空规则）或模型名。模型按需懒加载到缓存。
-  // 敌人默认 = 列表第一个（ELO 最高）；观战我方默认 = 同样的最强模型。
+  // 敌/我方 AI 选择：'__time_astar_hunt__'（高级时空 A* 竞技追猎版，默认敌人秒开）、'__hunter__'（规则）或模型名。
+  // 敌人默认 = 高级时空 A*（竞技追猎版），免模型加载等待；观战我方默认 = 规则 Hunter。
   let enemySel = null, p0Sel = null;
   const modelCache = new Map();      // name → MLPModel/CNNModel/TransformerModel/ORT…（懒加载缓存）
 
@@ -1392,16 +1392,16 @@
       const sb = b.global_step != null ? b.global_step : (b.it || 0);
       return sb - sa;
     });
-    // 敌人 AI 下拉 + 观战「我方：」下拉：都列全部模型 + 规则 Hunter
+    // 敌人 AI 下拉 + 观战「我方：」下拉：都列全部模型 + 规则 Hunter + 双版本高级时空 A*
     fillAiSelect(elEnemyAi, true);
     fillAiSelect(elP0Ai, true);
-    elEnemyAi.value = modelList[0] ? modelList[0].name : LATEST_VIT;
+    elEnemyAi.value = TIME_ASTAR_HUNT_VAL;    // 默认敌人：高级时空 A*（竞技追猎版），免模型加载等待
     elP0Ai.value = HUNTER_VAL;                // 观战「我方：」默认规则 Hunter
     p0Sel = elP0Ai.value;
     try {
-      await applyModel();            // 预加载默认敌人模型（我方默认同款，已入缓存）
+      await applyModel();            // 预加载默认敌人（竞技追猎版秒开）
     } catch (e) {
-      console.warn('默认模型加载异常，降级至规则 Hunter：', e);
+      console.warn('默认 AI 异常，降级至规则 Hunter：', e);
       elEnemyAi.value = HUNTER_VAL;
       await applyModel();
     }

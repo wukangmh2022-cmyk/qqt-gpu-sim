@@ -132,8 +132,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 (async () => {
   await wait(800);                     // boot()：素材 + 模型加载
   const qqt = global.window.__QQT__;
-  if (!qqt || !qqt.model) {
-    console.error('FAIL: window.__QQT__.model 未就绪');
+  if (!qqt || (!qqt.model && !qqt.enemySel)) {
+    console.error('FAIL: window.__QQT__ 未就绪');
     console.error('status:', els['status'] && els['status']._html);
     process.exit(1);
   }
@@ -161,15 +161,16 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     console.error('FAIL: 按空格后 sim 未创建');
     process.exit(1);
   }
-  console.log(`按空格开局成功: 模型: ${qqt.model.meta.name}  地图: ${qqt.sim.level.name}`);
+  const enemyDisplayName = qqt.enemySel === '__time_astar_hunt__' ? '高级时空 A*（竞技追猎版）' : (qqt.model ? qqt.model.meta.name : qqt.enemySel);
+  console.log(`按空格开局成功: 敌人: ${enemyDisplayName}  地图: ${qqt.sim.level.name}`);
 
-  // 当前加载模型名正确显示
+  // 当前加载敌人名正确显示
   const curText = els['cur-model'].textContent;
-  if (!curText.includes(qqt.model.meta.name)) {
-    console.error(`FAIL: cur-model 文本 (${curText}) 未含模型名 ${qqt.model.meta.name}`);
+  if (!curText.includes('竞技追猎') && (!qqt.model || !curText.includes(qqt.model.meta.name))) {
+    console.error(`FAIL: cur-model 文本 (${curText}) 未含预期敌人名称`);
     process.exit(1);
   }
-  console.log(`当前模型显示: ${curText} ✔`);
+  console.log(`当前敌人显示: ${curText} ✔`);
 
   // 敌人 AI 下拉已有选项（静止 + 规则 Hunter + 高级时空 A*(追猎) + 高级时空 A*(漫游) + 模型列表）
   const aiCount = els['enemy-ai'].children.length;
@@ -182,12 +183,12 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log(`敌人 AI 下拉: ${aiCount} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter + 双版本高级时空 A*）✔`);
 
-  // 点击「应用」重载当前选中敌人 AI（默认 = 最强模型），不炸
+  // 点击「应用」重载当前选中敌人 AI，不炸
   const click = (id) => (els[id].listeners['click'] || []).forEach((fn) => fn());
   click('apply-model');
   await wait(400);
-  if (!qqt.model.meta.name) {
-    console.error('FAIL: apply-model 后模型丢失');
+  if (!qqt.enemySel) {
+    console.error('FAIL: apply-model 后敌人丢失');
     process.exit(1);
   }
   console.log('apply-model 重载正常 ✔');
