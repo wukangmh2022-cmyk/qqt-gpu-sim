@@ -107,4 +107,64 @@ console.log(`100 Ticks 完成: P1 放泡总数=${p1DropCount}, 最大连续放�
 assert(maxConsecutiveDrops <= 1, `严禁每 tick 连续无脑放泡自杀！实际最大连续: ${maxConsecutiveDrops}`);
 console.log('P1 动作节制合理，无连续自残放泡行为 ✔');
 
-console.log('\n🎉 TimeAStarAI 单元测试全部通过！');
+console.log('--- 测试 7: 跨对局生命周期重置验证（防只吃东西不放炮） ---');
+// 模拟第一局运行 150 ticks
+const persistentAi = new TimeAStarAI({ mode: 'hunt' });
+const match1 = new QQT.Sim({ level: 'empty_scene' });
+for (let t = 0; t < 150; t++) {
+  const a0 = hunter.act(match1, 0);
+  const a1 = persistentAi.act(match1, 1);
+  match1.step([a0, a1]);
+  if (match1.done) break;
+}
+assert(persistentAi.lastDropTick > 0, '第一局结束时应有有效 lastDropTick');
+
+// 开启第二局，sim.t 重新归零，验证第二局前 50 tick 正常落子
+const match2 = new QQT.Sim({ level: 'empty_scene' });
+let match2Drops = 0;
+for (let t = 0; t < 50; t++) {
+  const a0 = [4, 0];
+  const a1 = persistentAi.act(match2, 1);
+  if (a1[1] === 1) match2Drops++;
+  match2.step([a0, a1]);
+  if (match2.done) break;
+}
+assert(match2Drops >= 3, `第二局重开后前 50 tick 必须正常落子，实际放泡数: ${match2Drops}`);
+console.log(`跨对局自动重置成功，第二局前 50 tick 正常放泡 ${match2Drops} 次 ✔`);
+
+console.log('--- 测试 8: 经典漫游模式（Roam）全图巡游与连老炮验证 ---');
+const roamAi = new TimeAStarAI({ mode: 'roam' });
+const roamSim = new QQT.Sim({ level: 'empty_scene' });
+let roamDrops = 0;
+let roamChains = 0;
+const blastCap = roamSim.blastCap ? roamSim.blastCap[1] : 2;
+
+for (let t = 0; t < 150; t++) {
+  const own = roamSim.centerCell(1);
+  const ownIdx = own[0] * W + own[1];
+  let wouldChain = false;
+  for (let d = 0; d < 4 && !wouldChain; d++) {
+    const [dr, dc] = [[-1,0],[1,0],[0,-1],[0,1]][d];
+    for (let k = 1; k <= blastCap; k++) {
+      const nr = own[0] + dr * k, nc = own[1] + dc * k;
+      if (nr < 0 || nr >= 13 || nc < 0 || nc >= W) break;
+      const idx = nr * W + nc;
+      if (roamSim.wall[idx] || roamSim.brick[idx]) break;
+      const f = roamSim.fuse[idx];
+      if (f >= 6 && f <= 24) { wouldChain = true; break; }
+    }
+  }
+
+  const a1 = roamAi.act(roamSim, 1);
+  if (a1[1] === 1) {
+    roamDrops++;
+    if (wouldChain) roamChains++;
+  }
+  roamSim.step([[4, 0], a1]);
+  assert(roamSim.alive[1], `经典漫游 AI 不应在第 ${t} tick 自爆`);
+}
+assert(roamDrops >= 10, `经典漫游 AI 150 tick 内应有稳定放泡节奏，实际: ${roamDrops}`);
+console.log(`经典漫游版全图巡游正常，放泡数=${roamDrops}，连锁老炮数=${roamChains}，零自伤生存 ✔`);
+
+console.log('\n🎉 TimeAStarAI 专项测试套件全部通过！');
+

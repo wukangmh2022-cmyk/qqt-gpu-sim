@@ -296,11 +296,15 @@
   const hunter = new Q.HunterAI();   // 规则 AI（纯进攻寻路），可当敌/我方
   const HUNTER_VAL = '__hunter__';   // 下拉里规则 AI 的 value 哨兵
   const timeAStarClass = Q.TimeAStarAI || (typeof TimeAStarAI !== 'undefined' ? TimeAStarAI : (Q.NukemanAI || (typeof NukemanAI !== 'undefined' ? NukemanAI : null)));
-  const timeAStar = timeAStarClass ? new timeAStarClass() : null;
-  const TIME_ASTAR_VAL = '__time_astar__'; // 高级时空 A*（时空避险 / 防自杀）
+  const timeAStarHunt = timeAStarClass ? new timeAStarClass({ mode: 'hunt' }) : null;
+  const timeAStarRoam = timeAStarClass ? new timeAStarClass({ mode: 'roam' }) : null;
+  const timeAStar = timeAStarHunt; // 兼容旧单例引用
+  const TIME_ASTAR_VAL = '__time_astar__'; // 兼容别名（默认指向竞技追猎版）
+  const TIME_ASTAR_HUNT_VAL = '__time_astar_hunt__'; // 高级时空 A*（竞技追猎版）
+  const TIME_ASTAR_ROAM_VAL = '__time_astar_roam__'; // 高级时空 A*（经典漫游连炮版）
   const NUKEMAN_VAL = '__nukeman__';       // 兼容别名
   const IDLE_VAL = '__idle__';      // 静止敌人(不动不炸)哨兵
-  const isRuleAi = (sel) => sel === HUNTER_VAL || sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL || sel === IDLE_VAL;
+  const isRuleAi = (sel) => sel === HUNTER_VAL || sel === TIME_ASTAR_VAL || sel === TIME_ASTAR_HUNT_VAL || sel === TIME_ASTAR_ROAM_VAL || sel === NUKEMAN_VAL || sel === IDLE_VAL;
   const LATEST_VIT = 'ViTModel2_31.9B';       // 最新 ViT 模型(默认敌人)
 
   // 敌/我方 AI 选择：'__hunter__'（规则）、'__nukeman__'（时空规则）或模型名。模型按需懒加载到缓存。
@@ -444,7 +448,8 @@
     const sel = pid === 0 ? p0Sel : enemySel;
     if (sel === IDLE_VAL) return [MOVE_IDLE, 0];   // 静止：不动不炸
     if (sel === HUNTER_VAL) return hunter.act(sim, pid);
-    if ((sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) && timeAStar) return timeAStar.act(sim, pid);
+    if (sel === TIME_ASTAR_ROAM_VAL && timeAStarRoam) return timeAStarRoam.act(sim, pid);
+    if ((sel === TIME_ASTAR_HUNT_VAL || sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) && timeAStarHunt) return timeAStarHunt.act(sim, pid);
     const m = sel ? modelCache.get(sel) : null;
     if (m) {
       try { return await m.act(sim, pid, rng); }
@@ -1250,6 +1255,8 @@
     if (replayExporting) return;   // 视频导出中：换全局 sim 会打断逐帧渲染，忽略 R/重新开局
     if (!res || !selectedLevel) return;      // 素材/地图未就绪由 logicTick 兜底等待
     gameSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
+    if (timeAStarHunt) timeAStarHunt.reset();
+    if (timeAStarRoam) timeAStarRoam.reset();
     sim = new Sim(gameSeed);
     sim._manualBird = true;                    // 前端接管飞鸟与空投抛物线动画
     birdDropFx = [];
@@ -1347,10 +1354,15 @@
       h.textContent = '规则 Hunter（纯进攻寻路）';
       sel.appendChild(h);
 
-      const n = document.createElement('option');
-      n.value = TIME_ASTAR_VAL;
-      n.textContent = '高级时空 A*（时空避险 / 防自杀）';
-      sel.appendChild(n);
+      const nHunt = document.createElement('option');
+      nHunt.value = TIME_ASTAR_HUNT_VAL;
+      nHunt.textContent = '高级时空 A*（竞技追猎版）';
+      sel.appendChild(nHunt);
+
+      const nRoam = document.createElement('option');
+      nRoam.value = TIME_ASTAR_ROAM_VAL;
+      nRoam.textContent = '高级时空 A*（经典漫游连炮版）';
+      sel.appendChild(nRoam);
     }
     for (const m of modelList) {
       const opt = document.createElement('option');
@@ -1410,12 +1422,21 @@
       if (sim) startGame();
       return;
     }
-    if (sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) {
-      enemySel = TIME_ASTAR_VAL;
+    if (sel === TIME_ASTAR_HUNT_VAL || sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) {
+      enemySel = sel;
       modelLoaded = true;
       requestAnimationFrame(updateProgress);
-      elCurModel.textContent = '高级时空 A*（时空避险 / 防自杀）';
-      elStatus.innerHTML = '敌人：<b>高级时空 A*</b>（时空 A* 寻路 / 连续危险窗 / 防自杀）';
+      elCurModel.textContent = '高级时空 A*（竞技追猎版）';
+      elStatus.innerHTML = '敌人：<b>高级时空 A*（竞技追猎版）</b>（时空 A* 寻路 / 破砖直瞄 / 竞技压迫）';
+      if (sim) startGame();
+      return;
+    }
+    if (sel === TIME_ASTAR_ROAM_VAL) {
+      enemySel = TIME_ASTAR_ROAM_VAL;
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
+      elCurModel.textContent = '高级时空 A*（经典漫游连炮版）';
+      elStatus.innerHTML = '敌人：<b>高级时空 A*（经典漫游连炮版）</b>（全图巡游 / 吃道具 / 节奏落子 / 连环老炮）';
       if (sim) startGame();
       return;
     }
@@ -2890,8 +2911,10 @@
     const y0 = BOARD_H + BOARD_OFFSET;
     ctx.fillStyle = '#10131a';
     ctx.fillRect(0, y0, BOARD_PX, HUD_PX);
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-    const aiName = (sel) => sel === HUNTER_VAL ? '规则 Hunter' : ((sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) ? '高级时空 A*' : (sel === IDLE_VAL ? '静止' : (sel || '模型')));
+    const aiName = (sel) => sel === HUNTER_VAL ? '规则 Hunter' :
+      (sel === TIME_ASTAR_ROAM_VAL ? '时空 A* 经典漫游' :
+      ((sel === TIME_ASTAR_HUNT_VAL || sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) ? '时空 A* 竞技追猎' :
+      (sel === IDLE_VAL ? '静止' : (sel || '模型'))));
     const p0Kind = elSpectate.checked ? aiName(p0Sel) : '你';
     const p1Kind = aiName(enemySel);
     // 辅助文本截断函数，保证模型名过长时属性不被推出视野

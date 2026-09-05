@@ -134,12 +134,21 @@
   }
 
   class TimeAStarAI {
-    constructor() {
+    constructor(options = {}) {
+      this.mode = options.mode || 'hunt'; // 'hunt' (竞技追猎版) 或 'roam' (经典漫游连炮版)
+      this.reset();
+    }
+
+    reset() {
       this.targetCell = -1;
       this.targetPath = [];
       this.escapePath = [];
       this.escapeTarget = -1;
+      this.lastEscapeTarget = -1;
+      this.lastEscapePath = null;
       this.lastDropTick = -999;
+      this.roamTarget = -1;
+      this.roamTicks = 0;
     }
 
     // 构建时空危险窗（严格对齐离散物理引爆时刻，含多泡连环引爆链预测）
@@ -349,6 +358,10 @@
 
     // 主决策入口：返回 [move, bomb]
     act(sim, pid) {
+      const curTick = sim.t || 0;
+      if (curTick <= 0 || curTick < this.lastDropTick) {
+        this.reset();
+      }
       const W = sim.W || (sim.level && (sim.level.w || sim.level.width)) || 15;
       const H = sim.H || (sim.level && (sim.level.h || sim.level.height)) || 13;
       const N = W * H;
@@ -356,6 +369,7 @@
       const ownIdx = own[0] * W + own[1];
       const nowMs = (sim.t || 0) * 100;
       const spd = 3.0 * (sim.spdG ? sim.spdG[pid] : 1.0);
+      const blastCap = sim.blastCap ? sim.blastCap[pid] : 2;
       const danger = this.buildDangerMap(sim, nowMs);
       const { mm, bm } = sim.legalMask();
 
@@ -431,7 +445,7 @@
       }
 
       // ============================================================
-      // 3. 宏观目标决策：吃宝箱发育 > 逼近对手压迫
+      // 3. 宏观目标决策：双模式分流（竞技追猎 vs 经典漫游）
       // ============================================================
       let oppIdx = -1;
       for (let o = 0; o < 2; o++) {
@@ -442,8 +456,6 @@
         }
       }
 
-      let targetGoal = oppIdx;
-      // 优先吃宝箱升级（吃箱发育对对抗 Hunter / 模型至关重要）
       let nearestCrate = -1, minCrateDist = Infinity;
       for (let i = 0; i < N; i++) {
         if (sim.crate[i]) {
@@ -451,8 +463,91 @@
           if (d < minCrateDist) { minCrateDist = d; nearestCrate = i; }
         }
       }
-      if (nearestCrate !== -1 && (minCrateDist <= 6 || (sim.spdG && sim.spdG[pid] < 1.8) || (sim.bombsCap && sim.bombsCap[pid] < 3))) {
-        targetGoal = nearestCrate;
+
+      let targetGoal = -1;
+
+      if (this.mode === 'roam') {
+        // === 经典漫游模式：不主动追踪对手，专注全图巡游、吃道具、破砖开荒 ===
+        if (nearestCrate !== -1 && minCrateDist <= 8) {
+          targetGoal = nearestCrate;
+        } else {
+          this.roamTicks = (this.roamTicks || 0) + 1;
+          const needNewRoam = this.roamTarget === -1 ||
+                              this.roamTarget === ownIdx ||
+                              this.roamTicks > 25 ||
+                              sim.wall[this.roamTarget] ||
+                              danger.hitTest(this.roamTarget, nowMs, 0);
+          if (needNewRoam) {
+            this.roamTicks = 0;
+            // 优先检查周围 1~3 格是否有障碍砖阻挡去路（开荒期主动破砖开路 hard block destroying）
+            let bestBrick = -1, minBrickDist = Infinity;
+            for (let i = 0; i < N; i++) {
+              if (sim.brick[i]) {
+                const r = (i / W) | 0, c = i % W;
+                const dist = Math.abs(r - own[0]) + Math.abs(c - own[1]);
+                if (dist < minBrickDist && dist <= 3) {
+                  minBrickDist = dist;
+                  bestBrick = i;
+                }
+              }
+            }
+
+            if (bestBrick !== -1 && (minBrickDist <= 2 || Math.random() < 0.5)) {
+              this.roamTarget = bestBrick;
+            } else {
+              const candidates = [];
+              for (let i = 0; i < N; i++) {
+                if (sim.wall[i] || sim.fuse[i] > 0 || i === ownIdx) continue;
+                if (danger.hitTest(i, nowMs, 0)) continue;
+                const ds = danger.nextDangerStart(i, nowMs);
+                if (ds !== null && ds - nowMs < 1200) continue;
+
+                const r = (i / W) | 0, c = i % W;
+                const dist = Math.abs(r - own[0]) + Math.abs(c - own[1]);
+                if (dist >= 2 && dist <= 7) {
+                  let openDegree = 0;
+                  for (let d = 0; d < 4; d++) {
+                    const nr = r + DIRS[d][0], nc = c + DIRS[d][1];
+                    if (nr >= 0 && nr < H && nc >= 0 && nc < W && !sim.wall[nr * W + nc] && !sim.brick[nr * W + nc]) {
+                      openDegree++;
+                    }
+                  }
+                  // 连老炮加分：如果能与场上已有老炮 (fuse 10~25) 形成十字连线，给予倾向加分
+                  let chainBonus = 0;
+                  for (let d = 0; d < 4; d++) {
+                    const [dr, dc] = DIRS[d];
+                    for (let k = 1; k <= blastCap; k++) {
+                      const nr = r + dr * k, nc = c + dc * k;
+                      if (nr < 0 || nr >= H || nc < 0 || nc >= W) break;
+                      const idx = nr * W + nc;
+                      if (sim.wall[idx] || sim.brick[idx]) break;
+                      if (sim.fuse[idx] >= 10 && sim.fuse[idx] <= 25) {
+                        chainBonus += 20;
+                        break;
+                      }
+                    }
+                  }
+                  const brickPenalty = sim.brick[i] ? 15 : 0;
+                  candidates.push({ cell: i, score: openDegree * 10 - dist * 2 + chainBonus - brickPenalty });
+                }
+              }
+              if (candidates.length > 0) {
+                candidates.sort((a, b) => b.score - a.score);
+                const pick = candidates[Math.floor(Math.random() * Math.min(3, candidates.length))];
+                this.roamTarget = pick.cell;
+              } else {
+                this.roamTarget = -1;
+              }
+            }
+          }
+          targetGoal = this.roamTarget;
+        }
+      } else {
+        // === 竞技追猎模式：直瞄锁敌、近身压迫、优先吃宝箱升级 ===
+        targetGoal = oppIdx;
+        if (nearestCrate !== -1 && (minCrateDist <= 6 || (sim.spdG && sim.spdG[pid] < 1.8) || (sim.bombsCap && sim.bombsCap[pid] < 3))) {
+          targetGoal = nearestCrate;
+        }
       }
 
       // 全局穿砖 A* 寻路（破砖开路）
@@ -472,44 +567,15 @@
       }
 
       // ============================================================
-      // 4. 战术落子：破砖开路 + 直瞄进攻 + 连环穿梭
+      // 4. 战术落子：破砖开路 + 连老炮 + 节奏铺雷 / 竞技压迫
       // ============================================================
       let placeBomb = 0;
       const canDrop = bm[pid][1] === 1 && sim.fuse[ownIdx] === 0 && sim.liveBombs(pid) < sim.bombsCap[pid];
-      const blastCap = sim.blastCap ? sim.blastCap[pid] : 2;
       const cooldownTicks = (sim.t || 0) - this.lastDropTick;
 
       if (canDrop && !inImminentDanger) {
-        // 战术 A: 面前紧贴阻碍前进的砖墙（破砖开路）
         const wantBreakBrick = nextCellIsBrick;
 
-        // 战术 B: 与对手同轴直瞄攻击
-        let directLineAttack = false;
-        let nearOpp = false;
-        if (oppIdx !== -1) {
-          const or = (oppIdx / W) | 0, oc = oppIdx % W;
-          const dr = Math.abs(own[0] - or), dc = Math.abs(own[1] - oc);
-          if (dr === 0 && dc <= blastCap) {
-            let blocked = false;
-            const minC = Math.min(own[1], oc), maxC = Math.max(own[1], oc);
-            for (let c = minC + 1; c < maxC; c++) {
-              if (sim.wall[own[0] * W + c] || sim.brick[own[0] * W + c]) { blocked = true; break; }
-            }
-            if (!blocked) directLineAttack = true;
-          } else if (dc === 0 && dr <= blastCap) {
-            let blocked = false;
-            const minR = Math.min(own[0], or), maxR = Math.max(own[0], or);
-            for (let r = minR + 1; r < maxR; r++) {
-              if (sim.wall[r * W + own[1]] || sim.brick[r * W + own[1]]) { blocked = true; break; }
-            }
-            if (!blocked) directLineAttack = true;
-          }
-          if (dr + dc <= blastCap + 1) {
-            nearOpp = true;
-          }
-        }
-
-        // 战术 C: 连锁老炮（时间差连环引爆）
         let chainOldBomb = false;
         for (let d = 0; d < 4 && !chainOldBomb; d++) {
           const [dr, dc] = DIRS[d];
@@ -523,10 +589,49 @@
           }
         }
 
-        // 战术 D: 穿梭游走落子（空场压迫）
-        const roamBomb = cooldownTicks >= 8;
+        let wantBomb = false;
 
-        const wantBomb = wantBreakBrick || directLineAttack || nearOpp || chainOldBomb || roamBomb;
+        if (this.mode === 'roam') {
+          // 经典漫游模式：破砖开路 + 连环老炮 + 节奏巡航铺雷（每隔 8~10 tick 放一颗） + 自卫反击
+          const roamRhythm = cooldownTicks >= 9;
+          let selfDefense = false;
+          if (oppIdx !== -1) {
+            const or = (oppIdx / W) | 0, oc = oppIdx % W;
+            const dr = Math.abs(own[0] - or), dc = Math.abs(own[1] - oc);
+            if ((dr === 0 && dc <= 2) || (dc === 0 && dr <= 2)) {
+              selfDefense = true;
+            }
+          }
+          wantBomb = wantBreakBrick || chainOldBomb || roamRhythm || selfDefense;
+        } else {
+          // 竞技追猎模式：破砖 + 直瞄 + 贴身 + 连炮 + 压迫
+          let directLineAttack = false;
+          let nearOpp = false;
+          if (oppIdx !== -1) {
+            const or = (oppIdx / W) | 0, oc = oppIdx % W;
+            const dr = Math.abs(own[0] - or), dc = Math.abs(own[1] - oc);
+            if (dr === 0 && dc <= blastCap) {
+              let blocked = false;
+              const minC = Math.min(own[1], oc), maxC = Math.max(own[1], oc);
+              for (let c = minC + 1; c < maxC; c++) {
+                if (sim.wall[own[0] * W + c] || sim.brick[own[0] * W + c]) { blocked = true; break; }
+              }
+              if (!blocked) directLineAttack = true;
+            } else if (dc === 0 && dr <= blastCap) {
+              let blocked = false;
+              const minR = Math.min(own[0], or), maxR = Math.max(own[0], or);
+              for (let r = minR + 1; r < maxR; r++) {
+                if (sim.wall[r * W + own[1]] || sim.brick[r * W + own[1]]) { blocked = true; break; }
+              }
+              if (!blocked) directLineAttack = true;
+            }
+            if (dr + dc <= blastCap + 1) {
+              nearOpp = true;
+            }
+          }
+          const roamBomb = cooldownTicks >= 8;
+          wantBomb = wantBreakBrick || directLineAttack || nearOpp || chainOldBomb || roamBomb;
+        }
 
         if (wantBomb && cooldownTicks >= 5) {
           if (this.canSafelyPlaceBomb(sim, ownIdx, blastCap, spd, nowMs)) {
@@ -534,6 +639,9 @@
             this.lastDropTick = sim.t || 0;
             this.escapeTarget = this.lastEscapeTarget;
             this.escapePath = this.lastEscapePath;
+            if (this.mode === 'roam') {
+              this.roamTarget = -1; // 放泡后重新规划下一个巡航路标
+            }
           }
         }
       }

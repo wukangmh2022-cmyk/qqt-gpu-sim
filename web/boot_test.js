@@ -171,16 +171,16 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log(`当前模型显示: ${curText} ✔`);
 
-  // 敌人 AI 下拉已有选项（静止 + 规则 Hunter + 高级时空 A* + 模型列表）
+  // 敌人 AI 下拉已有选项（静止 + 规则 Hunter + 高级时空 A*(追猎) + 高级时空 A*(漫游) + 模型列表）
   const aiCount = els['enemy-ai'].children.length;
   const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'web', 'models', 'index.json'), 'utf8'));
   const modelCount = idx.models ? idx.models.length : idx.length;
-  const expectAi = modelCount + 3;   // 静止 + 规则 Hunter + 高级时空 A* + 模型数
+  const expectAi = modelCount + 4;   // 静止 + 规则 Hunter + 高级时空 A*(追猎) + 高级时空 A*(漫游) + 模型数
   if (aiCount !== expectAi) {
-    console.error(`FAIL: 敌人 AI 下拉应 ${expectAi} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter + 高级时空 A*），实际 ${aiCount}`);
+    console.error(`FAIL: 敌人 AI 下拉应 ${expectAi} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter + 双版本高级时空 A*），实际 ${aiCount}`);
     process.exit(1);
   }
-  console.log(`敌人 AI 下拉: ${aiCount} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter + 高级时空 A*）✔`);
+  console.log(`敌人 AI 下拉: ${aiCount} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter + 双版本高级时空 A*）✔`);
 
   // 点击「应用」重载当前选中敌人 AI（默认 = 最强模型），不炸
   const click = (id) => (els[id].listeners['click'] || []).forEach((fn) => fn());
@@ -202,15 +202,25 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log('敌人 AI 切到规则 Hunter 后正常 ✔');
 
-  // 敌人 AI 切到高级时空 A* → 应用 → P1 由 time_astar 决策
-  els['enemy-ai'].value = '__time_astar__';
+  // 敌人 AI 切到高级时空 A*（竞技追猎版）
+  els['enemy-ai'].value = '__time_astar_hunt__';
   (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
   await wait(500);
-  if (qqt.enemySel !== '__time_astar__') {
-    console.error('FAIL: 敌人切高级时空 A* 后 enemySel 未更新');
+  if (qqt.enemySel !== '__time_astar_hunt__') {
+    console.error('FAIL: 敌人切高级时空 A*（竞技追猎版）后 enemySel 未更新');
     process.exit(1);
   }
-  console.log('敌人 AI 切到高级时空 A* 后正常 ✔');
+  console.log('敌人 AI 切到高级时空 A*（竞技追猎版）后正常 ✔');
+
+  // 敌人 AI 切到高级时空 A*（经典漫游连炮版）
+  els['enemy-ai'].value = '__time_astar_roam__';
+  (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(500);
+  if (qqt.enemySel !== '__time_astar_roam__') {
+    console.error('FAIL: 敌人切高级时空 A*（经典漫游连炮版）后 enemySel 未更新');
+    process.exit(1);
+  }
+  console.log('敌人 AI 切到高级时空 A*（经典漫游连炮版）后正常 ✔');
 
   // 切回规则 Hunter（后续观战测试需要快速放泡产生爆炸特效）
   const defaultModel = els['enemy-ai'].children[1].value;
