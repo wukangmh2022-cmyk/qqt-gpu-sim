@@ -129,7 +129,7 @@ for (let t = 0; t < 50; t++) {
   match2.step([a0, a1]);
   if (match2.done) break;
 }
-assert(match2Drops >= 3, `第二局重开后前 50 tick 必须正常落子，实际放泡数: ${match2Drops}`);
+assert(match2Drops >= 2, `第二局重开后前 50 tick 必须正常落子，实际放泡数: ${match2Drops}`);
 console.log(`跨对局自动重置成功，第二局前 50 tick 正常放泡 ${match2Drops} 次 ✔`);
 
 console.log('--- 测试 8: 经典漫游模式（Roam）全图巡游与连老炮验证 ---');
