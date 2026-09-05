@@ -213,7 +213,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   console.log('敌人 AI 切到高级规则 Nukeman 后正常 ✔');
 
   // 切回默认最强模型（后续观战测试用）
-  const defaultModel = els['enemy-ai'].children[2].value;   // 第 0 项是静止，第 1 项是 Hunter，第 2 项是 Nukeman，第 3 项是默认模型
+  const defaultModel = els['enemy-ai'].children[3].value;   // 第 0 项是静止，第 1 项是 Hunter，第 2 项是 Nukeman，第 3 项是默认模型
   els['enemy-ai'].value = defaultModel;
   (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
   await wait(400);
