@@ -445,7 +445,7 @@
       // ------------------------------------------------------------
       let placeBomb = 0;
       const { mm, bm } = sim.legalMask();
-      const canDrop = bm[pid] === 1 && sim.fuse[ownIdx] === 0;
+      const canDrop = bm[pid][1] === 1 && sim.fuse[ownIdx] === 0;
 
       if (canDrop) {
         // 条件 A: 与对手对齐并在自身爆炸威力内（且中间无永久墙隔断）
@@ -493,7 +493,7 @@
           }
         }
 
-        shouldDrop = alignedOpp || nearOpp || brickBlock || chain;
+        const shouldDrop = alignedOpp || nearOpp || brickBlock || chain;
 
         // 核心关卡：放泡前必须进行假想前瞻防自杀！
         if (shouldDrop) {
