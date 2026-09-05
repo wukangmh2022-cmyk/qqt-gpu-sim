@@ -1407,6 +1407,7 @@
       requestAnimationFrame(updateProgress);
       elCurModel.textContent = '规则 Hunter（纯进攻寻路）';
       elStatus.innerHTML = '敌人：<b>规则 Hunter</b>（纯进攻寻路 AI，无需模型权重）';
+      if (sim) startGame();
       return;
     }
     if (sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) {
@@ -1415,6 +1416,7 @@
       requestAnimationFrame(updateProgress);
       elCurModel.textContent = '高级时空 A*（时空避险 / 防自杀）';
       elStatus.innerHTML = '敌人：<b>高级时空 A*</b>（时空 A* 寻路 / 连续危险窗 / 防自杀）';
+      if (sim) startGame();
       return;
     }
     if (sel === IDLE_VAL) {
@@ -1423,6 +1425,7 @@
       requestAnimationFrame(updateProgress);
       elCurModel.textContent = '静止（不动不炸）';
       elStatus.innerHTML = '敌人：<b>静止</b>（不动不炸）';
+      if (sim) startGame();
       return;
     }
 
