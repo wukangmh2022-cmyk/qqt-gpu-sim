@@ -295,10 +295,14 @@
   let spaceDownSince = 0, joyDownSince = 0;   // 按下时刻: 长按>180ms 才连放, 点按=1颗
   const hunter = new Q.HunterAI();   // 规则 AI（纯进攻寻路），可当敌/我方
   const HUNTER_VAL = '__hunter__';   // 下拉里规则 AI 的 value 哨兵
+  const nukemanClass = Q.NukemanAI || (typeof NukemanAI !== 'undefined' ? NukemanAI : null);
+  const nukeman = nukemanClass ? new nukemanClass() : null;
+  const NUKEMAN_VAL = '__nukeman__'; // 高级规则 Nukeman（时空 A* / 防自杀）
   const IDLE_VAL = '__idle__';      // 静止敌人(不动不炸)哨兵
+  const isRuleAi = (sel) => sel === HUNTER_VAL || sel === NUKEMAN_VAL || sel === IDLE_VAL;
   const LATEST_VIT = 'ViTModel2_31.9B';       // 最新 ViT 模型(默认敌人)
 
-  // 敌/我方 AI 选择：'__hunter__'（规则）或模型名。模型按需懒加载到缓存。
+  // 敌/我方 AI 选择：'__hunter__'（规则）、'__nukeman__'（时空规则）或模型名。模型按需懒加载到缓存。
   // 敌人默认 = 列表第一个（ELO 最高）；观战我方默认 = 同样的最强模型。
   let enemySel = null, p0Sel = null;
   const modelCache = new Map();      // name → MLPModel/CNNModel/TransformerModel/ORT…（懒加载缓存）
@@ -439,6 +443,7 @@
     const sel = pid === 0 ? p0Sel : enemySel;
     if (sel === IDLE_VAL) return [MOVE_IDLE, 0];   // 静止：不动不炸
     if (sel === HUNTER_VAL) return hunter.act(sim, pid);
+    if (sel === NUKEMAN_VAL && nukeman) return nukeman.act(sim, pid);
     const m = sel ? modelCache.get(sel) : null;
     if (m) {
       try { return await m.act(sim, pid, rng); }
@@ -1340,6 +1345,11 @@
       h.value = HUNTER_VAL;
       h.textContent = '规则 Hunter（纯进攻寻路）';
       sel.appendChild(h);
+
+      const n = document.createElement('option');
+      n.value = NUKEMAN_VAL;
+      n.textContent = '高级规则 Nukeman（时空 A* / 防自杀）';
+      sel.appendChild(n);
     }
     for (const m of modelList) {
       const opt = document.createElement('option');
@@ -1396,6 +1406,14 @@
       requestAnimationFrame(updateProgress);
       elCurModel.textContent = '规则 Hunter（纯进攻寻路）';
       elStatus.innerHTML = '敌人：<b>规则 Hunter</b>（纯进攻寻路 AI，无需模型权重）';
+      return;
+    }
+    if (sel === NUKEMAN_VAL) {
+      enemySel = NUKEMAN_VAL;
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
+      elCurModel.textContent = '高级规则 Nukeman（时空 A* / 防自杀）';
+      elStatus.innerHTML = '敌人：<b>高级规则 Nukeman</b>（时空 A* / 连续危险窗 / 防自杀）';
       return;
     }
     if (sel === IDLE_VAL) {
@@ -1492,9 +1510,9 @@
   });
   elEnemyAi.addEventListener('change', applyModel);   // 换敌人 AI → 应用并重开
   elP0Ai.addEventListener('change', async () => {
-    // 观战「我方：」：规则 → hunter；模型 → 懒加载进缓存（不阻塞开局）
+    // 观战「我方：」：规则 → hunter / nukeman；模型 → 懒加载进缓存（不阻塞开局）
     p0Sel = elP0Ai.value;
-    if (p0Sel !== HUNTER_VAL) {
+    if (!isRuleAi(p0Sel)) {
       try { await ensureModel(p0Sel); } catch (e) { elStatus.innerHTML = `我方模型加载失败：${e.message}`; }
     }
     startGame();
@@ -1983,8 +2001,8 @@
     // 模型未就绪（正在加载/加载失败）先不推进：敌人 + 观战时的我方；
     // 规则 AI 随时可用。缺这一步观战 P0 模型没进缓存 → aiOf 返回 IDLE 站着。
     const spectate = elSpectate.checked;
-    if (enemySel !== HUNTER_VAL && !modelCache.has(enemySel)) return;
-    if (spectate && p0Sel !== HUNTER_VAL && !modelCache.has(p0Sel)) return;
+    if (!isRuleAi(enemySel) && !modelCache.has(enemySel)) return;
+    if (spectate && !isRuleAi(p0Sel) && !modelCache.has(p0Sel)) return;
     // 观战 + 双方同一模型 → 一次批处理前向出双玩家动作（ORT 为 batch=2 一次 run）
     let a0, a1;
     const actionT0 = performance.now();
@@ -2870,7 +2888,7 @@
     ctx.fillRect(0, y0, BOARD_PX, HUD_PX);
     ctx.strokeStyle = 'rgba(255,255,255,0.08)';
     ctx.strokeRect(0, y0, BOARD_PX, HUD_PX);
-    const aiName = (sel) => sel === HUNTER_VAL ? '规则 Hunter' : (sel || '模型');
+    const aiName = (sel) => sel === HUNTER_VAL ? '规则 Hunter' : (sel === NUKEMAN_VAL ? '高级规则 Nukeman' : (sel === IDLE_VAL ? '静止' : (sel || '模型')));
     const p0Kind = elSpectate.checked ? aiName(p0Sel) : '你';
     const p1Kind = aiName(enemySel);
     // 辅助文本截断函数，保证模型名过长时属性不被推出视野
@@ -2935,12 +2953,12 @@
                  BOARD_PX - 18, y0 + 30);
 
     // ---- 实时 AI 胜率评估 (仅同步更新网页顶部 Header 胜率条，去除底部冗余胜率条) ----
-    const em = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
+    const em = enemySel && !isRuleAi(enemySel) ? modelCache.get(enemySel) : null;
     let p0WinProb = 0.5;
     if (replayExporting && replayWinProb !== null) {
       p0WinProb = replayWinProb;
     } else {
-      const p0m = elSpectate.checked && p0Sel && p0Sel !== HUNTER_VAL ? modelCache.get(p0Sel) : null;
+      const p0m = elSpectate.checked && p0Sel && !isRuleAi(p0Sel) ? modelCache.get(p0Sel) : null;
       if (p0m && p0m._lastVal && p0m._lastVal[0] !== undefined) {
         p0WinProb = Math.max(0.02, Math.min(0.98, (p0m._lastVal[0] + 1.0) / 2.0));
       } else if (em && em._lastVal) {
@@ -2970,7 +2988,7 @@
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#64748b';
     ctx.font = '11px sans-serif';
-    const p0Full = elSpectate.checked && p0Sel && p0Sel !== HUNTER_VAL && modelCache.get(p0Sel)
+    const p0Full = elSpectate.checked && p0Sel && !isRuleAi(p0Sel) && modelCache.get(p0Sel)
       ? `${modelDisplayName(modelCache.get(p0Sel).meta)}（${fmtStep(modelCache.get(p0Sel).meta.global_step)}步）`
       : p0Kind;
     const p1Full = em
@@ -3440,8 +3458,8 @@
     get sim() { return sim; },
     get res() { return res; },
     get model() {
-      const m = enemySel && enemySel !== HUNTER_VAL ? modelCache.get(enemySel) : null;
-      return m || (enemySel === HUNTER_VAL ? null : modelCache.get(modelList[0] && modelList[0].name) || null);
+      const m = enemySel && !isRuleAi(enemySel) ? modelCache.get(enemySel) : null;
+      return m || (isRuleAi(enemySel) ? null : modelCache.get(modelList[0] && modelList[0].name) || null);
     },
     get enemySel() { return enemySel; },
     get p0Sel() { return p0Sel; },

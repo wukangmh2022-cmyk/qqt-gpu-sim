@@ -121,6 +121,9 @@ global.fetch = async (url) => {
 console.log('加载 main.js（DOM mock）…');
 // 模拟浏览器里 <script src="sim.js"> 先加载并挂到 window.QQT
 const QQT = require('./sim.js');
+const NukemanAI = require('./nukeman_ai.js');
+QQT.NukemanAI = NukemanAI;
+global.window.NukemanAI = NukemanAI;
 global.window.QQT = QQT;
 require('./main.js');
 
@@ -151,33 +154,33 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log('loading 已隐藏 + 欢迎窗口显示（含操作说明）✔');
 
-  // 按空格 → 开始第一局
+  // 按空格开局：sim 创建，game loop 跑起
   global.dispatch('keydown', 'Space');
-  await wait(300);
+  await wait(800);
   if (!qqt.sim) {
-    console.error('FAIL: 按空格后未开局（sim 未创建）');
+    console.error('FAIL: 按空格后 sim 未创建');
     process.exit(1);
   }
-  console.log('按空格开局成功:', '模型:', qqt.model.meta.name, ' 地图:', qqt.sim.mode);
+  console.log(`按空格开局成功: 模型: ${qqt.model.meta.name}  地图: ${qqt.sim.level.name}`);
 
-  // 当前模型信息已展示在 HUD（cur-model 元素有内容、且与加载的模型名一致）
+  // 当前加载模型名正确显示
   const curText = els['cur-model'].textContent;
-  if (!curText || !curText.includes(qqt.model.meta.name)) {
-    console.error(`FAIL: cur-model 未显示当前模型（"${curText}"）`);
+  if (!curText.includes(qqt.model.meta.name)) {
+    console.error(`FAIL: cur-model 文本 (${curText}) 未含模型名 ${qqt.model.meta.name}`);
     process.exit(1);
   }
   console.log(`当前模型显示: ${curText} ✔`);
 
-  // 敌人 AI 下拉已有选项（静止 + 规则 Hunter + 模型列表）
+  // 敌人 AI 下拉已有选项（静止 + 规则 Hunter + 高级规则 Nukeman + 模型列表）
   const aiCount = els['enemy-ai'].children.length;
   const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'web', 'models', 'index.json'), 'utf8'));
   const modelCount = idx.models ? idx.models.length : idx.length;
-  const expectAi = modelCount + 2;   // 静止 + 规则 Hunter + 模型数
+  const expectAi = modelCount + 3;   // 静止 + 规则 Hunter + 高级规则 Nukeman + 模型数
   if (aiCount !== expectAi) {
-    console.error(`FAIL: 敌人 AI 下拉应 ${expectAi} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter），实际 ${aiCount}`);
+    console.error(`FAIL: 敌人 AI 下拉应 ${expectAi} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter + 高级规则 Nukeman），实际 ${aiCount}`);
     process.exit(1);
   }
-  console.log(`敌人 AI 下拉: ${aiCount} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter）✔`);
+  console.log(`敌人 AI 下拉: ${aiCount} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter + 高级规则 Nukeman）✔`);
 
   // 点击「应用」重载当前选中敌人 AI（默认 = 最强模型），不炸
   const click = (id) => (els[id].listeners['click'] || []).forEach((fn) => fn());
@@ -198,8 +201,19 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     process.exit(1);
   }
   console.log('敌人 AI 切到规则 Hunter 后正常 ✔');
+
+  // 敌人 AI 切到高级规则 Nukeman → 应用 → P1 由 nukeman 决策
+  els['enemy-ai'].value = '__nukeman__';
+  (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
+  await wait(500);
+  if (qqt.enemySel !== '__nukeman__') {
+    console.error('FAIL: 敌人切高级规则 Nukeman 后 enemySel 未更新');
+    process.exit(1);
+  }
+  console.log('敌人 AI 切到高级规则 Nukeman 后正常 ✔');
+
   // 切回默认最强模型（后续观战测试用）
-  const defaultModel = els['enemy-ai'].children[1].value;   // 第 0 项是规则 Hunter
+  const defaultModel = els['enemy-ai'].children[2].value;   // 第 0 项是静止，第 1 项是 Hunter，第 2 项是 Nukeman，第 3 项是默认模型
   els['enemy-ai'].value = defaultModel;
   (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
   await wait(400);

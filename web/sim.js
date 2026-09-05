@@ -2527,11 +2527,18 @@
     }
   }
 
+  let NukemanAI = null;
+  if (typeof require !== 'undefined') {
+    try { NukemanAI = require('./nukeman_ai.js'); } catch (_) {}
+  } else if (typeof root !== 'undefined' && root.NukemanAI) {
+    NukemanAI = root.NukemanAI;
+  }
+
   const QQT = {
     H, W, N, N_PLAYERS, N_MOVES, N_BOMB,
     MOVE_UP, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_IDLE,
     DIRS, EPS, CFG,
-    Sim, MLPModel, CNNModel, TransformerModel, ORTTransformerModel, HunterAI,
+    Sim, MLPModel, CNNModel, TransformerModel, ORTTransformerModel, HunterAI, NukemanAI,
     mulberry32, resolveAxis, decodeB64,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = QQT;
