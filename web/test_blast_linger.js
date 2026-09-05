@@ -21,11 +21,11 @@ sim.fuse[bomb] = 1;
 sim.owner[bomb] = 0;
 sim.bombBlast[bomb] = 1;
 
-// 爆炸开始：P0 只掉一次血，覆盖格余威计时=3。
+// 爆炸开始：P0 只掉一次血，覆盖格余威计时=2（0.25s 离散化）。
 let info = sim.step([[4, 0], [4, 0]]);
 assert.strictEqual(sim.hp[0], 4);
 assert.strictEqual(sim.hp[1], 5);
-assert.strictEqual(sim.blastLinger[bomb], 3);
+assert.strictEqual(sim.blastLinger[bomb], 2);
 assert.strictEqual(info.covered[bomb], 1);
 assert.strictEqual(sim.dangerMap()[bomb], 1);
 
@@ -34,19 +34,14 @@ sim.pos[2] = 6.5; sim.pos[3] = 7.5;
 sim.invuln[1] = 0;
 info = sim.step([[4, 0], [4, 0]]);
 assert.strictEqual(sim.hp[1], 4);
-assert.strictEqual(sim.blastLinger[bomb], 2);
-assert.strictEqual(sim.dangerMap()[bomb], 1);
-
-// 同一余威期间再次命中被 invuln 屏蔽。
-info = sim.step([[4, 0], [4, 0]]);
-assert.strictEqual(sim.hp[1], 4);
 assert.strictEqual(sim.blastLinger[bomb], 1);
 assert.strictEqual(sim.dangerMap()[bomb], 1);
 
-// 第三个后续 tick 仍在余威窗口内，但无敌保护继续挡住重复伤害。
+// 第二个后续 tick 余威结束。
 info = sim.step([[4, 0], [4, 0]]);
 assert.strictEqual(sim.hp[1], 4);
 assert.strictEqual(sim.blastLinger[bomb], 0);
+assert.strictEqual(sim.dangerMap()[bomb], 0);
 
 // 余威消失后，即使手动清掉无敌也不再掉血。
 sim.invuln[1] = 0;

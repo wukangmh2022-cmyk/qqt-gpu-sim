@@ -34,7 +34,8 @@
   const CFG = {
     tickHz: 10, speed: 3.0, radius: 0.42, maxSteps: 1800,
     fuse: 30, blast: 2, maxBombs: 10, maxChain: 16,
-    blastLingerTicks: 3,                 // 爆炸后余威 0.3s（10Hz）
+    blastLingerSeconds: 0.25,
+    blastLingerTicks: 2,                 // 爆炸后余威 0.25s（10Hz 离散采样为 2 tick，对齐 Nukeman FLAME_LINGER_MS = 250ms）
     brickLingerTicks: 4,                 // 砖块被炸毁后 0.4s 开放通行（10Hz 对应 4 tick，水泡几乎快消失时）
     maxHp: 5, invulnTicks: 30,
     stepLen: 3.0 / 10,                 // 0.3 格/tick
