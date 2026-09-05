@@ -46,7 +46,7 @@
     // open 关起步 = 上限 50%（与训练一致）
     openGrowthBombs: Math.round(10 * 0.5),        // 5
     openGrowthBlast: Math.round(8 * 0.5),         // 4
-    openGrowthSpeed: Math.round(2.4 * 0.5 * 100) / 100,  // 1.20
+    openGrowthSpeed: 1.68,
     // 地图
     corridorWidth: 5, topWallRows: 4,
     // 宝箱
