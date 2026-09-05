@@ -61,17 +61,17 @@ console.log('时空危险窗与 500ms 安全余量验证通过 ✔');
 
 console.log('--- 测试 5: 连锁老炮引爆时刻预测 ---');
 const simChain = new QQT.Sim({ level: 'empty_scene' });
-// 在 (5, 5) 放一个老泡（即将引爆，fuse=10 即 1000ms，blast=3）
+// 在 (5, 5) 放一个老泡（即将引爆，fuse=10 即剩余 9 个 tick = 900ms，blast=3）
 simChain.fuse[5 * W + 5] = 10;
 simChain.bombBlast[5 * W + 5] = 3;
-// 在 (5, 7) 放一个新泡（原本 fuse=30 即 3000ms，blast=2）
+// 在 (5, 7) 放一个新泡（原本 fuse=30 即 2900ms，blast=2）
 simChain.fuse[5 * W + 7] = 30;
 simChain.bombBlast[5 * W + 7] = 2;
 
 const chainDanger = ai.buildDangerMap(simChain, 0);
-// 新泡位于老泡十字射程内，新泡的爆炸时间应被提前更新为 1000ms
+// 新泡位于老泡十字射程内，新泡的爆炸时间应被提前更新为 900ms
 const nextStart = chainDanger.nextDangerStart(5 * W + 7, 0);
-assert.strictEqual(nextStart, 1000, `新泡应被连锁提前引爆于 1000ms，实际: ${nextStart}`);
+assert.strictEqual(nextStart, 900, `新泡应被连锁提前引爆于 900ms，实际: ${nextStart}`);
 console.log('连锁老炮引爆时刻预测验证通过 ✔');
 
 console.log('--- 测试 6: 与规则 Hunter 自动无头对局 100 Ticks ---');
