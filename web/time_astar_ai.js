@@ -125,9 +125,6 @@
       let minS = null;
       const wins = this.windows[cell];
       for (let i = 0; i < wins.length; i++) {
-        if (afterMs >= wins[i][0] && afterMs <= wins[i][1]) {
-          return afterMs;
-        }
         if (wins[i][0] >= afterMs) {
           if (minS === null || wins[i][0] < minS) minS = wins[i][0];
         }
@@ -150,8 +147,6 @@
       this.lastEscapeTarget = -1;
       this.lastEscapePath = null;
       this.lastDropTick = -999;
-      this.lastMove = -1;
-      this.prevOwnIdx = -1;
       this.roamTarget = -1;
       this.roamTicks = 0;
     }
@@ -180,9 +175,7 @@
       }
 
       // 2. 模拟假设放泡（用于防自杀推演）
-      let extraIdx = -1;
       if (extraBomb) {
-        extraIdx = bombs.length;
         bombs.push({
           idx: extraBomb.idx,
           blast: extraBomb.blast || 2,
@@ -216,10 +209,6 @@
             }
           }
         }
-      }
-
-      if (extraIdx !== -1) {
-        danger.extraBoomAt = bombs[extraIdx].boomAt;
       }
 
       // 4. 将收敛后的炸弹爆炸十字投影为连续危险窗
@@ -303,26 +292,18 @@
           const physicalStep = sim.brick[np] ? stepMs * 5 : stepMs;
           const arrive = curT + physicalStep;
 
-          // 严格物理时间剪枝：在该格逗留期间（physicalStep）处于危险起火窗中（前置安全余量 SAFETY_MARGIN_MS）
-          if (danger.hitTest(np, arrive, physicalStep + SAFETY_MARGIN_MS)) {
+          // 严格物理时间剪枝：到达该格时处于危险起火窗中（前置安全余量 SAFETY_MARGIN_MS）
+          if (danger.hitTest(np, arrive, SAFETY_MARGIN_MS)) {
             continue;
           }
 
           // 虚拟启发代价：只参与小顶堆排序，绝不污染真实的 arrive
           let heuristicCost = arrive + hMs(np);
           if (danger.hasFutureDanger(np, nowMs)) {
-            const dangerStart = danger.nextDangerStart(np, nowMs);
-            if (dangerStart !== null && dangerStart - nowMs <= 1800) {
-              heuristicCost += 8000; // 即将引爆的危险火线走廊，极高代价坚决绕行
-            } else {
-              heuristicCost += 3000;
-            }
+            heuristicCost += 1500; // 偏好绕开有雷的通路，但不锁死物理通行
           }
           if (sim.brick[np]) {
             heuristicCost += 3000; // 偏好走现成通路，无路时才穿砖
-          }
-          if (options.prevCell !== undefined && np === options.prevCell && curCell === start) {
-            heuristicCost += 2000; // 严禁第一步立即掉头走回刚刚离开的格子（消除 A* 等权格来回振荡）
           }
 
           if (arrive < bestArrival[np]) {
@@ -343,8 +324,7 @@
 
       const hypothetical = { idx: ownIdx, blast: blastLen, fuseTicks: 30 };
       const simDanger = this.buildDangerMap(sim, nowMs, hypothetical);
-      const actualBoomAt = simDanger.extraBoomAt !== undefined ? simDanger.extraBoomAt : (nowMs + 3000);
-      const deadline = actualBoomAt - SAFETY_MARGIN_MS;
+      const deadline = nowMs + 3000 - SAFETY_MARGIN_MS;
 
       const r0 = (ownIdx / W) | 0, c0 = ownIdx % W;
       const candidates = [];
@@ -393,60 +373,36 @@
       const danger = this.buildDangerMap(sim, nowMs);
       const { mm, bm } = sim.legalMask();
 
-      // 脚下是否有即时危险（正在燃烧，或将在 700ms 内起火）
+      // 脚下是否有即时危险（正在燃烧，或将在 1000ms 内起火）
       const nextStart = danger.nextDangerStart(ownIdx, nowMs);
-      const inImminentDanger = danger.hitTest(ownIdx, nowMs, 0) || (nextStart !== null && nextStart - nowMs <= 700);
+      const inImminentDanger = danger.hitTest(ownIdx, nowMs, 0) || (nextStart !== null && nextStart - nowMs <= 1000);
 
       // ============================================================
       // 1. 承诺逃生路径（执行放泡后的单向撤离，绝不震荡）
       // ============================================================
       if (this.escapePath && this.escapePath.length > 1) {
-        // 如果已经到达逃生终点，或者当前格完全脱离危险
-        if (ownIdx === this.escapeTarget || (!danger.hasFutureDanger(ownIdx, nowMs) && !danger.hitTest(ownIdx, nowMs, 0))) {
+        if (this.escapePath[0] === ownIdx) {
+          const nextCell = this.escapePath[1];
+          // 目标格安全验证：绝不能盲目迈入正在燃烧或即将爆炸的火线
+          const nextStartCell = danger.nextDangerStart(nextCell, nowMs);
+          const cellSafe = !sim.wall[nextCell] && !sim.brick[nextCell] && sim.fuse[nextCell] === 0 &&
+                           !danger.hitTest(nextCell, nowMs, 0) &&
+                           (nextStartCell === null || nextStartCell - nowMs > 500);
+          if (cellSafe) {
+            const mv = this._cellToMove(ownIdx, nextCell, W);
+            if (mm[pid][mv] === 1) {
+              this.escapePath.shift();
+              return this._filterImmediateDanger(sim, danger, pid, mv, 0, nowMs, W, H);
+            }
+          } else {
+            // 撤退路线受阻，作废重算
+            this.escapePath = [];
+            this.escapeTarget = -1;
+          }
+        }
+        if (ownIdx === this.escapeTarget || !danger.hasFutureDanger(ownIdx, nowMs)) {
           this.escapePath = [];
           this.escapeTarget = -1;
-        } else {
-          // 查找当前格在逃生路径中的推进位置
-          let nextStepIdx = -1;
-          const currIdx = this.escapePath.indexOf(ownIdx);
-          if (currIdx !== -1) {
-            nextStepIdx = currIdx + 1;
-          } else {
-            // 如果不在路径节点上，尝试找路径上与当前格相邻的最近后续节点（跳过第 0 个放雷点）
-            for (let k = 1; k < this.escapePath.length; k++) {
-              if (this._isAdjacent(ownIdx, this.escapePath[k], W)) {
-                nextStepIdx = k;
-                break;
-              }
-            }
-          }
-
-          if (nextStepIdx >= this.escapePath.length) {
-            this.escapePath = [];
-            this.escapeTarget = -1;
-          } else if (nextStepIdx > 0) {
-            const nextCell = this.escapePath[nextStepIdx];
-            const nextStartCell = danger.nextDangerStart(nextCell, nowMs);
-            const cellSafe = !sim.wall[nextCell] && !sim.brick[nextCell] && sim.fuse[nextCell] === 0 &&
-                             !danger.hitTest(nextCell, nowMs, 0) &&
-                             (nextStartCell === null || nextStartCell - nowMs > 400);
-            if (cellSafe) {
-              const mv = this._cellToMove(ownIdx, nextCell, W);
-              if (mm[pid][mv] === 1) {
-                const act = this._filterImmediateDanger(sim, danger, pid, mv, 0, nowMs, W, H);
-                this.lastMove = act[0];
-                this.prevOwnIdx = ownIdx;
-                return act;
-              }
-            } else {
-              this.escapePath = [];
-              this.escapeTarget = -1;
-            }
-          } else {
-            // 彻底脱离逃生路径，作废并交由紧急避险重新计算
-            this.escapePath = [];
-            this.escapeTarget = -1;
-          }
         }
       }
 
@@ -465,43 +421,27 @@
         }
         safeCells.sort((a, b) => a.dist - b.dist);
 
-        for (let s = 0; s < Math.min(safeCells.length, 8); s++) {
+        for (let s = 0; s < Math.min(safeCells.length, 6); s++) {
           const res = this.search(sim, danger, ownIdx, safeCells[s].cell, spd, nowMs, { allowBreakBrick: false });
           if (res && res.path.length > 1) {
-            this.escapePath = res.path;
-            this.escapeTarget = safeCells[s].cell;
             const mv = this._cellToMove(ownIdx, res.path[1], W);
             if (mm[pid][mv] === 1) {
-              const act = this._filterImmediateDanger(sim, danger, pid, mv, 0, nowMs, W, H);
-              this.lastMove = act[0];
-              this.prevOwnIdx = ownIdx;
-              return act;
+              return this._filterImmediateDanger(sim, danger, pid, mv, 0, nowMs, W, H);
             }
           }
         }
 
-        // 贪心兜底：选起火时刻最晚且未燃烧的合法邻居
-        let bestMv = MOVE_IDLE, maxWait = -2;
+        // 贪心兜底：选起火时刻最晚的合法邻居
+        let bestMv = MOVE_IDLE, maxWait = -1;
         for (let d = 0; d < 4; d++) {
           const nr = r0 + DIRS[d][0], nc = c0 + DIRS[d][1];
           if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
           const np = nr * W + nc;
           if (mm[pid][d] !== 1) continue;
-          if (sim.wall[np] || sim.brick[np] || sim.fuse[np] > 0) continue;
-          let s = danger.nextDangerStart(np, nowMs);
-          if (s === null) s = 999999;
-          if (danger.hitTest(np, nowMs, 0)) s = -1;
-          // 惯性偏好：避免在火海中 180 度来回折返跳
-          if (this.lastMove !== undefined && this.lastMove >= 0 && this.lastMove < 4) {
-            if (d === this.lastMove) s += 0.2;
-            if (d === (this.lastMove ^ 1)) s -= 0.3;
-          }
+          const s = danger.nextDangerStart(np, nowMs) || 999999;
           if (s > maxWait) { maxWait = s; bestMv = d; }
         }
-        const act = [bestMv, 0];
-        this.lastMove = bestMv;
-        this.prevOwnIdx = ownIdx;
-        return act;
+        return [bestMv, 0];
       }
 
       // ============================================================
@@ -605,15 +545,14 @@
       } else {
         // === 竞技追猎模式：直瞄锁敌、近身压迫、优先吃宝箱升级 ===
         targetGoal = oppIdx;
-        if (nearestCrate !== -1 && (minCrateDist <= 12 || (sim.spdG && sim.spdG[pid] < 2.0) || (sim.bombsCap && sim.bombsCap[pid] < 4))) {
+        if (nearestCrate !== -1 && (minCrateDist <= 6 || (sim.spdG && sim.spdG[pid] < 1.8) || (sim.bombsCap && sim.bombsCap[pid] < 3))) {
           targetGoal = nearestCrate;
         }
       }
 
       // 全局穿砖 A* 寻路（破砖开路）
       let pathRes = targetGoal !== -1 ? this.search(sim, danger, ownIdx, targetGoal, spd, nowMs, {
-        allowBreakBrick: true,
-        prevCell: this.prevOwnIdx
+        allowBreakBrick: true
       }) : null;
 
       let move = MOVE_IDLE;
@@ -622,9 +561,6 @@
         const nextCell = pathRes.path[1];
         if (sim.brick[nextCell]) {
           nextCellIsBrick = true; // 下一步是障碍砖，需要放泡破障！
-        } else if (targetGoal === oppIdx && nextCell === oppIdx) {
-          // 绝对防送头：严禁肉身直接跨入敌方所在的同一个格子，在 1 格外刹车就地架炮或拉扯
-          move = MOVE_IDLE;
         } else {
           move = this._cellToMove(ownIdx, nextCell, W);
         }
@@ -668,7 +604,7 @@
           }
           wantBomb = wantBreakBrick || chainOldBomb || roamRhythm || selfDefense;
         } else {
-          // 竞技追猎模式：破砖 + 直瞄 + 贴身 + 连炮
+          // 竞技追猎模式：破砖 + 直瞄 + 贴身 + 连炮 + 压迫
           let directLineAttack = false;
           let nearOpp = false;
           if (oppIdx !== -1) {
@@ -689,42 +625,31 @@
               }
               if (!blocked) directLineAttack = true;
             }
-            if (dr + dc <= 2) {
+            if (dr + dc <= blastCap + 1) {
               nearOpp = true;
             }
           }
-          wantBomb = wantBreakBrick || directLineAttack || nearOpp || chainOldBomb;
+          const roamBomb = cooldownTicks >= 8;
+          wantBomb = wantBreakBrick || directLineAttack || nearOpp || chainOldBomb || roamBomb;
         }
 
-        const minCooldown = this.mode === 'hunt'
-          ? Math.max(6, Math.min(10, blastCap + 2))
-          : 9;
-        if (wantBomb && cooldownTicks >= minCooldown) {
+        if (wantBomb && cooldownTicks >= 5) {
           if (this.canSafelyPlaceBomb(sim, ownIdx, blastCap, spd, nowMs)) {
-            const escMv = this.lastEscapePath && this.lastEscapePath.length > 1
-              ? this._cellToMove(ownIdx, this.lastEscapePath[1], W)
-              : MOVE_IDLE;
-            if (escMv !== MOVE_IDLE && mm[pid][escMv] === 1) {
-              placeBomb = 1;
-              move = escMv;
-              this.lastDropTick = sim.t || 0;
-              this.escapeTarget = this.lastEscapeTarget;
-              this.escapePath = this.lastEscapePath;
-              if (this.mode === 'roam') {
-                this.roamTarget = -1; // 放泡后重新规划下一个巡航路标
-              }
+            placeBomb = 1;
+            this.lastDropTick = sim.t || 0;
+            this.escapeTarget = this.lastEscapeTarget;
+            this.escapePath = this.lastEscapePath;
+            if (this.mode === 'roam') {
+              this.roamTarget = -1; // 放泡后重新规划下一个巡航路标
             }
           }
         }
       }
 
-      const finalAct = this._filterImmediateDanger(sim, danger, pid, move, placeBomb, nowMs, W, H);
-      this.lastMove = finalAct[0];
-      this.prevOwnIdx = ownIdx;
-      return finalAct;
+      return this._filterImmediateDanger(sim, danger, pid, move, placeBomb, nowMs, W, H);
     }
 
-    // 最终即时物理安全过滤：绝对严禁主动迈入正在燃烧或即将起火的危险格
+    // 最终即时物理安全过滤：绝对严禁迈入正在燃烧或 500ms 内起火的格子
     _filterImmediateDanger(sim, danger, pid, move, placeBomb, nowMs, W, H) {
       const { mm } = sim.legalMask();
       if (move === MOVE_IDLE) {
@@ -735,44 +660,22 @@
       }
 
       const own = sim.centerCell(pid);
-      const ownIdx = own[0] * W + own[1];
       const nr = own[0] + DIRS[move][0], nc = own[1] + DIRS[move][1];
       if (nr < 0 || nr >= H || nc < 0 || nc >= W) {
         return [MOVE_IDLE, placeBomb];
       }
       const targetCell = nr * W + nc;
 
-      const ownHit = danger.hitTest(ownIdx, nowMs, 0);
-      const ownStart = danger.nextDangerStart(ownIdx, nowMs);
-      const ownImminent = ownHit || (ownStart !== null && ownStart - nowMs <= 500);
-
-      const targetHit = danger.hitTest(targetCell, nowMs, 0);
-      const targetStart = danger.nextDangerStart(targetCell, nowMs);
-      const targetImminent = targetHit || (targetStart !== null && targetStart - nowMs <= 400);
-
-      // 当前格安全时，严禁主动迈入危险格
-      if (!ownImminent && targetImminent) {
+      // 严禁踩入正在燃烧中或 500ms 内起火的格子
+      if (danger.hitTest(targetCell, nowMs, 0)) {
+        return [MOVE_IDLE, placeBomb];
+      }
+      const nextStart = danger.nextDangerStart(targetCell, nowMs);
+      if (nextStart !== null && nextStart - nowMs <= 500) {
         return [MOVE_IDLE, placeBomb];
       }
 
-      // 当前格处于火海或即将爆炸时：
-      if (ownImminent) {
-        if (targetHit && !ownHit) {
-          return [MOVE_IDLE, placeBomb]; // 不踏入已经着火的格子
-        }
-        if (targetStart !== null && ownStart !== null && targetStart < ownStart) {
-          return [MOVE_IDLE, placeBomb]; // 不走向比脚下更早爆炸的格子
-        }
-      }
-
       return [move, placeBomb];
-    }
-
-    _isAdjacent(a, b, W) {
-      if (a < 0 || b < 0) return false;
-      const ra = (a / W) | 0, ca = a % W;
-      const rb = (b / W) | 0, cb = b % W;
-      return Math.abs(ra - rb) + Math.abs(ca - cb) === 1;
     }
 
     _cellToMove(from, to, W) {
