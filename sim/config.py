@@ -119,7 +119,7 @@ class SimConfig:
     fuse: int = 30          # 放泡后多少 tick 爆炸（30 tick @10Hz = 3 秒，原版手感）
     blast: int = 2          # 十字射线长度（不含中心格）。blast=3 时 AI 铺地雷过猛、
                             # 自伤/对轰频繁；改回 2 让走位与进攻更平衡
-    blast_linger_seconds: float = 0.25 # 爆炸开始后的持续余威（对齐 Nukeman 逆向 FLAME_LINGER_MS = 250ms）
+    blast_linger_seconds: float = 0.25 # 爆炸开始后的持续余威（FLAME_LINGER_MS = 250ms）
     max_bombs: int = 10     # 单角色同时在场泡泡数（4 → 10：放炮上限放宽，布局/封锁空间更大）
     max_chain: int = 16     # 连锁爆炸最多迭代几轮。8 → 16（漏爆修复）：13×13 地图
                             # 一行最长 13 颗泡（blast=1 首尾相接）需要 12 轮连锁，

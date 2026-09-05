@@ -17,15 +17,14 @@
   - **方案 B (物理微步 + 水泡硬阻断 / Hard Bomb Barrier)**:
     - 严格区分“静态走廊墙体”与“致死水泡”：在 `legal_mask` 中，若目标格存在已放置水泡，且角色没有越过分界线，直接硬屏蔽朝向水泡的动作；允许反向退步。
   - **方案 C (引入时间感知死胡同预判 / Spatiotemporal Trap Invariance)**:
-    - 借鉴 Nukeman 规则 AI 的 `would_be_trapped` 机制：在安全掩码/特征层预判“进入该格或持续朝向该障碍走是否会导致安全出口归零”，若死胡同无法逃逸则强制在动作掩码中剔除或施加强力惩罚。
+    - 借鉴时空规则 AI 的 `would_be_trapped` 机制：在安全掩码/特征层预判“进入该格或持续朝向该障碍走是否会导致安全出口归零”，若死胡同无法逃逸则强制在动作掩码中剔除或施加强力惩罚。
 
 ---
 
 ## 2. 模拟器与规则对齐 (已排期/进行中)
 
 - [x] **Bug 2: 22debug 开阔地向左走不过去修复**: 已修复 `targetOpen && enteredTarget` 判定与进门侧滑中线截断 (Commit: `735ee8b`)。
-- [ ] **爆炸余威与逆向源码对齐**: 
-  - Nukeman 原版 `FLAME_LINGER_MS = 250ms` (0.25s)。
-  - 现有模拟器为 0.3s (3 ticks @ 10Hz)。需将配置对齐为 0.25s，并处理 10Hz 离散采样下的 tick 映射（2 tick / 3 tick）以保证 Python/JAX/JS 绝对一致。
+- [x] **爆炸余威对齐**: 
+  - 统一为 `FLAME_LINGER_MS = 250ms` (0.25s / 2 ticks @ 10Hz)，保证 Python/JAX/JS 绝对一致 (Commit: `5252ef0`)。
 - [ ] **强化学习新特征 (Feat) 调研与引入**:
-  - 基于 Rust 逆向 AI 的时空危险窗与 KataGo 势场思想，设计死胡同逃生余量场（Escape Margin Map）、势场控制力（Territory Influence）、连续危险到达时间（Time-to-Danger）通道。
+  - 基于高级时空危险窗与 KataGo 势场思想，设计死胡同逃生余量场（Escape Margin Map）、势场控制力（Territory Influence）、连续危险到达时间（Time-to-Danger）通道。

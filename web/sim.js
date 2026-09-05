@@ -35,7 +35,7 @@
     tickHz: 10, speed: 3.0, radius: 0.42, maxSteps: 1800,
     fuse: 30, blast: 2, maxBombs: 10, maxChain: 16,
     blastLingerSeconds: 0.25,
-    blastLingerTicks: 2,                 // 爆炸后余威 0.25s（10Hz 离散采样为 2 tick，对齐 Nukeman FLAME_LINGER_MS = 250ms）
+    blastLingerTicks: 2,                 // 爆炸后余威 0.25s（10Hz 离散采样为 2 tick，FLAME_LINGER_MS = 250ms）
     brickLingerTicks: 4,                 // 砖块被炸毁后 0.4s 开放通行（10Hz 对应 4 tick，水泡几乎快消失时）
     maxHp: 5, invulnTicks: 30,
     stepLen: 3.0 / 10,                 // 0.3 格/tick
@@ -2527,18 +2527,19 @@
     }
   }
 
-  let NukemanAI = null;
+  let TimeAStarAI = null;
   if (typeof require !== 'undefined') {
-    try { NukemanAI = require('./nukeman_ai.js'); } catch (_) {}
-  } else if (typeof root !== 'undefined' && root.NukemanAI) {
-    NukemanAI = root.NukemanAI;
+    try { TimeAStarAI = require('./time_astar_ai.js'); } catch (_) {}
+  } else if (typeof root !== 'undefined' && root.TimeAStarAI) {
+    TimeAStarAI = root.TimeAStarAI;
   }
+  const NukemanAI = TimeAStarAI;
 
   const QQT = {
     H, W, N, N_PLAYERS, N_MOVES, N_BOMB,
     MOVE_UP, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_IDLE,
     DIRS, EPS, CFG,
-    Sim, MLPModel, CNNModel, TransformerModel, ORTTransformerModel, HunterAI, NukemanAI,
+    Sim, MLPModel, CNNModel, TransformerModel, ORTTransformerModel, HunterAI, TimeAStarAI, NukemanAI,
     mulberry32, resolveAxis, decodeB64,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = QQT;

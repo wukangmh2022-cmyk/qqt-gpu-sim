@@ -295,11 +295,12 @@
   let spaceDownSince = 0, joyDownSince = 0;   // 按下时刻: 长按>180ms 才连放, 点按=1颗
   const hunter = new Q.HunterAI();   // 规则 AI（纯进攻寻路），可当敌/我方
   const HUNTER_VAL = '__hunter__';   // 下拉里规则 AI 的 value 哨兵
-  const nukemanClass = Q.NukemanAI || (typeof NukemanAI !== 'undefined' ? NukemanAI : null);
-  const nukeman = nukemanClass ? new nukemanClass() : null;
-  const NUKEMAN_VAL = '__nukeman__'; // 高级规则 Nukeman（时空 A* / 防自杀）
+  const timeAStarClass = Q.TimeAStarAI || (typeof TimeAStarAI !== 'undefined' ? TimeAStarAI : (Q.NukemanAI || (typeof NukemanAI !== 'undefined' ? NukemanAI : null)));
+  const timeAStar = timeAStarClass ? new timeAStarClass() : null;
+  const TIME_ASTAR_VAL = '__time_astar__'; // 高级时空 A*（时空避险 / 防自杀）
+  const NUKEMAN_VAL = '__nukeman__';       // 兼容别名
   const IDLE_VAL = '__idle__';      // 静止敌人(不动不炸)哨兵
-  const isRuleAi = (sel) => sel === HUNTER_VAL || sel === NUKEMAN_VAL || sel === IDLE_VAL;
+  const isRuleAi = (sel) => sel === HUNTER_VAL || sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL || sel === IDLE_VAL;
   const LATEST_VIT = 'ViTModel2_31.9B';       // 最新 ViT 模型(默认敌人)
 
   // 敌/我方 AI 选择：'__hunter__'（规则）、'__nukeman__'（时空规则）或模型名。模型按需懒加载到缓存。
@@ -443,7 +444,7 @@
     const sel = pid === 0 ? p0Sel : enemySel;
     if (sel === IDLE_VAL) return [MOVE_IDLE, 0];   // 静止：不动不炸
     if (sel === HUNTER_VAL) return hunter.act(sim, pid);
-    if (sel === NUKEMAN_VAL && nukeman) return nukeman.act(sim, pid);
+    if ((sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) && timeAStar) return timeAStar.act(sim, pid);
     const m = sel ? modelCache.get(sel) : null;
     if (m) {
       try { return await m.act(sim, pid, rng); }
@@ -1347,8 +1348,8 @@
       sel.appendChild(h);
 
       const n = document.createElement('option');
-      n.value = NUKEMAN_VAL;
-      n.textContent = '高级规则 Nukeman（时空 A* / 防自杀）';
+      n.value = TIME_ASTAR_VAL;
+      n.textContent = '高级时空 A*（时空避险 / 防自杀）';
       sel.appendChild(n);
     }
     for (const m of modelList) {
@@ -1408,12 +1409,12 @@
       elStatus.innerHTML = '敌人：<b>规则 Hunter</b>（纯进攻寻路 AI，无需模型权重）';
       return;
     }
-    if (sel === NUKEMAN_VAL) {
-      enemySel = NUKEMAN_VAL;
+    if (sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) {
+      enemySel = TIME_ASTAR_VAL;
       modelLoaded = true;
       requestAnimationFrame(updateProgress);
-      elCurModel.textContent = '高级规则 Nukeman（时空 A* / 防自杀）';
-      elStatus.innerHTML = '敌人：<b>高级规则 Nukeman</b>（时空 A* / 连续危险窗 / 防自杀）';
+      elCurModel.textContent = '高级时空 A*（时空避险 / 防自杀）';
+      elStatus.innerHTML = '敌人：<b>高级时空 A*</b>（时空 A* 寻路 / 连续危险窗 / 防自杀）';
       return;
     }
     if (sel === IDLE_VAL) {
@@ -1510,7 +1511,7 @@
   });
   elEnemyAi.addEventListener('change', applyModel);   // 换敌人 AI → 应用并重开
   elP0Ai.addEventListener('change', async () => {
-    // 观战「我方：」：规则 → hunter / nukeman；模型 → 懒加载进缓存（不阻塞开局）
+    // 观战「我方：」：规则 → hunter / time_astar；模型 → 懒加载进缓存（不阻塞开局）
     p0Sel = elP0Ai.value;
     if (!isRuleAi(p0Sel)) {
       try { await ensureModel(p0Sel); } catch (e) { elStatus.innerHTML = `我方模型加载失败：${e.message}`; }
@@ -2887,8 +2888,7 @@
     ctx.fillStyle = '#10131a';
     ctx.fillRect(0, y0, BOARD_PX, HUD_PX);
     ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-    ctx.strokeRect(0, y0, BOARD_PX, HUD_PX);
-    const aiName = (sel) => sel === HUNTER_VAL ? '规则 Hunter' : (sel === NUKEMAN_VAL ? '高级规则 Nukeman' : (sel === IDLE_VAL ? '静止' : (sel || '模型')));
+    const aiName = (sel) => sel === HUNTER_VAL ? '规则 Hunter' : ((sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) ? '高级时空 A*' : (sel === IDLE_VAL ? '静止' : (sel || '模型')));
     const p0Kind = elSpectate.checked ? aiName(p0Sel) : '你';
     const p1Kind = aiName(enemySel);
     // 辅助文本截断函数，保证模型名过长时属性不被推出视野
