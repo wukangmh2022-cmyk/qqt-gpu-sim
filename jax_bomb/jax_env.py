@@ -699,6 +699,8 @@ def _is_hit_by_explosion(pos, horz_active, vert_active, radius=RADIUS):
     # 角色碰撞盒最多覆盖 4 格 (P, 4)
     r = jnp.stack([r0, r0, r1, r1], axis=-1)
     c = jnp.stack([c0, c1, c0, c1], axis=-1)
+    rf = r.astype(jnp.float32)
+    cf = c.astype(jnp.float32)
 
     py0_exp = py0[:, None]
     py1_exp = py1[:, None]
@@ -708,22 +710,37 @@ def _is_hit_by_explosion(pos, horz_active, vert_active, radius=RADIUS):
     h_act = horz_active[r, c]
     v_act = vert_active[r, c]
 
+    # 横向水流左右端头覆盖区间 [hx0, hx1]
+    c_prev = jnp.clip(c - 1, 0, W - 1)
+    h_prev = (c > 0) & horz_active[r, c_prev]
+    hx0 = jnp.where(h_prev, cf, cf + 0.5)
+
+    c_next = jnp.clip(c + 1, 0, W - 1)
+    h_next_col = (c < W - 1) & horz_active[r, c_next]
+    hx1 = jnp.where(h_next_col, cf + 1.0, cf + 0.5)
+    hit_h_x = (px1_exp >= hx0) & (px0_exp <= hx1)
+
     r_next = jnp.clip(r + 1, 0, H - 1)
     h_next = (r < H - 1) & horz_active[r_next, c]
 
-    c_next = jnp.clip(c + 1, 0, W - 1)
-    v_next = (c < W - 1) & vert_active[r, c_next]
-
-    rf = r.astype(jnp.float32)
-    cf = c.astype(jnp.float32)
-
     hit_h_center = (py0_exp <= rf + 0.5) & (rf + 0.5 <= py1_exp)
     hit_h_seam = h_next & (py0_exp <= rf + 1.0) & (rf + 1.0 <= py1_exp)
-    hit_h = h_act & (hit_h_center | hit_h_seam)
+    hit_h = h_act & hit_h_x & (hit_h_center | hit_h_seam)
+
+    # 纵向水流上下端头覆盖区间 [vy0, vy1]
+    r_prev = jnp.clip(r - 1, 0, H - 1)
+    v_prev = (r > 0) & vert_active[r_prev, c]
+    vy0 = jnp.where(v_prev, rf, rf + 0.5)
+
+    v_next_row = (r < H - 1) & vert_active[r_next, c]
+    vy1 = jnp.where(v_next_row, rf + 1.0, rf + 0.5)
+    hit_v_y = (py1_exp >= vy0) & (py0_exp <= vy1)
+
+    v_next = (c < W - 1) & vert_active[r, c_next]
 
     hit_v_center = (px0_exp <= cf + 0.5) & (cf + 0.5 <= px1_exp)
     hit_v_seam = v_next & (px0_exp <= cf + 1.0) & (cf + 1.0 <= px1_exp)
-    hit_v = v_act & (hit_v_center | hit_v_seam)
+    hit_v = v_act & hit_v_y & (hit_v_center | hit_v_seam)
 
     return (hit_h | hit_v).any(axis=-1)
 

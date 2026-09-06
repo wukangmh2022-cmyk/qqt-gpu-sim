@@ -59,6 +59,34 @@ def test_jax_parallel_columns_broken_half_body():
     assert int(next_s.hp[0]) == 4, "并排双水柱分界缝隙处破半身，必须掉血！"
 
 
+def test_jax_horizontal_half_body_safe():
+    """单横向水柱：玩家在 y=2.0 处于半身位，未触及 y=1.5 水柱中轴线，完全无伤。"""
+    s = _clean_state()
+    pos = jnp.array([[2.0, 3.5], [10.5, 10.5]])
+    fuse = jnp.zeros((H, W), jnp.int32).at[1, 1].set(1)
+    owner = jnp.full((H, W), -1, jnp.int32).at[1, 1].set(1)
+    bb = jnp.zeros((H, W), jnp.int32).at[1, 1].set(4)
+    s = s._replace(pos=pos, fuse=fuse, owner=owner, bomb_blast=bb)
+
+    actions = jnp.array([[4, 0], [4, 0]])
+    next_s, _ = step(s, actions, jax.random.PRNGKey(0), auto_reset=False)
+    assert int(next_s.hp[0]) == 5, "横向半身位 y=2.0 必须无伤！"
+
+
+def test_jax_parallel_horizontal_broken_half_body():
+    """双并排横向水柱：两行分界缝隙 y=2.0 连通破半身，玩家在 y=2.0 必定受伤害。"""
+    s = _clean_state()
+    pos = jnp.array([[2.0, 3.5], [10.5, 10.5]])
+    fuse = jnp.zeros((H, W), jnp.int32).at[1, 1].set(1).at[2, 1].set(1)
+    owner = jnp.full((H, W), -1, jnp.int32).at[1, 1].set(1).at[2, 1].set(1)
+    bb = jnp.zeros((H, W), jnp.int32).at[1, 1].set(4).at[2, 1].set(4)
+    s = s._replace(pos=pos, fuse=fuse, owner=owner, bomb_blast=bb)
+
+    actions = jnp.array([[4, 0], [4, 0]])
+    next_s, _ = step(s, actions, jax.random.PRNGKey(0), auto_reset=False)
+    assert int(next_s.hp[0]) == 4, "并排双横向水柱分界缝隙处破半身，必须掉血！"
+
+
 def test_jax_user_corner_crossroads():
     """十字路口对角角部半身位安全：第 5 行横向 + 第 8/9 列纵向，角色在 (6.0, 7.787) 绝对无伤。"""
     s = _clean_state()
@@ -90,3 +118,20 @@ def test_jax_blast_linger_damage():
     s2 = s1._replace(pos=jnp.array([[3.5, 1.5], [10.5, 10.5]]), invuln=jnp.zeros(2, jnp.int32))
     s3, _ = step(s2, actions, jax.random.PRNGKey(0), auto_reset=False)
     assert int(s3.hp[0]) == 4, "踩入余威水柱中轴线必须掉血！"
+
+
+def test_jax_flame_tip_safe():
+    """末端尖端水柱轴向避伤：炸弹在 (7, 3)，威力 8，向右延伸至 (7, 11)。
+    角色在 (7.74, 12.30)（处于 Col 12，即 1-indexed X=13 格子），处于水柱右侧格，绝对不可受伤害。
+    """
+    s = _clean_state()
+    pos = jnp.array([[7.74, 12.30], [0.5, 0.5]])
+    fuse = jnp.zeros((H, W), jnp.int32).at[7, 3].set(1)
+    owner = jnp.full((H, W), -1, jnp.int32).at[7, 3].set(1)
+    bb = jnp.zeros((H, W), jnp.int32).at[7, 3].set(8)
+    s = s._replace(pos=pos, fuse=fuse, owner=owner, bomb_blast=bb)
+
+    actions = jnp.array([[4, 0], [4, 0]])
+    next_s, _ = step(s, actions, jax.random.PRNGKey(0), auto_reset=False)
+    assert int(next_s.hp[0]) == 5, "Col 12 (X=13) 绝对不可受到 Col 11 尖端水流的伤害！"
+

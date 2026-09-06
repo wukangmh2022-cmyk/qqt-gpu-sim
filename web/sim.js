@@ -993,21 +993,33 @@
           const idx = r * W + c;
           if (!covered[idx] && this.blastLinger[idx] <= 0) continue;
 
-          // 1. 横向水流：中心严格在 y = r + 0.5；角色 bbox 必须触及横向中轴线才命中
+          // 1. 横向水流：检查水流在 X 轴的物理覆盖区间 [hx0, hx1]；角色必须同时触及 X 覆盖与 Y 中轴线
           if (isHorz(r, c)) {
-            if (py0 <= r + 0.5 && r + 0.5 <= py1) return true;
-            // 双横向水流并排（row r 与 row r+1 均有横向水流经过此列 c）：在分界缝隙处连通破半身
-            if (r < H - 1 && isHorz(r + 1, c)) {
-              if (py0 <= r + 1.0 && r + 1.0 <= py1) return true;
+            const leftOn = isHorz(r, c - 1);
+            const rightOn = isHorz(r, c + 1);
+            const hx0 = c + (leftOn ? 0.0 : 0.5);
+            const hx1 = c + (rightOn ? 1.0 : 0.5);
+            if (px1 >= hx0 && px0 <= hx1) {
+              if (py0 <= r + 0.5 && r + 0.5 <= py1) return true;
+              // 双横向水流并排（row r 与 row r+1 均有横向水流经过此列 c）：在分界缝隙处连通破半身
+              if (r < H - 1 && isHorz(r + 1, c)) {
+                if (py0 <= r + 1.0 && r + 1.0 <= py1) return true;
+              }
             }
           }
 
-          // 2. 纵向水流：中心严格在 x = c + 0.5；角色 bbox 必须触及纵向中轴线才命中
+          // 2. 纵向水流：检查水流在 Y 轴的物理覆盖区间 [vy0, vy1]；角色必须同时触及 Y 覆盖与 X 中轴线
           if (isVert(r, c)) {
-            if (px0 <= c + 0.5 && c + 0.5 <= px1) return true;
-            // 双纵向水流并排（col c 与 col c+1 均有纵向水流经过此行 r）：在分界缝隙处连通破半身
-            if (c < W - 1 && isVert(r, c + 1)) {
-              if (px0 <= c + 1.0 && c + 1.0 <= px1) return true;
+            const topOn = isVert(r - 1, c);
+            const bottomOn = isVert(r + 1, c);
+            const vy0 = r + (topOn ? 0.0 : 0.5);
+            const vy1 = r + (bottomOn ? 1.0 : 0.5);
+            if (py1 >= vy0 && py0 <= vy1) {
+              if (px0 <= c + 0.5 && c + 0.5 <= px1) return true;
+              // 双纵向水流并排（col c 与 col c+1 均有纵向水流经过此行 r）：在分界缝隙处连通破半身
+              if (c < W - 1 && isVert(r, c + 1)) {
+                if (px0 <= c + 1.0 && c + 1.0 <= px1) return true;
+              }
             }
           }
 
@@ -1019,8 +1031,12 @@
             const bottomOn = r < H - 1 && (covered[idx + W] || this.blastLinger[idx + W] > 0);
             const hasH = leftOn || rightOn || (!topOn && !bottomOn);
             const hasV = topOn || bottomOn || (!leftOn && !rightOn);
-            if (hasH && py0 <= r + 0.5 && r + 0.5 <= py1) return true;
-            if (hasV && px0 <= c + 0.5 && c + 0.5 <= px1) return true;
+            const hx0 = c + (leftOn ? 0.0 : 0.5);
+            const hx1 = c + (rightOn ? 1.0 : 0.5);
+            const vy0 = r + (topOn ? 0.0 : 0.5);
+            const vy1 = r + (bottomOn ? 1.0 : 0.5);
+            if (hasH && px1 >= hx0 && px0 <= hx1 && py0 <= r + 0.5 && r + 0.5 <= py1) return true;
+            if (hasV && py1 >= vy0 && py0 <= vy1 && px0 <= c + 0.5 && c + 0.5 <= px1) return true;
           }
         }
       }

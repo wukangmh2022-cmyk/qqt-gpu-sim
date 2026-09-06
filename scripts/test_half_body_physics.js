@@ -174,6 +174,42 @@ function createCleanSim() {
   console.log('  ✓ [场景 7] 用户实测截图多泡连环场景验证通过：R=0.32/0.42 半身位绝对安全！');
 }
 
+// --------------------------------------------------------------------------
+// 场景 8：水柱末梢尖端轴向避伤（用户回放第 18 秒 Bug 复现与回归测试）
+// 炸弹在 (7, 3)，威力 8，向右延伸至 (7, 11)（即第 8 格，末梢尖端在 col 11 中心 11.5）。
+// 角色在 (7.74, 12.30)（Col 12，即用户标注的 X=13 格子），绝对不可受到伤害！
+// --------------------------------------------------------------------------
+{
+  const sim = createCleanSim();
+  sim.bombBlast[7 * W + 3] = 8;
+  sim.fuse[7 * W + 3] = 1;
+  sim.owner[7 * W + 3] = 1;
+
+  // 用户实测位置：Row 7.74, Col 12.30 (X=13)
+  sim.pos[0] = 7.74;
+  sim.pos[1] = 12.30;
+  const hpBefore = sim.hp[0];
+  sim.step([[MOVE_IDLE, 0], [MOVE_IDLE, 0]]);
+
+  assert.strictEqual(sim.lastCovered[7 * W + 11], 1, '末端格 (7, 11) 属于爆炸范围');
+  assert.strictEqual(sim.lastCovered[7 * W + 12], 0, '下一格 (7, 12) 绝对不应被覆盖');
+  assert.strictEqual(sim.hp[0], hpBefore, 'Col 12 (X=13) 的角色绝对不应受到 Col 11 尖端水柱的幽灵伤害！');
+
+  // 进一步验证尖端半身位微操：角色站在 Col 11 内但偏外侧 (x=11.95, bbox [11.53, 12.37] > 11.5)，擦尖避伤
+  const simTip = createCleanSim();
+  simTip.bombBlast[7 * W + 3] = 8;
+  simTip.fuse[7 * W + 3] = 1;
+  simTip.owner[7 * W + 3] = 1;
+  simTip.pos[0] = 7.5;
+  simTip.pos[1] = 11.95;
+  const hpBeforeTip = simTip.hp[0];
+  simTip.step([[MOVE_IDLE, 0], [MOVE_IDLE, 0]]);
+  assert.strictEqual(simTip.hp[0], hpBeforeTip, 'Col 11 末端擦尖半身位 (x=11.95) 应当避开尖端伤害！');
+
+  console.log('  ✓ [场景 8] 尖端末梢轴向覆盖验证通过：Col 12 (X=13) 无伤，尖端擦边微操无伤！');
+}
+
 console.log('==============================================================');
-console.log('🎉 全部 7 个半身位与交叉物理场景测试 100% 验收通过！');
+console.log('🎉 全部 8 个半身位与交叉物理场景测试 100% 验收通过！');
 console.log('==============================================================');
+

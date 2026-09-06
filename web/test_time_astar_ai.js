@@ -166,5 +166,29 @@ for (let t = 0; t < 150; t++) {
 assert(roamDrops >= 10, `经典漫游 AI 150 tick 内应有稳定放泡节奏，实际: ${roamDrops}`);
 console.log(`经典漫游版全图巡游正常，放泡数=${roamDrops}，连锁老炮数=${roamChains}，零自伤生存 ✔`);
 
+console.log('--- 测试 9: 放泡逃生防上下抖动与持续推进验证 ---');
+const oscSim = new QQT.Sim({ level: 'empty_scene' });
+oscSim.crate.fill(0); // 清空道具，专注测试对敌下压与放泡逃生走廊
+const oscAi = new TimeAStarAI({ mode: 'hunt' });
+oscSim.pos[2] = 6.10; oscSim.pos[3] = 5.45; // P1 在 (6, 5)
+oscSim.pos[0] = 9.90; oscSim.pos[1] = 5.45; // P0 在正下方 (9, 5)
+oscSim.blastCap[1] = 4;
+oscSim.spdG[1] = 0.56; // 1.68 移速（较慢微步进）
+
+// 第 1 步：P1 决定在 (6, 5) 放泡向下进攻
+const actDrop = oscAi.act(oscSim, 1);
+assert.strictEqual(actDrop[1], 1, 'P1 应该在此处放置炸弹');
+assert.strictEqual(actDrop[0], 1, 'P1 放泡当 tick 移动方向必须与逃生路径对齐（应向下推进，绝不可向上逆行）');
+
+// 执行 1 tick
+oscSim.step([[4, 0], actDrop]);
+
+// 第 2 步：下一 tick 检查动作，绝不可发生 180 度调头向上摇摆
+const actNext = oscAi.act(oscSim, 1);
+assert.notStrictEqual(actNext[0], 0, '放泡后下一 tick 严禁发生 180 度向上掉头（防上下摇摆）');
+assert.strictEqual(actNext[0], 1, 'P1 应该继续向下推进逃生');
+console.log('放泡逃生防上下摇摆验证通过，动作平滑推进 ✔');
+
 console.log('\n🎉 TimeAStarAI 专项测试套件全部通过！');
+
 
