@@ -1394,48 +1394,56 @@
       if (mv < 2) {
         // 上/下：目标行 tr；
         const tr = tr0;
-        const leftOpen = open(tr, c0 - 1), rightOpen = open(tr, c0 + 1);
+        // 凹角阻断检测：斜向格 (tr, c0±1) 开阔的同时，同轴侧向格 (r0, c0±1) 也必须开阔！
+        const leftOpen = open(tr, c0 - 1) && open(r0, c0 - 1);
+        const rightOpen = open(tr, c0 + 1) && open(r0, c0 + 1);
         if (targetOpen) {
           // 目标格开口：若直走受阻，说明身体边缘卡在门框两壁，朝目标格中心滑动进门
           perp = x < c0 + 0.5 ? [3, 2] : [2, 3];
         } else if (leftOpen !== rightOpen) {
-          // 目标格受阻且外拐角单侧开放：朝开放侧被动切向滑移
-          perp = rightOpen ? [3, 2] : [2, 3];
+          // 目标格受阻且外拐角单侧开放：朝开放侧被动切向滑移（仅单向，不向阻断侧回退）
+          perp = rightOpen ? [3] : [2];
         } else {
-          // 目标格受阻且两侧同开（开阔地撞单障碍）或同堵（平墙）：坚决不主动向障碍归中，保留直走位置
+          // 目标格受阻且两侧同开（开阔地撞单障碍）或同堵（平墙/凹角）：坚决不主动向障碍归中，保留直走位置
           return moved > 2 * EPS ? [ny, nx] : [y, x];
         }
       } else {
         // 左/右：目标列 tc；
         const tc = tc0;
-        const upOpen = open(r0 - 1, tc), downOpen = open(r0 + 1, tc);
+        // 凹角阻断检测：斜向格 (r0±1, tc) 开阔的同时，同轴侧向格 (r0±1, c0) 也必须开阔！
+        const upOpen = open(r0 - 1, tc) && open(r0 - 1, c0);
+        const downOpen = open(r0 + 1, tc) && open(r0 + 1, c0);
         if (targetOpen) {
           // 目标格开口：若直走受阻，说明身体边缘卡在门框两壁，朝目标格中心滑动进门
           perp = y < r0 + 0.5 ? [1, 0] : [0, 1];
         } else if (upOpen !== downOpen) {
-          // 目标格受阻且外拐角单侧开放：朝开放侧被动切向滑移
-          perp = downOpen ? [1, 0] : [0, 1];
+          // 目标格受阻且外拐角单侧开放：朝开放侧被动切向滑移（仅单向，不向阻断侧回退）
+          perp = downOpen ? [1] : [0];
         } else {
-          // 目标格受阻且两侧同开（开阔地撞单障碍）或同堵（平墙）：坚决不主动向障碍归中，保留直走位置
+          // 目标格受阻且两侧同开（开阔地撞单障碍）或同堵（平墙/凹角）：坚决不主动向障碍归中，保留直走位置
           return moved > 2 * EPS ? [ny, nx] : [y, x];
         }
       }
       const p1 = this._tryMove(y, x, perp[0], blocked, dist);
-      const p2 = this._tryMove(y, x, perp[1], blocked, dist);
+      const p2 = perp.length > 1 ? this._tryMove(y, x, perp[1], blocked, dist) : null;
       // 进门归中保护：向中线微调时，禁止单步大速度直接穿刺超调过中线（防止 5Hz 谐振振荡）
       if (targetOpen) {
         if (mv < 2) {
           const center = c0 + 0.5;
           if (perp[0] === MOVE_LEFT) p1[1] = Math.max(p1[1], center); else p1[1] = Math.min(p1[1], center);
-          if (perp[1] === MOVE_LEFT) p2[1] = Math.max(p2[1], center); else p2[1] = Math.min(p2[1], center);
+          if (p2) {
+            if (perp[1] === MOVE_LEFT) p2[1] = Math.max(p2[1], center); else p2[1] = Math.min(p2[1], center);
+          }
         } else {
           const center = r0 + 0.5;
           if (perp[0] === MOVE_UP) p1[0] = Math.max(p1[0], center); else p1[0] = Math.min(p1[0], center);
-          if (perp[1] === MOVE_UP) p2[0] = Math.max(p2[0], center); else p2[0] = Math.min(p2[0], center);
+          if (p2) {
+            if (perp[1] === MOVE_UP) p2[0] = Math.max(p2[0], center); else p2[0] = Math.min(p2[0], center);
+          }
         }
       }
       const moved1 = Math.abs(p1[0] - y) + Math.abs(p1[1] - x) > 2 * EPS;
-      const moved2 = Math.abs(p2[0] - y) + Math.abs(p2[1] - x) > 2 * EPS;
+      const moved2 = p2 ? (Math.abs(p2[0] - y) + Math.abs(p2[1] - x) > 2 * EPS) : false;
       if (moved1) return p1;
       if (moved2) return p2;
       return moved > 2 * EPS ? [ny, nx] : [y, x];
@@ -1483,7 +1491,13 @@
             // 导致 AI 持续输出撞墙动作引发推墙振荡。
             const [ny, nx] = this._tryMove(y, x, mv, blocked, dist);
             const moved = Math.abs(ny - y) + Math.abs(nx - x);
-            mm[p][mv] = moved > 2 * EPS ? 1 : 0;
+            const targetBlocked = tr < 0 || tr >= H || tc < 0 || tc >= W || blocked[tr * W + tc];
+            if (targetBlocked) {
+              // 目标格为障碍：直走位移必须达到实质推进门槛（防贴墙 0.16 格微隙过度放行导致原地踏步死锁）
+              mm[p][mv] = moved >= Math.min(dist * 0.4, 0.2) ? 1 : 0;
+            } else {
+              mm[p][mv] = moved > 2 * EPS ? 1 : 0;
+            }
           }
         }
         const [r, c] = this.centerCell(p);

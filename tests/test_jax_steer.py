@@ -141,4 +141,55 @@ def test_22debug_open_corridor_not_oscillating():
     assert float(out[1]) < 7.5, f"应成功跨入第 7 列 (x < 7.5)，实际 x={float(out[1])}"
 
 
+def test_11debug_concave_corner_and_dead_end_mask():
+    # 场景：11debug 录像中 P0 被困于 (0, 10)，上方边界墙体，下方 (1, 10) 有炸弹，右方 (0, 11) 有炸弹。
+    # 斜对角 (1, 11) 虽开阔但不可切入（凹角阻断）。
+    # 1. 验证 _steer 绝不向下方侧滑产生 5Hz 死锁振荡；
+    # 2. 验证 legal_mask 拦截贴墙/贴障碍微隙，仅放行左方生路 (MOVE_LEFT) 与 IDLE。
+    blocked = jnp.zeros((H, W), dtype=jnp.bool_)
+    blocked = blocked.at[1, 10].set(True)  # 下方有泡
+    blocked = blocked.at[0, 11].set(True)  # 右方有泡
+    pos = jnp.array([0.4201, 10.4201], dtype=jnp.float32)
+
+    # 向右撞泡：绝不应向下侧滑
+    out = _steer(pos, jnp.int32(3), jnp.bool_(True), blocked, spd=2.4)
+    assert float(out[0]) == pytest.approx(0.4201, abs=1e-4), f"凹角死胡同严禁向下侧滑振荡，实际 y={float(out[0])}"
+
+    state = _fresh(jax.random.PRNGKey(0))
+    state = state._replace(
+        wall=jnp.zeros((H, W), dtype=jnp.bool_),
+        brick=jnp.zeros((H, W), dtype=jnp.bool_),
+        fuse=jnp.zeros((H, W), dtype=jnp.int32).at[1, 10].set(26).at[0, 11].set(30),
+        pushable=jnp.zeros((H, W), dtype=jnp.bool_),
+        pos=jnp.array([[0.4201, 10.4201], [10.5, 10.5]], jnp.float32),
+        spd_g=jnp.array([2.4, 1.0], jnp.float32),
+        alive=jnp.array([True, True]),
+    )
+    mm, _ = legal_mask(state)
+    assert not bool(mm[0, 0]), "贴上边界 UP 必须被 mask"
+    assert not bool(mm[0, 1]), "贴下方炸弹微隙 DOWN 必须被 mask"
+    assert bool(mm[0, 2]), "左方唯一生路 LEFT 必须合法"
+    assert not bool(mm[0, 3]), "贴右方炸弹微隙 RIGHT 必须被 mask"
+    assert bool(mm[0, 4]), "IDLE 必须合法"
+
+
+if __name__ == '__main__':
+    test_steer_does_not_center_on_open_ground_obstacle()
+    print('✓ test_steer_does_not_center_on_open_ground_obstacle passed')
+    test_pushable_action_is_unmasked_and_does_not_side_step()
+    print('✓ test_pushable_action_is_unmasked_and_does_not_side_step passed')
+    test_partial_forward_collision_recenters_then_enters_corridor()
+    print('✓ test_partial_forward_collision_recenters_then_enters_corridor passed')
+    test_high_speed_boundary_steer_no_oscillation()
+    print('✓ test_high_speed_boundary_steer_no_oscillation passed')
+    test_legal_mask_out_of_bounds_is_masked()
+    print('✓ test_legal_mask_out_of_bounds_is_masked passed')
+    test_22debug_open_corridor_not_oscillating()
+    print('✓ test_22debug_open_corridor_not_oscillating passed')
+    test_11debug_concave_corner_and_dead_end_mask()
+    print('✓ test_11debug_concave_corner_and_dead_end_mask passed')
+    print('\n🎉 全部 7 个 JAX 物理与转向测试用例 100% 通过！')
+
+
+
 

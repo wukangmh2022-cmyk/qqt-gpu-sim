@@ -113,4 +113,34 @@ let p22y = 6.9001, p22x = 8.0999;
 assert(Math.abs(p22y - 6.9001) < 1e-4, `向左跨入通路列时绝不应发生垂直超调侧滑，实际 y=${p22y}`);
 assert(p22x < 7.5, `应成功跨入第 7 列 (x < 7.5)，实际 x=${p22x}`);
 
+// -------------------------------------------------------------
+// 回归测试：11debug 凹角死胡同（(0,10) 右方/下方均有障碍，斜对角 (1,11) 虽开阔但不可切入）
+// 严禁误判为外拐角触发垂直侧滑导致 0.4201 <-> 0.5799 5Hz 极限环振荡；
+// 同时 legalMask 必须拦截右方与下方障碍微隙，仅放行左方唯一生路与 IDLE。
+blocked.fill(0);
+blocked[1 * Q.W + 10] = 1; // 下方有泡
+blocked[0 * Q.W + 11] = 1; // 右方有泡
+// 斜对角 (1,11) 保持为 0 (空地)
+let p11y = 0.4201, p11x = 10.4201;
+let [n11y, n11x] = sim._steer(p11y, p11x, Q.MOVE_RIGHT, blocked, highSpeedDist);
+assert(Math.abs(n11y - 0.4201) < 1e-4, `凹角死胡同向右直撞受阻严禁向下侧滑振荡，实际 y=${n11y}`);
+// 连续按 RIGHT，依然锁定在 0.4201，绝不向下跳跃
+for (let step = 0; step < 5; step++) {
+  [n11y, n11x] = sim._steer(n11y, n11x, Q.MOVE_RIGHT, blocked, highSpeedDist);
+  assert(Math.abs(n11y - 0.4201) < 1e-4, `连续向右依然坚守原垂直身位，实际 y=${n11y}`);
+}
+
+const sim11 = new Q.Sim(1);
+sim11.fuse[1 * Q.W + 10] = 26;
+sim11.fuse[0 * Q.W + 11] = 30;
+sim11.pos[0] = 0.4201; sim11.pos[1] = 10.4201;
+sim11.spdG = [2.4, 1.0];
+let mask11 = sim11.legalMask();
+assert.strictEqual(mask11.mm[0][Q.MOVE_UP], 0, '贴上边界 UP 必须被 mask');
+assert.strictEqual(mask11.mm[0][Q.MOVE_DOWN], 0, '贴下方炸弹微隙 DOWN 必须被 mask');
+assert.strictEqual(mask11.mm[0][Q.MOVE_RIGHT], 0, '贴右方炸弹微隙 RIGHT 必须被 mask');
+assert.strictEqual(mask11.mm[0][Q.MOVE_LEFT], 1, '左方唯一出口 LEFT 必须合法');
+assert.strictEqual(mask11.mm[0][Q.MOVE_IDLE], 1, '原地 IDLE 必须合法');
+
 console.log('mouse _steer & legalMask regression tests passed');
+

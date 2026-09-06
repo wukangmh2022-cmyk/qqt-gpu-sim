@@ -904,20 +904,21 @@ def _steer(pos_me, target_dir, alive_me, blocked, spd=1.0, pushable=None):
                                jnp.floor(p[1]).astype(jnp.int32) == tc)
     valid_straight = full_step | (hit_boundary & moved) | (target_open & entered_target)
 
-    diag_l = (c0 - 1 < 0) | blocked[tr, jnp.clip(c0 - 1, 0, W - 1)]
-    diag_r = (c0 + 1 >= W) | blocked[tr, jnp.clip(c0 + 1, 0, W - 1)]
-    diag_u = (r0 - 1 < 0) | blocked[jnp.clip(r0 - 1, 0, H - 1), tc]
-    diag_d = (r0 + 1 >= H) | blocked[jnp.clip(r0 + 1, 0, H - 1), tc]
+    # 凹角阻断检测：斜向格开阔的同时，同轴侧向格也必须开阔！
+    open_l = (c0 - 1 >= 0) & ~blocked[tr, jnp.clip(c0 - 1, 0, W - 1)] & ~blocked[r0, jnp.clip(c0 - 1, 0, W - 1)]
+    open_r = (c0 + 1 < W) & ~blocked[tr, jnp.clip(c0 + 1, 0, W - 1)] & ~blocked[r0, jnp.clip(c0 + 1, 0, W - 1)]
+    open_u = (r0 - 1 >= 0) & ~blocked[jnp.clip(r0 - 1, 0, H - 1), tc] & ~blocked[jnp.clip(r0 - 1, 0, H - 1), c0]
+    open_d = (r0 + 1 < H) & ~blocked[jnp.clip(r0 + 1, 0, H - 1), tc] & ~blocked[jnp.clip(r0 + 1, 0, H - 1), c0]
 
-    is_corner_vert = diag_l != diag_r
-    is_corner_horz = diag_u != diag_d
+    is_corner_vert = open_l != open_r
+    is_corner_horz = open_u != open_d
     is_corner = jnp.where(vert, is_corner_vert, is_corner_horz)
 
     # 允许被动转向：目标格是通路（卡门框需滑进门），或单侧外拐角开放
     can_steer = target_open | is_corner
 
-    swap_vert = jnp.where(target_open, x < c0.astype(jnp.float32) + 0.5, diag_l & ~diag_r)
-    swap_horz = jnp.where(target_open, y < r0.astype(jnp.float32) + 0.5, diag_u & ~diag_d)
+    swap_vert = jnp.where(target_open, x < c0.astype(jnp.float32) + 0.5, open_r)
+    swap_horz = jnp.where(target_open, y < r0.astype(jnp.float32) + 0.5, open_d)
     swap = jnp.where(vert, swap_vert, swap_horz)
 
     perp = _PERP[target_dir]                     # (2,)——IDLE 已在出口拦截
@@ -941,9 +942,8 @@ def _steer(pos_me, target_dir, alive_me, blocked, spd=1.0, pushable=None):
     ma = jnp.where(swap, m2, m1)
     fb = jnp.where(swap, p1, p2)
     mb = jnp.where(swap, m1, m2)
-    # 顶着可推箱时保持直走结果；目标出界时抵墙不侧滑；直走有效时不侧滑；
-    # 既非进门也非单侧挂角（can_steer 为 False）时保留直走，严禁开阔地主动归中。
-    slide_pos = jnp.where(ma, fa, jnp.where(mb, fb, jnp.where(moved, p, pos_me)))
+    # 目标格受阻且外拐角单侧开放时，仅向开放侧被动切向滑移（禁止向阻断侧回退）
+    slide_pos = jnp.where(ma, fa, jnp.where(target_open & mb, fb, jnp.where(moved, p, pos_me)))
     out = jnp.where(push_target, p,
                     jnp.where(valid_straight | target_oob | ~can_steer, p,
                               slide_pos))
@@ -1338,14 +1338,29 @@ def legal_mask(state: BombState) -> tuple[jnp.ndarray, jnp.ndarray]:
     push_ok = (~oob) & pushable.reshape(-1)[target_idx][0]           # (2,4)
 
     # 动作空间意图为"向该方向物理微步"：通过直走探针 _move_player 判定该轴向是否能发生有效位移；
+    # 目标格为障碍时，直走位移必须达到实质推进门槛（防贴墙 0.16 格微隙过度放行导致原地踏步死锁）；
     # 彻底贴死在障碍/角落无法位移才 mask，避免在边缘格（如水泡旁半身微调）被静态网格查表提前误杀。
     # 探针检测与 Web legalMask 严格对齐。
     move = jnp.zeros((2, 5), jnp.bool_)
     for d in range(4):
+        tr = targets[:, d, 0]
+        tc = targets[:, d, 1]
+        tr_c = jnp.clip(tr, 0, H - 1)
+        tc_c = jnp.clip(tc, 0, W - 1)
+        tgt_blocked = oob[:, d] | blocked[tr_c, tc_c]
+
         np0 = _move_player(pos[0], d, alive[0], blocked, spd_g[0])
-        m0 = jnp.abs(np0 - pos[0]).sum() > 2 * EPS
+        dist0 = STEP * spd_g[0]
+        moved0 = jnp.abs(np0 - pos[0]).sum()
+        thresh0 = jnp.where(tgt_blocked[0], jnp.minimum(dist0 * 0.4, 0.30), 2 * EPS)
+        m0 = moved0 >= thresh0
+
         np1 = _move_player(pos[1], d, alive[1], blocked, spd_g[1])
-        m1 = jnp.abs(np1 - pos[1]).sum() > 2 * EPS
+        dist1 = STEP * spd_g[1]
+        moved1 = jnp.abs(np1 - pos[1]).sum()
+        thresh1 = jnp.where(tgt_blocked[1], jnp.minimum(dist1 * 0.4, 0.30), 2 * EPS)
+        m1 = moved1 >= thresh1
+
         leg0 = m0 | push_ok[0, d]
         leg1 = m1 | push_ok[1, d]
         move = move.at[0, d].set(leg0 & alive[0])

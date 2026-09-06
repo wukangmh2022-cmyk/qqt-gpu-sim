@@ -55,10 +55,16 @@ async function main() {
 
   console.log('--- 连续 15 ticks 运行轨迹 (当前最新代码 + ONNX 模型) ---');
   const DIR_NAMES = ['UP', 'DOWN', 'LEFT', 'RIGHT', 'IDLE'];
+  const maskHistory = [];
+  let maxRowJump = 0;
+  const initialRow = sim.pos[2];
 
   for (let s = 0; s < 15; s++) {
     const t = sim.t;
     const mask = sim.legalMask();
+    maskHistory.push(mask.mm[1][3]);
+    const rowDiff = Math.abs(sim.pos[2] - initialRow);
+    if (rowDiff > maxRowJump) maxRowJump = rowDiff;
     const act0 = replay.actions[t] ? [replay.actions[t][0], replay.actions[t][1]] : [4, 0];
     const act1 = await model.act(sim, 1, () => 0.5);
 
@@ -74,11 +80,17 @@ async function main() {
   }
 
   console.log('\n================================================================');
-  console.log('复现结论:');
-  console.log('1. P1 向右掩码持续判定为 合法(1)（因 0.1598 格微隙过度放行）');
-  console.log('2. 模型持续输出向右(RIGHT)，_steer 在 0.4201 与 0.5799 间发生高频振荡死锁');
-  console.log('3. Bug 1 在当前最新代码下 100% 稳定复现！');
+  console.log('修复验收结论:');
+  console.log('1. P1 贴近右侧炸弹时向右掩码正确置为 非法(0)（成功拦截微隙过度放行）');
+  console.log('2. _steer 凹角死胡同阻断机制生效，彻底消除 0.4201 <-> 0.5799 高频死锁振荡');
+  console.log(`3. 最终坐标: row=${sim.pos[2].toFixed(4)}, col=${sim.pos[3].toFixed(4)}，P1 成功向左脱困至安全区 (col < 9.0)！`);
   console.log('================================================================');
+
+  const assert = require('assert');
+  assert.strictEqual(maskHistory[0], 0, 't=584 向右掩码必须为 0');
+  assert(maxRowJump < 0.05, '全程严禁发生 0.4201 <-> 0.5799 垂直振荡跳跃');
+  assert(sim.pos[3] < 9.0, 'P1 必须成功向左逃脱至开阔列 (col < 9.0)');
+  console.log('🎉 Bug 1 修复自动化断言全部通过！\n');
 }
 
 main().catch((err) => {
