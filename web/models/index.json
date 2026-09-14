@@ -1,6 +1,42 @@
 {
   "models": [
     {
+      "name": "params_aggr_it00000280",
+      "display_name": "params_aggr_it00000280 (⚡️破拆进攻版 T+120m 26.3亿步)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 280,
+      "global_step": 2632974336,
+      "source": "params_aggr_it00000280.pkl",
+      "generated_at": "2026-09-14 10:13 UTC"
+    },
+    {
+      "name": "params_aggr_it00000280_ema",
+      "display_name": "params_aggr_it00000280_ema (⚡️破拆进攻版 T+120m EMA)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 280,
+      "global_step": 2632974336,
+      "source": "params_aggr_it00000280_ema.pkl",
+      "generated_at": "2026-09-14 10:13 UTC"
+    },
+    {
       "name": "params_aggr_it00000210",
       "display_name": "params_aggr_it00000210 (⚡️破拆进攻版 T+90m 19.7亿步)",
       "arch": "transformer",
