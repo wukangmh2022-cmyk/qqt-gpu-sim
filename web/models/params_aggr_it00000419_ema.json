@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "name": "params_aggr_it00000419_ema",
+    "display_name": "params_aggr_it00000419_ema (⚡️破拆进攻版 T+180m EMA)",
+    "arch": "transformer",
+    "obs_shape": [
+      14,
+      13,
+      15
+    ],
+    "embed": 392,
+    "patch": 3,
+    "depth": 4,
+    "n_players": 2,
+    "it": 419,
+    "global_step": 3944742912,
+    "source": "params_aggr_it00000419_ema.pkl"
+  }
+}
