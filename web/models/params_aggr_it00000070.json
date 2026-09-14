@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "name": "params_aggr_it00000070",
+    "display_name": "params_aggr_it00000070 (⚡️破拆进攻版 T+30m 6.51亿步)",
+    "arch": "transformer",
+    "obs_shape": [
+      14,
+      13,
+      15
+    ],
+    "embed": 392,
+    "patch": 3,
+    "depth": 4,
+    "n_players": 2,
+    "it": 70,
+    "global_step": 651165696,
+    "source": "params_aggr_it00000070.pkl"
+  }
+}
