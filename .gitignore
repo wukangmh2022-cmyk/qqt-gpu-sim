@@ -39,8 +39,7 @@ params_it*.pkl
 params_surgery*.pkl
 
 # Whitelist key checkpoints for GitHub Pages
-!web/models/params_aggr_it00000140*
-!web/models/params_aggr_it00000070*
+!web/models/params_aggr_*
 !web/models/params_8h_it00000102*
 !web/models/params_8h_it00000068*
 !web/models/params_it00000400*
