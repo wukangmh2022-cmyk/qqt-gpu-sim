@@ -918,7 +918,6 @@ def main():
 
                 # 同步写入伴生元数据 JSON 文件 (零侵入，直接记录当轮退火超参)
                 meta_p = os.path.join(args.ckpt_local_dir, f"params_it{i:08d}.meta.json")
-                import json
                 with open(meta_p, "w", encoding="utf-8") as f_meta:
                     json.dump(iter_meta, f_meta, indent=2, ensure_ascii=False)
 

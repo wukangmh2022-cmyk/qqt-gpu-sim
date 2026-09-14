@@ -327,8 +327,8 @@ async function main() {
     // 统计聚合
     const wins = results.filter((r) => r.outcome === 'win').length;
     const losses = results.filter((r) => r.outcome === 'loss').length;
-    const mutuals = results.filter((r) => r.outcome === 'draw_mutual').length;
-    const timeouts = results.filter((r) => r.outcome === 'draw_timeout').length;
+    const mutuals = results.filter((r) => r.outcome === 'draw_mutual' || r.outcome === 'mutual').length;
+    const timeouts = results.filter((r) => r.outcome === 'draw_timeout' || r.outcome === 'timeout').length;
     const suicides = results.filter((r) => r.p0Suicide).length;
     const avgBombs = (results.reduce((a, b) => a + b.p0Bombs, 0) / args.games).toFixed(1);
     const avgHits = (results.reduce((a, b) => a + b.p0Hits, 0) / args.games).toFixed(2);

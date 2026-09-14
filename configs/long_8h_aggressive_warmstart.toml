@@ -1,0 +1,111 @@
+# ============================================================================
+# 实验：9节点18卡 DCU 进阶进攻超长训 (Warm-Start 继承 it102 黄金战力)
+# 核心规格：
+# 1. 规模：9 机 × 2 卡 = 18 张 DCU，num_envs=18432 (单卡 1024 envs)
+# 2. 轮次：1100 iters，全局训练量 ~5.2 Billion 步
+# 3. 底模继承 (Warm-Start)：基于实测 75% 胜率的 params_it00000102.pkl
+# 4. 激进进攻与破拆奖励革命：
+#    - brick_reward_coef = 0.30 (每炸毁一块可破坏墙体即刻给 +0.15 奖励，等于吃箱子 30%)
+#    - step_penalty = 0.002 (时间流逝惩罚翻倍，持续施加压迫，坚决打击消极磨洋工)
+#    - timeout_draw_bonus = -2.0 (超时平局双输惩罚，彻底消除挂机保平念头)
+#    - timeout_trail_penalty = 6.0 (超时血量落后重罚！消除“落后两格血就逃跑苟命”漏洞，逼迫绝地反击)
+#    - timeout_lead_bonus = 2.0 (超时血量领先奖励)
+# 5. 地图强化：level_weights = "empty=0.05,功夫=0.25,比武=0.35" (60% 密集砖块对战环境)
+# ============================================================================
+
+[run]
+name = "long_8h_aggressive_warmstart"
+iters = 1100
+seed = 42
+fresh = true
+
+[model]
+arch = "transformer"
+embed = 392
+depth = 4
+patch = 3
+heads = 4
+ff_factor = 4
+obs_channels = 14
+init_params = "ckpt/params_it00000102.pkl"
+ema_decay = 0.995
+
+[rollout]
+num_envs = 18432
+num_steps = 256
+minibatch = 18432
+epochs = 2
+
+[optimizer]
+lr = 0.00025
+gamma = 0.995
+lam = 0.95
+clip_eps = 0.2
+vf_coef = 0.5
+ent_coef = 0.01
+
+[reward]
+profile = "dense_win10_symmetric_pre_asym"
+step_penalty = 0.002
+hit_reward = 1.5
+win_bonus = 10.0
+lose_bonus_start = 10.0
+lose_bonus_floor = 10.0
+timeout_mode = "hp_diff_scaled"
+timeout_max_bonus = 2.0
+timeout_per_hp = 0.5
+timeout_alpha_mode = "shared_linear_anneal"
+timeout_lead_bonus = 2.0
+timeout_trail_penalty = 6.0
+timeout_draw_bonus = -2.0
+adv_top_frac = 0.25
+crate_reward_coef = 0.5
+crate_reward_floor = 0.10
+crate_reward_anneal_steps = 9000000000
+explore_reward_coef = 0.0
+explore_reward_anneal_steps = 0
+brick_reward_coef = 0.30
+reward_anneal_k = 0.0
+reward_anneal_step_offset = 0
+
+[value]
+head = "hl_gauss"
+num_bins = 128
+v_min = -20.0
+v_max = 20.0
+sigma = 1.5
+
+[distributed]
+world_size = 9
+local_gpus = 2
+lsgd_k = 32
+lsgd_mode = "param"
+lsgd_bf16 = false
+lsgd_sync_state = false
+
+[environment]
+levels = "levels.json"
+level_weights = "empty=0.05,功夫=0.25,比武=0.35"
+curriculum_json = ""
+radius = 0.36
+n_total = 30
+map = "13x15"
+
+[runtime]
+no_mask = false
+obs_quant = false
+legacy_obs13 = false
+checkpoint = true
+tolerate_inconsistent = false
+
+[evaluation]
+eval_vs = ""
+eval_every = 0
+
+[checkpoint]
+ckpt_dir = "runs/long_8h_aggressive_warmstart/ckpt"
+ckpt_every = 100
+ckpt_local_dir = "runs/long_8h_aggressive_warmstart/ckpt_local"
+ckpt_local_every = 15
+ckpt_max_to_keep = 3
+ckpt_local_max_to_keep = 15

@@ -330,7 +330,14 @@ def main():
     args = ap.parse_args()
     out_dir = args.out_dir or OUT_DIR
 
-    from export_ckpt import EXCLUDED_MODELS
+    try:
+        from deploy.export_ckpt import EXCLUDED_MODELS
+    except Exception:
+        EXCLUDED_MODELS = {
+            "params_it00000068_hlgauss_top25_patch3_k32",
+            "params_it00000068_repro8x2_k32",
+            "params_it00000068_repro14ch",
+        }
 
     paths = args.paths
     if not paths:

@@ -8,8 +8,23 @@ NODES_FILE="${1:?用法: watch_24nodes.sh nodes_24x2.txt}"
 WORK=/tmp/ndrun
 [ -d "$WORK" ] || { echo "先跑 launch_24nodes.sh 生成封装"; exit 1; }
 N_PORT=(); N_HOST=(); N_PASS=()
-while read -r p h pw; do
-  [ -z "$p" ] && continue
+PENDING_PORT=""; PENDING_HOST=""
+while IFS= read -r line || [ -n "$line" ]; do
+  line="${line%$'\r'}"
+  line="${line#"${line%%[![:space:]]*}"}"
+  [ -z "$line" ] && continue
+  [[ "$line" =~ ^# ]] && continue
+  if [ -n "$PENDING_PORT" ]; then
+    N_PORT+=("$PENDING_PORT"); N_HOST+=("$PENDING_HOST"); N_PASS+=("$line")
+    PENDING_PORT=""; PENDING_HOST=""
+    continue
+  fi
+  if [[ "$line" =~ ^ssh[[:space:]]+-p[[:space:]]+([0-9]+)[[:space:]]+root@([^[:space:]]+)$ ]]; then
+    PENDING_PORT="${BASH_REMATCH[1]}"; PENDING_HOST="${BASH_REMATCH[2]}"
+    continue
+  fi
+  read -r p h pw extra <<< "$line"
+  [ -n "${p:-}" ] && [ -n "${h:-}" ] && [ -n "${pw:-}" ] || continue
   N_PORT+=("$p"); N_HOST+=("$h"); N_PASS+=("$pw")
 done < "$NODES_FILE"
 NW=${#N_PORT[@]}
