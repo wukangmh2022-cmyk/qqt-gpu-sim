@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "name": "params_8h_it00000102",
+    "display_name": "params_8h_it00000102 (🔥8h长训 T+48m 1.59B步)",
+    "arch": "transformer",
+    "obs_shape": [
+      14,
+      13,
+      15
+    ],
+    "embed": 392,
+    "patch": 3,
+    "depth": 4,
+    "n_players": 2,
+    "it": 102,
+    "global_step": 1588592640,
+    "source": "params_8h_it00000102.pkl"
+  }
+}
