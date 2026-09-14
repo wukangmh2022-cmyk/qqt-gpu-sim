@@ -105,15 +105,18 @@ if (!isMainThread) {
 
     let p0Bombs = 0;
     let p0Hits = 0;
-    let p0Suicide = false;
+    let modelDamages = 0;
+    let mutualHits = 0;
+    let lastModelTookDmg = false;
+    let lastOppTookDmg = false;
     const p0Moves = [0, 0, 0, 0, 0];
     const visitedCells = new Set();
     const model0PlayerIdx = swapSide ? 1 : 0;
+    const oppIdx = 1 - model0PlayerIdx;
     const [initR, initC] = sim.centerCell(model0PlayerIdx);
     visitedCells.add(initR * W + initC);
 
     while (!sim.done && sim.t < maxTicks) {
-      const preBombs = snapshotBombs(sim);
       const hpBefore = [sim.hp[0], sim.hp[1]];
       const aliveBefore = [sim.alive[0], sim.alive[1]];
 
@@ -142,29 +145,25 @@ if (!isMainThread) {
 
       sim.step([a0, a1]);
 
-      // 检查 model0 炸弹造成的命中或自杀
-      for (const b of preBombs) {
-        if (b.owner === model0PlayerIdx && isBombExplodingNow(sim, b.i)) {
-          const oppIdx = 1 - model0PlayerIdx;
-          if (aliveBefore[oppIdx] && sim.hp[oppIdx] < hpBefore[oppIdx]) {
-            p0Hits++;
-          }
-          if (aliveBefore[model0PlayerIdx] && sim.hp[model0PlayerIdx] < hpBefore[model0PlayerIdx]) {
-            p0Suicide = true;
-          }
-        }
-      }
+      const modelTookDmg = aliveBefore[model0PlayerIdx] && sim.hp[model0PlayerIdx] < hpBefore[model0PlayerIdx];
+      const oppTookDmg = aliveBefore[oppIdx] && sim.hp[oppIdx] < hpBefore[oppIdx];
+
+      if (oppTookDmg) p0Hits++;
+      if (modelTookDmg) modelDamages++;
+      if (modelTookDmg && oppTookDmg) mutualHits++;
+
+      lastModelTookDmg = modelTookDmg;
+      lastOppTookDmg = oppTookDmg;
     }
 
-    const oppIdx = 1 - model0PlayerIdx;
     const finalAlive = [sim.alive[0], sim.alive[1]];
     const finalHp = [sim.hp[0], sim.hp[1]];
 
     let outcome = 'timeout';
     if (!finalAlive[0] && !finalAlive[1]) {
-      outcome = 'mutual';
+      outcome = 'double_death';
     } else if (finalAlive[model0PlayerIdx] && !finalAlive[oppIdx]) {
-      outcome = 'win';
+      outcome = lastModelTookDmg ? 'kamikaze_win' : 'clean_win';
     } else if (!finalAlive[model0PlayerIdx] && finalAlive[oppIdx]) {
       outcome = 'loss';
     } else {
@@ -194,7 +193,8 @@ if (!isMainThread) {
       outcome,
       p0Bombs,
       p0Hits,
-      p0Suicide,
+      modelDamages,
+      mutualHits,
       idleRatio,
       exploredRatio,
       moveEntropy: Number(moveEntropy.toFixed(3)),
@@ -325,35 +325,41 @@ async function main() {
     process.stdout.write(`\r  [${dom.id}] 进度: ${args.games}/${args.games} 完成！耗时 ${domTime}s\n`);
 
     // 统计聚合
-    const wins = results.filter((r) => r.outcome === 'win').length;
+    const cleanWins = results.filter((r) => r.outcome === 'clean_win').length;
+    const kamikazeWins = results.filter((r) => r.outcome === 'kamikaze_win').length;
+    const totalWins = cleanWins + kamikazeWins;
+    const doubleDeaths = results.filter((r) => r.outcome === 'double_death' || r.outcome === 'mutual').length;
     const losses = results.filter((r) => r.outcome === 'loss').length;
-    const mutuals = results.filter((r) => r.outcome === 'draw_mutual' || r.outcome === 'mutual').length;
-    const timeouts = results.filter((r) => r.outcome === 'draw_timeout' || r.outcome === 'timeout').length;
-    const suicides = results.filter((r) => r.p0Suicide).length;
+    const timeouts = results.filter((r) => r.outcome.startsWith('timeout')).length;
+    const avgMutualHits = (results.reduce((a, b) => a + (b.mutualHits || 0), 0) / args.games).toFixed(2);
+    const avgModelDmg = (results.reduce((a, b) => a + (b.modelDamages || 0), 0) / args.games).toFixed(2);
     const avgBombs = (results.reduce((a, b) => a + b.p0Bombs, 0) / args.games).toFixed(1);
     const avgHits = (results.reduce((a, b) => a + b.p0Hits, 0) / args.games).toFixed(2);
     const avgTicks = (results.reduce((a, b) => a + b.ticks, 0) / args.games).toFixed(1);
     const avgExplored = (results.reduce((a, b) => a + b.exploredRatio, 0) / args.games).toFixed(1);
     const avgIdle = (results.reduce((a, b) => a + b.idleRatio, 0) / args.games).toFixed(1);
-    const avgEntropy = (results.reduce((a, b) => a + b.moveEntropy, 0) / args.games).toFixed(2);
-    const winRate = ((wins / args.games) * 100).toFixed(1);
+    const cleanWinRate = ((cleanWins / args.games) * 100).toFixed(1);
+    const totalWinRate = ((totalWins / args.games) * 100).toFixed(1);
+    const kamikazeRatio = totalWins > 0 ? ((kamikazeWins / totalWins) * 100).toFixed(1) : '0.0';
 
     domainReports.push({
       id: dom.id,
       name: dom.name,
       games: args.games,
-      wins,
+      cleanWins,
+      kamikazeWins,
+      totalWins,
       losses,
-      mutuals,
+      doubleDeaths,
       timeouts,
-      suicides,
+      avgMutualHits,
+      avgModelDmg,
       avgBombs,
       avgHits,
       avgTicks,
-      avgExplored,
-      avgIdle,
-      avgEntropy,
-      winRate,
+      cleanWinRate,
+      totalWinRate,
+      kamikazeRatio,
       domTime,
     });
   }
@@ -368,10 +374,10 @@ async function main() {
   console.log(`📊 评测汇总成果 (总对局=${args.games * domains.length}，总耗时=${totalTime}s)`);
   console.log(`==========================================================================\n`);
 
-  console.log(`| 对手 / 地图场景 | 胜 | 负 | 同归 | 超时 | 胜率(%) | 自杀 | 炮/局 | 命中/局 | 平均局长 | 控图率(%) | 发呆率(%) | 动作熵 |`);
+  console.log(`| 对手 / 地图场景 | 纯无伤胜 | 换血同归胜 | 双亡同归 | 负 | 超时 | 纯胜率(%) | 总胜率(%) | 换血胜占比(%) | 局均互损 | 局均自伤 | 均场放炮 | 平均局长 |`);
   console.log(`| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`);
   for (const r of domainReports) {
-    console.log(`| ${r.name} | **${r.wins}** | ${r.losses} | ${r.mutuals} | ${r.timeouts} | **${r.winRate}%** | ${r.suicides} | ${r.avgBombs} | ${r.avgHits} | ${r.avgTicks} | ${r.avgExplored}% | ${r.avgIdle}% | ${r.avgEntropy} |`);
+    console.log(`| ${r.name} | **${r.cleanWins}** | ${r.kamikazeWins} | ${r.doubleDeaths} | ${r.losses} | ${r.timeouts} | **${r.cleanWinRate}%** | ${r.totalWinRate}% | ${r.kamikazeRatio}% | ${r.avgMutualHits} | ${r.avgModelDmg} | ${r.avgBombs} | ${r.avgTicks} |`);
   }
 
   console.log(`\n✨ 验收完毕！可直接将表格写入评估复盘文档。\n`);

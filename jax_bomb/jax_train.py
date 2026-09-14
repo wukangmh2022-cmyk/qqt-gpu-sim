@@ -38,11 +38,16 @@ LEGACY_OBS13 = os.environ.get("JAXBOMB_LEGACY_OBS13", "0") == "1"
 STEP_PENALTY = 0.001
 HIT_REWARD = 1.5
 WIN_BONUS = 10.0
+TRADE_WIN_BONUS = 3.5          # 同归于尽/换血险胜降级奖励（正奖励，不赶尽杀绝，但明显低于纯胜）
 LOSE_BONUS_START = 6.0         # 击杀败者前期惩罚（正数，实际奖励为负）
 LOSE_BONUS_FLOOR = 3.0         # 后期保留的最低失败惩罚
-TIMEOUT_LEAD_BONUS = 2.0       # 超时血多者固定小额奖励
-TIMEOUT_TRAIL_PENALTY = 1.0    # 超时血少者固定小额惩罚
+TIMEOUT_LEAD_BONUS = 2.0       # 超时血量领先方固定奖励
+TIMEOUT_MAX_BONUS = 2.0        # 兼容旧测试/超参数别名
+TIMEOUT_TRAIL_PENALTY = 1.0    # 超时血量落后方固定惩罚
 TIMEOUT_DRAW_BONUS = 0.0       # 平血超时双方奖励
+MUTUAL_HIT_PENALTY = 0.0       # 双方同 tick 互损额外惩罚（如 1.0 表示互换血扣 1 分）
+DOUBLE_DEATH_PENALTY = 0.0     # 双方同 tick 全部阵亡（真同归双亡 0:0）惩罚（如 8.0）
+WIN_HP_BONUS = 0.0             # 纯净获胜残余血量奖励（每剩 1 滴血奖励分，如 0.5）
 
 
 def hl_gauss_value_loss(v_logits, targets, v_min=V_MIN, v_max=V_MAX,
@@ -84,25 +89,48 @@ def reward_from_events(dmg, alive_before, alive_after, hp_after, done,
                        win_bonus=WIN_BONUS, lose_bonus=LOSE_BONUS_START,
                        timeout_lead_bonus=TIMEOUT_LEAD_BONUS,
                        timeout_trail_penalty=TIMEOUT_TRAIL_PENALTY,
-                       timeout_draw_bonus=TIMEOUT_DRAW_BONUS):
+                       timeout_draw_bonus=TIMEOUT_DRAW_BONUS,
+                       mutual_hit_penalty=MUTUAL_HIT_PENALTY,
+                       double_death_penalty=DOUBLE_DEATH_PENALTY,
+                       win_hp_bonus=WIN_HP_BONUS,
+                       trade_win_bonus=TRADE_WIN_BONUS):
     """Compute JAX PPO rewards from post-step events without reset-state leakage."""
     dmg = dmg.astype(jnp.float32)
     dealt = dmg.sum(axis=-1, keepdims=True) - dmg
     rew = ((dealt - dmg) * HIT_REWARD
            - STEP_PENALTY * alive_before.astype(jnp.float32))
+    # 同 tick 双方互损换血惩罚（减弱无意义肉搏互损）
+    mutual_hit = (dealt > 0.0) & (dmg > 0.0)
+    rew = rew - mutual_hit_penalty * mutual_hit.astype(jnp.float32)
+
     rew = rew + crate_coef * crate_grew.astype(jnp.float32)
     rew = rew + explore_coef * newly.astype(jnp.float32)
     rew = rew + brick_coef * walls_destroyed.astype(jnp.float32)[:, None] / 2.0
 
     n_alive = alive_after.sum(axis=-1)
     death_done = done & (n_alive == 1)
-    win = death_done[:, None] & alive_after
+
+    # 纯净击杀（胜者该 tick 未受爆炸伤害）：获胜大奖 10 分 + 残血加成
+    clean_win = death_done[:, None] & alive_after & (dmg == 0.0)
+    # 换血同归获胜（胜者该 tick 虽受波及掉血但成功终结比赛）：
+    # 获得收敛的正向小奖（trade_win_bonus，如 3.5 分，扣除互损 1 分后净收益约 +2.5 分）
+    # 绝不搞二极管重罚！依然鼓励杀死比赛，但与优雅纯胜拉开分差，形成对战道德与对战风格分级
+    trade_win = death_done[:, None] & alive_after & (dmg > 0.0)
     lose = death_done[:, None] & ~alive_after
-    rew = rew + win_bonus * win.astype(jnp.float32)
+
+    rew = rew + win_bonus * clean_win.astype(jnp.float32)
+    rew = rew + trade_win_bonus * trade_win.astype(jnp.float32)
     rew = rew - lose_bonus * lose.astype(jnp.float32)
 
-    all_alive = done & (n_alive == 2)
+    # 获胜残余血量激励（仅纯胜享有残血大奖，鼓励高血量高容错的优雅击杀）
     hp_f = hp_after.astype(jnp.float32)
+    rew = rew + (win_hp_bonus * hp_f) * clean_win.astype(jnp.float32)
+
+    # 双方同 tick 全部阵亡（真·双亡，n_alive == 0，双输 0:0 暴毙惩罚）
+    double_death = done & (n_alive == 0)
+    rew = rew - double_death_penalty * double_death[:, None].astype(jnp.float32)
+
+    all_alive = done & (n_alive == 2)
     p0_lead = all_alive & (hp_f[:, 0] > hp_f[:, 1])
     p1_lead = all_alive & (hp_f[:, 1] > hp_f[:, 0])
     draw = all_alive & (hp_f[:, 0] == hp_f[:, 1])
@@ -189,7 +217,11 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
                     lose_bonus=LOSE_BONUS_START, win_bonus=WIN_BONUS,
                     timeout_lead_bonus=TIMEOUT_LEAD_BONUS,
                     timeout_trail_penalty=TIMEOUT_TRAIL_PENALTY,
-                    timeout_draw_bonus=TIMEOUT_DRAW_BONUS):
+                    timeout_draw_bonus=TIMEOUT_DRAW_BONUS,
+                    mutual_hit_penalty=MUTUAL_HIT_PENALTY,
+                    double_death_penalty=DOUBLE_DEATH_PENALTY,
+                    win_hp_bonus=WIN_HP_BONUS,
+                    trade_win_bonus=TRADE_WIN_BONUS):
     """自对弈：同一网络打两边。states (N, ...)。返回 (new_states, batch, nov, kills)。
 
     nov：每 env/玩家的 novelty 计数（未加权，与 batch.rew 同口径窗口累计）。
@@ -221,9 +253,16 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
     吃到）太长太弱学不会，给"炸墙"本身即时正反馈，破墙开路才有后续探索/
     吃箱/交手。同上乘统一退火（headless 实测 500 iter 模型在隔离图仍
     放炮少，炸墙是冷启动关键）。
-    lose_bonus：击杀失败惩罚的正数幅值（实际奖励为 -lose_bonus）。
-    timeout_*：超时固定小额计分，不随 timeout_alpha 退火；timeout_alpha
-    参数保留以兼容旧调用方。
+    timeout_alpha：超时血多者奖励退火系数（动态退火，早期 0.0，后期 1.0）。
+    lose_bonus：击杀败者惩罚（动态退火，早期 LOSE_BONUS_START，后期 LOSE_BONUS_FLOOR）。
+    win_bonus：击杀胜者固定奖励（默认 10.0）。
+    trade_win_bonus：同归于尽/换血险胜奖励（默认 3.5）。
+    timeout_lead_bonus：超时血量领先方奖励（默认 2.0）。
+    timeout_trail_penalty：超时血量落后方惩罚（默认 1.0）。
+    timeout_draw_bonus：超时平局双方奖励（默认 0.0）。
+    mutual_hit_penalty：同 tick 双方互损换血惩罚（默认 0.0）。
+    double_death_penalty：双方同时暴毙双亡重罚（默认 0.0）。
+    win_hp_bonus：获胜残余血量加成（默认 0.0）。
     返回 (final_states, batch, nov, kills)：nov 每 env/玩家 novelty 累计；
     kills 每 env 窗口内击杀局数（death_done 累计）——动态退火 α=1-tanh(k·x)
     的 x 来源（每局击杀率 = mean(kills)/n_episodes）。
@@ -257,7 +296,7 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
         #     auto_reset 前取值 —— 1v1 里对方掉血 = 我的泡干的）；
         #   - 每 tick -STEP_PENALTY（防磨洋工；**用 step 前 alive0**，对齐 torch
         #     死亡 tick 死者也扣步罚 —— info.alive 是结算后，死者已 False）；
-        #   - 终局：死亡（n_alive==1）击杀方 +win_bonus / 败方 -lose_bonus；
+        #   - 终局：死亡（n_alive==1）击杀方 +win_bonus / 败者 -lose_bonus；
         #     超时全员存活（n_alive==2）按血量领先 +timeout_lead_bonus、
         #     落后 -timeout_trail_penalty，平血 timeout_draw_bonus。
         #     info.alive/hp 是结算后值，不受 auto_reset 重置污染。
@@ -265,7 +304,9 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
             info["dmg"], states.alive, info["alive"], info["hp"], done,
             info["crate"], newly, info["walls"], crate_coef, explore_coef,
             brick_coef, timeout_alpha, win_bonus, lose_bonus,
-            timeout_lead_bonus, timeout_trail_penalty, timeout_draw_bonus)
+            timeout_lead_bonus, timeout_trail_penalty, timeout_draw_bonus,
+            mutual_hit_penalty, double_death_penalty, win_hp_bonus,
+            trade_win_bonus)
         nov = nov + newly.astype(jnp.float32)       # 统计用：探索分/帧可监控
         n_alive = info["alive"].sum(axis=-1)          # (N,)
         death_done = done & (n_alive == 1)

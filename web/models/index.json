@@ -1,6 +1,150 @@
 {
   "models": [
     {
+      "name": "params_it00000279_ema",
+      "display_name": "params_it00000279_ema (👑优雅纯胜·非二极管TradeWin 26.2亿步 EMA 纯胜87.5% 0负)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 279,
+      "global_step": 2623537152,
+      "source": "params_it00000279_ema.pkl",
+      "generated_at": "2026-09-14 16:22 CST"
+    },
+    {
+      "name": "params_it00000279",
+      "display_name": "params_it00000279 (👑优雅纯胜·非二极管TradeWin 26.2亿步 生权重)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 279,
+      "global_step": 2623537152,
+      "source": "params_it00000279.pkl",
+      "generated_at": "2026-09-14 16:22 CST"
+    },
+    {
+      "name": "params_clean_it00000072_ema",
+      "display_name": "params_clean_it00000072_ema (🛡️克制同归/优雅残血 T+30m EMA 6.7亿步)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 72,
+      "global_step": 670040064,
+      "source": "params_clean_it00000072_ema.pkl",
+      "generated_at": "2026-09-14 12:47 UTC"
+    },
+    {
+      "name": "params_clean_it00000072",
+      "display_name": "params_clean_it00000072 (🛡️克制同归/优雅残血 T+30m 6.7亿步)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 72,
+      "global_step": 670040064,
+      "source": "params_clean_it00000072.pkl",
+      "generated_at": "2026-09-14 12:47 UTC"
+    },
+    {
+      "name": "params_clean_it00000036_ema",
+      "display_name": "params_clean_it00000036_ema (🛡️克制同归/优雅残血 EMA 3.3亿步)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 36,
+      "global_step": 330301440,
+      "source": "params_clean_it00000036_ema.pkl",
+      "generated_at": "2026-09-14 12:32 UTC"
+    },
+    {
+      "name": "params_clean_it00000036",
+      "display_name": "params_clean_it00000036 (🛡️克制同归/优雅残血 3.3亿步)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 36,
+      "global_step": 330301440,
+      "source": "params_clean_it00000036.pkl",
+      "generated_at": "2026-09-14 12:32 UTC"
+    },
+    {
+      "name": "params_it00000593_ema",
+      "display_name": "params_it00000593_ema (⚡️激进长训基准 EMA 55.8亿步)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 593,
+      "global_step": 5585817600,
+      "source": "params_it00000593_ema.pkl",
+      "generated_at": "2026-09-14 12:07 UTC"
+    },
+    {
+      "name": "params_it00000593",
+      "display_name": "params_it00000593 (⚡️激进长训基准 55.8亿步)",
+      "arch": "transformer",
+      "obs_shape": [
+        14,
+        13,
+        15
+      ],
+      "embed": 392,
+      "patch": 3,
+      "depth": 4,
+      "n_players": 2,
+      "it": 593,
+      "global_step": 5585817600,
+      "source": "params_it00000593.pkl",
+      "generated_at": "2026-09-14 12:07 UTC"
+    },
+    {
       "name": "params_aggr_it00000419",
       "display_name": "params_aggr_it00000419 (⚡️破拆进攻版 T+180m 39.4亿步)",
       "arch": "transformer",

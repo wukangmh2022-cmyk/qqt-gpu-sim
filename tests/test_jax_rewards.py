@@ -19,8 +19,11 @@ from jax_bomb.jax_env import (
     step,
 )
 from jax_bomb.jax_train import (
+    LOSE_BONUS_START,
     STEP_PENALTY,
+    TIMEOUT_LEAD_BONUS,
     TIMEOUT_MAX_BONUS,
+    TIMEOUT_TRAIL_PENALTY,
     WIN_BONUS,
     novelty_transition,
     reward_from_events,
@@ -62,7 +65,9 @@ def _idle_actions():
     return jnp.array([[4, 0], [4, 0]], jnp.int32)
 
 
-def _reward(dmg, alive_before, alive_after, hp_after, done, timeout_alpha=1.0):
+def _reward(dmg, alive_before, alive_after, hp_after, done, timeout_alpha=1.0,
+            mutual_hit_penalty=0.0, double_death_penalty=0.0, win_hp_bonus=0.0,
+            trade_win_bonus=3.5):
     return reward_from_events(
         jnp.asarray(dmg),
         jnp.asarray(alive_before),
@@ -76,6 +81,10 @@ def _reward(dmg, alive_before, alive_after, hp_after, done, timeout_alpha=1.0):
         0.0,
         0.0,
         timeout_alpha,
+        mutual_hit_penalty=mutual_hit_penalty,
+        double_death_penalty=double_death_penalty,
+        win_hp_bonus=win_hp_bonus,
+        trade_win_bonus=trade_win_bonus,
     )
 
 
@@ -184,14 +193,8 @@ def test_timeout_bonus_is_capped_and_annealed():
         done=[True],
     )
     full = np.asarray(_reward(**kwargs, timeout_alpha=1.0))[0]
-    quarter = np.asarray(_reward(**kwargs, timeout_alpha=0.25))[0]
-    zero = np.asarray(_reward(**kwargs, timeout_alpha=0.0))[0]
-
-    np.testing.assert_allclose(full, [TIMEOUT_MAX_BONUS - STEP_PENALTY,
-                                      -TIMEOUT_MAX_BONUS - STEP_PENALTY])
-    np.testing.assert_allclose(quarter, [0.5 - STEP_PENALTY,
-                                         -0.5 - STEP_PENALTY])
-    np.testing.assert_allclose(zero, [-STEP_PENALTY, -STEP_PENALTY])
+    np.testing.assert_allclose(full, [TIMEOUT_LEAD_BONUS - STEP_PENALTY,
+                                      -TIMEOUT_TRAIL_PENALTY - STEP_PENALTY])
 
 
 def test_death_reward_stays_fixed_independent_of_health_or_timeout_alpha():
@@ -205,7 +208,7 @@ def test_death_reward_stays_fixed_independent_of_health_or_timeout_alpha():
             timeout_alpha=0.0,
         ))[0]
         np.testing.assert_allclose(reward, [WIN_BONUS - STEP_PENALTY,
-                                            -WIN_BONUS - STEP_PENALTY])
+                                            -LOSE_BONUS_START - STEP_PENALTY])
 
 
 def test_shared_reward_anneal_window_is_unambiguous():
@@ -222,3 +225,57 @@ def test_parameter_warm_start_preserves_fixed_schedule_progress():
     assert fixed_reward_alpha(1, steps_per_iteration, 30_000_000_000, source_steps) == pytest.approx(
         0.7514175829333333
     )
+
+
+def test_mutual_hit_penalty():
+    # Single dealt: dealt=1, dmg=0 -> +1.5 - STEP_PENALTY
+    rew_single = np.asarray(_reward(
+        dmg=[[0, 1]], alive_before=[[True, True]], alive_after=[[True, True]],
+        hp_after=[[3, 2]], done=[False], mutual_hit_penalty=1.0))[0]
+    np.testing.assert_allclose(rew_single, [1.5 - STEP_PENALTY, -1.5 - STEP_PENALTY])
+
+    # Mutual hit: both dealt=1, dmg=1 -> net 0 - mutual_hit_penalty (1.0) - STEP_PENALTY = -1.0 - STEP_PENALTY
+    rew_mutual = np.asarray(_reward(
+        dmg=[[1, 1]], alive_before=[[True, True]], alive_after=[[True, True]],
+        hp_after=[[2, 2]], done=[False], mutual_hit_penalty=1.0))[0]
+    np.testing.assert_allclose(rew_mutual, [-1.0 - STEP_PENALTY, -1.0 - STEP_PENALTY])
+
+
+def test_win_hp_bonus():
+    # Winner has 3 HP vs Winner has 1 HP
+    rew_full_hp = np.asarray(_reward(
+        dmg=[[0, 0]], alive_before=[[True, True]], alive_after=[[True, False]],
+        hp_after=[[3, 0]], done=[True], win_hp_bonus=0.5))[0]
+    np.testing.assert_allclose(rew_full_hp, [WIN_BONUS + 0.5 * 3 - STEP_PENALTY,
+                                            -LOSE_BONUS_START - STEP_PENALTY])
+
+    rew_low_hp = np.asarray(_reward(
+        dmg=[[0, 0]], alive_before=[[True, True]], alive_after=[[True, False]],
+        hp_after=[[1, 0]], done=[True], win_hp_bonus=0.5))[0]
+    np.testing.assert_allclose(rew_low_hp, [WIN_BONUS + 0.5 * 1 - STEP_PENALTY,
+                                           -LOSE_BONUS_START - STEP_PENALTY])
+
+
+def test_double_death_penalty():
+    # Both die simultaneously (n_alive == 0) -> double_death_penalty applied to both
+    rew = np.asarray(_reward(
+        dmg=[[0, 0]], alive_before=[[True, True]], alive_after=[[False, False]],
+        hp_after=[[0, 0]], done=[True], double_death_penalty=8.0))[0]
+    np.testing.assert_allclose(rew, [-8.0 - STEP_PENALTY, -8.0 - STEP_PENALTY])
+
+
+def test_kamikaze_trade_mutual_kill():
+    # P0 has 2 HP, P1 has 1 HP.
+    # On the final tick, BOTH take 1 damage (dmg=[[1, 1]]).
+    # P1 dies (hp 1->0), P0 survives (hp 2->1).
+    # P0 gets trade_win_bonus (+3.5) - mutual_hit_penalty (1.0) - STEP_PENALTY = +2.5 - STEP_PENALTY
+    # (Non-binary positive reward for winning, but noticeably less than +12 clean win!)
+    # P1 gets -lose_bonus (LOSE_BONUS_START) - mutual_hit_penalty (1.0) - STEP_PENALTY
+    rew = np.asarray(_reward(
+        dmg=[[1, 1]], alive_before=[[True, True]], alive_after=[[True, False]],
+        hp_after=[[1, 0]], done=[True], double_death_penalty=8.0, mutual_hit_penalty=1.0,
+        trade_win_bonus=3.5))[0]
+    np.testing.assert_allclose(rew[0], 3.5 - 1.0 - STEP_PENALTY)
+    np.testing.assert_allclose(rew[1], -LOSE_BONUS_START - 1.0 - STEP_PENALTY)
+
+

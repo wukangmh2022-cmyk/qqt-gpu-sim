@@ -282,6 +282,18 @@ def main():
                     help="超时血量落后方固定惩罚")
     ap.add_argument("--timeout-draw-bonus", type=float, default=cfg("reward", "timeout_draw_bonus", 0.0),
                     help="超时平血双方奖励")
+    ap.add_argument("--mutual-hit-penalty", type=float,
+                    default=cfg("reward", "mutual_hit_penalty", 0.0),
+                    help="同 tick 双方互损换血惩罚（同归于尽扣分）")
+    ap.add_argument("--double-death-penalty", type=float,
+                    default=cfg("reward", "double_death_penalty", 0.0),
+                    help="双方同 tick 全部阵亡（真同归于尽）重罚")
+    ap.add_argument("--win-hp-bonus", type=float,
+                    default=cfg("reward", "win_hp_bonus", 0.0),
+                    help="获胜残余生命值加成（每点残血加分）")
+    ap.add_argument("--trade-win-bonus", type=float,
+                    default=cfg("reward", "trade_win_bonus", 3.5),
+                    help="同归于尽/换血险胜奖励（不赶尽杀绝，但低于纯胜）")
     ap.add_argument("--adv-top-frac", type=float, default=cfg("reward", "adv_top_frac", 0.25),
                     help="保留 |Advantage| 排名前比例（历史 Iter68=0.25）")
     ap.add_argument("--no-mask", action="store_true",
@@ -698,7 +710,9 @@ def main():
             args.no_mask, args.obs_quant, args.checkpoint, crate_coef,
             explore_coef, brick_coef, timeout_alpha, lose_bonus,
             args.win_bonus, args.timeout_lead_bonus,
-            args.timeout_trail_penalty, args.timeout_draw_bonus)
+            args.timeout_trail_penalty, args.timeout_draw_bonus,
+            args.mutual_hit_penalty, args.double_death_penalty,
+            args.win_hp_bonus, args.trade_win_bonus)
         obs, state, acts, lps, vals, rew, done, masks = batch
         fobs = both_perspectives(states)
         fmasks = both_masks(states)
@@ -869,6 +883,10 @@ def main():
                 "crate_coef": float(crate_coef),
                 "explore_coef": float(explore_coef),
                 "brick_coef": float(brick_coef),
+                "mutual_hit_penalty": float(args.mutual_hit_penalty),
+                "double_death_penalty": float(args.double_death_penalty),
+                "win_hp_bonus": float(args.win_hp_bonus),
+                "trade_win_bonus": float(args.trade_win_bonus),
                 "lr": float(lr_fn(i)) if "lr_fn" in locals() and callable(lr_fn) else None
             },
             "training_telemetry": {

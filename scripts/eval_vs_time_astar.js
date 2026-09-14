@@ -14,8 +14,8 @@ async function runMatch(model, modelName, domain, numGames = 16) {
   const levels = JSON.parse(fs.readFileSync(path.join(ROOT, 'web', 'assets', 'maps', 'levels.json'), 'utf8'));
   const lvList = Array.isArray(levels) ? levels : (levels.levels || levels.maps);
 
-  let wins = 0, losses = 0, timeouts = 0, mutuals = 0, suicides = 0;
-  let totalTicks = 0, totalBombs = 0;
+  let wins = 0, cleanWins = 0, tradeWins = 0, losses = 0, timeouts = 0, mutuals = 0;
+  let totalTicks = 0, totalBombs = 0, totalMutualHits = 0;
 
   console.log(`\n⚔️ 开始对战: [${modelName}] vs [TimeAStarAI (竞技追猎版)] | 场景: ${domain} | 场次: ${numGames}`);
 
@@ -32,7 +32,8 @@ async function runMatch(model, modelName, domain, numGames = 16) {
     const rng = mulberry32(seed ^ 0x9e3779b9);
 
     let p0Bombs = 0;
-    let p0Suicide = false;
+    let matchMutualHits = 0;
+    let lastP0TookDmg = false;
 
     while (!sim.done && sim.t < 1800) {
       const hpBefore = [sim.hp[0], sim.hp[1]];
@@ -44,34 +45,56 @@ async function runMatch(model, modelName, domain, numGames = 16) {
       if (a0[1] === 1) p0Bombs++;
       sim.step([a0, a1]);
 
-      if (aliveBefore[0] && !sim.alive[0] && aliveBefore[1] && sim.alive[1]) {
-        // 如果己方阵亡而对方未直接接触伤害
-      }
+      const p0TookDmg = aliveBefore[0] && sim.hp[0] < hpBefore[0];
+      const p1TookDmg = aliveBefore[1] && sim.hp[1] < hpBefore[1];
+      if (p0TookDmg && p1TookDmg) matchMutualHits++;
+      lastP0TookDmg = p0TookDmg;
     }
 
     totalTicks += sim.t;
     totalBombs += p0Bombs;
+    totalMutualHits += matchMutualHits;
 
+    let resStr = '平';
     if (!sim.alive[0] && !sim.alive[1]) {
       mutuals++;
+      resStr = '同归双亡';
     } else if (sim.alive[0] && !sim.alive[1]) {
       wins++;
+      if (lastP0TookDmg) {
+        tradeWins++;
+        resStr = '换血同归胜';
+      } else {
+        cleanWins++;
+        resStr = '纯无伤胜';
+      }
     } else if (!sim.alive[0] && sim.alive[1]) {
       losses++;
+      resStr = '负';
     } else {
-      if (sim.hp[0] > sim.hp[1]) wins++;
-      else if (sim.hp[1] > sim.hp[0]) losses++;
-      else timeouts++;
+      if (sim.hp[0] > sim.hp[1]) {
+        wins++;
+        resStr = '超时血多胜';
+      } else if (sim.hp[1] > sim.hp[0]) {
+        losses++;
+        resStr = '超时血少负';
+      } else {
+        timeouts++;
+        resStr = '超时平局';
+      }
     }
 
-    process.stdout.write(`  局 #${g+1}/${numGames}: ${sim.alive[0] ? (sim.alive[1] ? '平' : '胜') : (sim.alive[1] ? '负' : '同归')} (ticks: ${sim.t}, hp: ${sim.hp[0]}:${sim.hp[1]})\n`);
+    process.stdout.write(`  局 #${g+1}/${numGames}: ${resStr} (ticks: ${sim.t}, hp: ${sim.hp[0]}:${sim.hp[1]}, 互损: ${matchMutualHits})\n`);
   }
 
   const wr = ((wins / numGames) * 100).toFixed(1);
+  const cleanWr = ((cleanWins / numGames) * 100).toFixed(1);
+  const tradeRatio = wins > 0 ? ((tradeWins / wins) * 100).toFixed(1) : '0.0';
   const avgTicks = (totalTicks / numGames).toFixed(1);
   const avgBombs = (totalBombs / numGames).toFixed(1);
-  console.log(`📊 战果: 胜=${wins} 负=${losses} 平/超时=${timeouts} 同归=${mutuals} | 胜率=${wr}% | 均长=${avgTicks} ticks | 均放炮=${avgBombs}`);
-  return { domain, wins, losses, timeouts, mutuals, wr, avgTicks, avgBombs };
+  const avgMutual = (totalMutualHits / numGames).toFixed(2);
+  console.log(`📊 战果: 纯胜=${cleanWins}(${cleanWr}%) 换血胜=${tradeWins}(占胜场${tradeRatio}%) 负=${losses} 平/超时=${timeouts} 双亡=${mutuals} | 总胜率=${wr}% | 局均互损=${avgMutual} | 均长=${avgTicks} ticks | 均放炮=${avgBombs}`);
+  return { domain, wins, cleanWins, tradeWins, losses, timeouts, mutuals, wr, cleanWr, tradeRatio, avgTicks, avgBombs, avgMutual };
 }
 
 async function main() {
