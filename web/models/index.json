@@ -1108,6 +1108,24 @@
    "generated_at": "2026-09-13 23:41 UTC"
   },
   {
+   "name": "params_hunt_it00000066_ema",
+   "display_name": "params_hunt_it00000066_ema (⚔️动静追猎新训 it66 818M步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 66,
+   "global_step": 817889280,
+   "source": "params_hunt_it00000066_ema.pkl",
+   "generated_at": "2026-09-15 00:54 UTC"
+  },
+  {
    "name": "params_it00000065_ema",
    "display_name": "params_it00000065_ema (8h长训 it65 805M步 EMA)",
    "arch": "transformer",

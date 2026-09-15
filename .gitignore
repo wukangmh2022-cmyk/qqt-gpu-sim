@@ -62,4 +62,4 @@ params_surgery*.pkl
 !web/models/params_it00000131*
 !web/models/params_it00000065*
 !web/models/params_it00000032*
-
+!web/models/params_hunt_*

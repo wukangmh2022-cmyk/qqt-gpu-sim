@@ -259,15 +259,48 @@ def export_one(path: str, verify: bool, out_dir: str | None = None,
                     and k.endswith("_ln1_g")))
     # 训练进度：ckpt 里没存 it（jax 版不带），从文件名解析（params_it00000204
     # → it=204）；解析不到时退回 ck.get("it")。global_step = it × steps/iter
-    # （8 卡口径 2×16384×256=8.39M，见 scnet_train_8gpu_v8.sh 注释）。
+    # 优先从伴生 meta.json 读取真实精确 global_steps。
     import re
     _m = re.search(r"_it(\d+)", os.path.basename(path))
     it = int(_m.group(1)) if _m else (int(ck.get("it") or 0)
                                       if isinstance(ck, dict) else 0)
     steps_per_iter = 2 * 16384 * 256
+    global_step = it * steps_per_iter
+
+    # 伴生 meta.json 查找（当前目录、ckpt/、ckpt_local/）
+    stem_base = stem.replace("_ema", "")
+    for meta_cand in [
+        path.replace("_ema.pkl", ".meta.json").replace(".pkl", ".meta.json"),
+        os.path.join(os.path.dirname(path), stem_base + ".meta.json"),
+        os.path.join(PROJ, "ckpt", stem_base + ".meta.json"),
+        os.path.join(PROJ, "ckpt_local", stem_base + ".meta.json"),
+    ]:
+        if os.path.isfile(meta_cand):
+            try:
+                with open(meta_cand) as fp:
+                    s_meta = json.load(fp)
+                    if "global_steps" in s_meta:
+                        global_step = int(s_meta["global_steps"])
+                        break
+                    elif "global_step" in s_meta:
+                        global_step = int(s_meta["global_step"])
+                        break
+            except Exception:
+                pass
+
+    disp = stem
+    if "hunt" in stem:
+        g_fmt = f"{global_step / 1e9:.2f}B" if global_step >= 1e9 else f"{global_step / 1e6:.0f}M"
+        disp = f"{stem} (⚔️动静追猎新训 it{it} {g_fmt}步{' EMA' if '_ema' in stem else ''})"
+    elif it == 1100:
+        disp = f"{stem} (🏆8h长训全量完赛 13.8B步{' EMA' if '_ema' in stem else ' 生权重'})"
+    elif it > 0:
+        g_fmt = f"{global_step / 1e9:.2f}B" if global_step >= 1e9 else f"{global_step / 1e6:.0f}M"
+        disp = f"{stem} (8h长训 it{it} {g_fmt}步{' EMA' if '_ema' in stem else ''})"
+
     meta = {
         "name": stem,
-        "display_name": stem,
+        "display_name": disp,
         "arch": "transformer",
         "obs_shape": [c, h, w],
         "embed": embed,
@@ -275,7 +308,7 @@ def export_one(path: str, verify: bool, out_dir: str | None = None,
         "depth": depth,
         "n_players": 2,
         "it": it,
-        "global_step": it * steps_per_iter,
+        "global_step": global_step,
         "source": os.path.basename(path),
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
@@ -363,7 +396,7 @@ def main():
     print(f"\n导出完成: {ok}/{len(paths)}")
     # index.json 由目录扫描重建（与 export_ckpt.py 同一逻辑，保证旧模型不丢）
     try:
-        from export_ckpt import scan_out_dir
+        from deploy.export_ckpt import scan_out_dir
         metas = scan_out_dir(out_dir)
         if metas:
             metas.sort(key=lambda m: m.get("global_step") or m.get("it") or 0,
