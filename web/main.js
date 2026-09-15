@@ -1375,7 +1375,7 @@
   }
 
   async function loadModelList() {
-    const resp = await fetch('models/index.json?v=20260915-all-dates-fixed');
+    const resp = await fetch('models/index.json?v=20260915-v3-fresh');
     modelList = (await resp.json()).models || [];
     // 按时间倒序排列（最新导出的模型排在最前）
     modelList.sort((a, b) => {
