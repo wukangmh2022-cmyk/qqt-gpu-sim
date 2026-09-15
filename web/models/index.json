@@ -843,6 +843,24 @@
    "generated_at": "2026-08-20 13:28 UTC"
   },
   {
+   "name": "params_hunt_it00000132_ema",
+   "display_name": "params_hunt_it00000132_ema (⚔️动静追猎新训 it132 1.65B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 132,
+   "global_step": 1648361472,
+   "source": "params_hunt_it00000132_ema.pkl",
+   "generated_at": "2026-09-15 01:27 UTC"
+  },
+  {
    "name": "params_it00000105",
    "display_name": "params_it00000105 (8h长训 it105 1.64B步)",
    "arch": "transformer",
