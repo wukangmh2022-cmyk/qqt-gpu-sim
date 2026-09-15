@@ -14,6 +14,7 @@
     "n_players": 2,
     "it": 210,
     "global_step": 1972371456,
-    "source": "params_aggr_it00000210_ema.pkl"
+    "source": "params_aggr_it00000210_ema.pkl",
+    "generated_at": "2026-09-14 01:31 UTC"
   }
 }

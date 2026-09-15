@@ -1375,13 +1375,13 @@
   }
 
   async function loadModelList() {
-    const resp = await fetch('models/index.json?v=20260904-serve-no-autoexport');
+    const resp = await fetch('models/index.json?v=20260915-all-dates-fixed');
     modelList = (await resp.json()).models || [];
     // 按时间倒序排列（最新导出的模型排在最前）
     modelList.sort((a, b) => {
       const parseTime = (str) => {
         if (!str) return 0;
-        const norm = str.replace(' UTC', 'Z').replace(' ', 'T');
+        const norm = str.replace(' UTC', 'Z').replace(' CST', '+08:00').replace(' ', 'T');
         const t = Date.parse(norm);
         return isNaN(t) ? 0 : t;
       };

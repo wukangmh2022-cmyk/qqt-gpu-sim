@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "name": "params_8h_it00000068_ema",
+    "display_name": "params_8h_it00000068_ema (8h训 30m快照 EMA)",
+    "arch": "transformer",
+    "obs_shape": [
+      14,
+      13,
+      15
+    ],
+    "embed": 392,
+    "patch": 3,
+    "depth": 4,
+    "n_players": 2,
+    "it": 68,
+    "global_step": 1053818880,
+    "source": "params_8h_it00000068_ema.pkl",
+    "generated_at": "2026-09-13 22:36 UTC"
+  }
+}
