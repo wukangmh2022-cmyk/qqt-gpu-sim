@@ -294,22 +294,32 @@ def _fresh(key) -> BombState:
         hp = jnp.full((2,), MAX_HP, jnp.int32)
         invuln = jnp.zeros((2,), jnp.int32)
 
-        # 域随机化初始属性（仅对纯空场景 s.is_open 永久化开启）：
-        # 5 档离散均匀插值（50%~100% 战力），局内 P0/P1 对称一致（同一 alpha），模拟各类终局/残局战力差对决。
-        # 其余地图（功夫、新年瑞兽、比武等）保持 s.lo 初始值，保留开荒发育过程。
-        tier = jax.random.randint(k_stat, (), 0, 5)
-        alpha = tier.astype(jnp.float32) / 4.0
-        rand_b = jnp.round(s.lo[0] + alpha * (s.caps[0] - s.lo[0]))
-        rand_z = jnp.round(s.lo[1] + alpha * (s.caps[1] - s.lo[1]))
-        rand_sp = s.lo[2] + alpha * (s.caps[2] - s.lo[2])
+        # 域随机化初始属性：
+        # 1. 场景覆盖：纯空场景 s.is_open 恒开启；其余全部复杂地图按 35% 概率开启残局/中局战力对决（其余 65% 保留原生低属性开荒）。
+        # 2. 非对称战力对抗：P0 与 P1 战力独立随机（alpha0 与 alpha1 独立采样），让 AI 充分经历以弱打强与以强打弱。
+        k_dr, k_stat0, k_stat1 = jax.random.split(k_stat, 3)
+        use_dr = s.is_open | (jax.random.uniform(k_dr, ()) < 0.35)
+        tier0 = jax.random.randint(k_stat0, (), 0, 5)
+        tier1 = jax.random.randint(k_stat1, (), 0, 5)
+        alpha0 = tier0.astype(jnp.float32) / 4.0
+        alpha1 = tier1.astype(jnp.float32) / 4.0
 
-        bombs_init = jnp.where(s.is_open, rand_b, s.lo[0])
-        blast_init = jnp.where(s.is_open, rand_z, s.lo[1])
-        spd_init = jnp.where(s.is_open, rand_sp, s.lo[2])
+        rand_b = jnp.stack([
+            jnp.round(s.lo[0] + alpha0 * (s.caps[0] - s.lo[0])),
+            jnp.round(s.lo[0] + alpha1 * (s.caps[0] - s.lo[0])),
+        ])
+        rand_z = jnp.stack([
+            jnp.round(s.lo[1] + alpha0 * (s.caps[1] - s.lo[1])),
+            jnp.round(s.lo[1] + alpha1 * (s.caps[1] - s.lo[1])),
+        ])
+        rand_sp = jnp.stack([
+            s.lo[2] + alpha0 * (s.caps[2] - s.lo[2]),
+            s.lo[2] + alpha1 * (s.caps[2] - s.lo[2]),
+        ])
 
-        bombs_cap = jnp.full((2,), bombs_init, jnp.float32)
-        blast_cap = jnp.full((2,), blast_init, jnp.float32)
-        spd_g = jnp.full((2,), spd_init, jnp.float32)
+        bombs_cap = jnp.where(use_dr, rand_b, s.lo[0])
+        blast_cap = jnp.where(use_dr, rand_z, s.lo[1])
+        spd_g = jnp.where(use_dr, rand_sp, s.lo[2])
         buffs = jnp.zeros((2,), jnp.int8)          # 预留位（见 BombState 注释）
         debuffs = jnp.zeros((2,), jnp.int8)
         items = jnp.zeros((2, 4), jnp.int8)
@@ -954,14 +964,21 @@ def step(state: BombState, actions: jnp.ndarray, key, auto_reset: bool = True,
         ti = pi + dy * W + dx
         in_b = (ti >= 0) & (ti < H * W)
         ti_c = jnp.clip(ti, 0, H * W - 1)
+        tr, tc = ti_c // W, ti_c % W                # 目标格 2D（~in_b 时 do_move=False 写入无效）
+        opp = 1 - me
+        opp_y, opp_x = pos[opp, 0], pos[opp, 1]
+        opp_in_ti = (alive0[opp]
+                     & (opp_y + RADIUS > tr.astype(jnp.float32) + EPS)
+                     & (opp_y - RADIUS < tr.astype(jnp.float32) + 1.0 - EPS)
+                     & (opp_x + RADIUS > tc.astype(jnp.float32) + EPS)
+                     & (opp_x - RADIUS < tc.astype(jnp.float32) + 1.0 - EPS))
         ok = (in_b & ~wall.reshape(-1)[ti_c] & ~brick.reshape(-1)[ti_c]
               & (fuse.reshape(-1)[ti_c] <= 0)
               & (crate.reshape(-1)[ti_c] == 0)
-              & ~pushable.reshape(-1)[ti_c])
+              & ~pushable.reshape(-1)[ti_c]
+              & ~opp_in_ti)
         push_me = alive0[me] & (dirs[me] != 4) & fl & in_f
         pt = push_t.reshape(-1)[pi]
-        # 写入必须用 2D 索引（flat 索引在 (H,W) 数组上会被静默 clamp 到末行）
-        tr, tc = ti_c // W, ti_c % W                # 目标格 2D（~in_b 时 do_move=False 写入无效）
         push_t = push_t.at[pr, pc].set(
             jnp.where(push_me & ok, pt + 0.1,
                       jnp.where(push_me, 0.0, pt)))   # 推不动清零
@@ -1288,26 +1305,39 @@ def global_vec(state: BombState, pid: int) -> jnp.ndarray:
     与 make_obs 的格子通道互补：血量/成长属性/存活/道具是"时间序列标量"，
     论文式双序列输入的第二路（state token）。
     """
+    t = state.t.astype(jnp.float32) / float(MAX_STEPS)
     hp = state.hp.astype(jnp.float32) / float(MAX_HP)
     b = state.bombs_cap / float(GROWTH_BOMBS_MAX)
     z = state.blast_cap / float(GROWTH_BLAST_MAX)
     sp = state.spd_g / float(GROWTH_SPEED_MAX)
     alive = state.alive.astype(jnp.float32)
-    t = state.t.astype(jnp.float32) / float(MAX_STEPS)
-    buff = state.buffs.astype(jnp.float32) / 7.0
-    debuff = state.debuffs.astype(jnp.float32) / 3.0
-    items = state.items.astype(jnp.float32) / 63.0
-    gtype = state.gametype.astype(jnp.float32) / 15.0
+    if levels.active() is not None:
+        caps = levels.active().caps[jnp.maximum(state.level_id, 0)]
+    else:
+        caps = jnp.array([float(GROWTH_BOMBS_MAX), float(GROWTH_BLAST_MAX), float(GROWTH_SPEED_MAX)], jnp.float32)
+
+    my_b_full = (state.bombs_cap[pid] >= caps[0]).astype(jnp.float32)
+    my_z_full = (state.blast_cap[pid] >= caps[1]).astype(jnp.float32)
+    my_s_full = (state.spd_g[pid] >= caps[2] - 1e-4).astype(jnp.float32)
+    my_all_full = (my_b_full * my_z_full * my_s_full).astype(jnp.float32)
+
+    opp_b_full = (state.bombs_cap[1 - pid] >= caps[0]).astype(jnp.float32)
+    opp_z_full = (state.blast_cap[1 - pid] >= caps[1]).astype(jnp.float32)
+    opp_s_full = (state.spd_g[1 - pid] >= caps[2] - 1e-4).astype(jnp.float32)
+
     return jnp.stack([
         t, hp[pid], hp[1 - pid],
         b[pid], z[pid], sp[pid],
         b[1 - pid], z[1 - pid], sp[1 - pid],
         alive[pid], alive[1 - pid],
-        buff[pid], buff[1 - pid],
-        debuff[pid], debuff[1 - pid],
-        items[pid, 0], items[pid, 1], items[pid, 2], items[pid, 3],
-        items[1 - pid, 0], items[1 - pid, 1], items[1 - pid, 2], items[1 - pid, 3],
-        gtype,
+        caps[0] / float(GROWTH_BOMBS_MAX),
+        caps[1] / float(GROWTH_BLAST_MAX),
+        caps[2] / float(GROWTH_SPEED_MAX),
+        my_b_full, my_z_full, my_s_full, my_all_full,
+        caps[0] / float(GROWTH_BOMBS_MAX),
+        caps[1] / float(GROWTH_BLAST_MAX),
+        caps[2] / float(GROWTH_SPEED_MAX),
+        opp_b_full, opp_z_full, opp_s_full,
     ])
 
 

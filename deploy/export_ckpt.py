@@ -32,7 +32,10 @@ import struct
 import sys
 from datetime import datetime, timezone
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJ not in sys.path:
@@ -400,9 +403,9 @@ def scan_out_dir(out_dir: str = OUT_DIR) -> list[dict]:
     """扫描 web/models/*.json（除 index.json）的 meta，重建完整模型列表。
 
     index.json 永远由目录扫描生成（而不是只写"本次导出"的模型）——
-    否则增量导出时旧模型会从 index 里消失（8B 档单独被重新导出就把
-    列表覆盖成 1 个的 bug，2026-08-16 修复）。
+    否则增量导出时旧模型会从 index 里消失。
     """
+    import re
     metas = []
     for f in sorted(os.listdir(out_dir)):
         if not f.endswith(".json") or f == "index.json":
@@ -410,14 +413,50 @@ def scan_out_dir(out_dir: str = OUT_DIR) -> list[dict]:
         stem = f[:-5]
         if stem in EXCLUDED_MODELS:
             continue
+        file_path = os.path.join(out_dir, f)
+        meta = None
         try:
-            with open(os.path.join(out_dir, f)) as fp:
-                doc = json.load(fp)
-            meta = doc.get("meta")
-            if meta and meta.get("name") not in EXCLUDED_MODELS:
-                metas.append(meta)
+            with open(file_path, "r", encoding="utf-8") as fp:
+                head = fp.read(8192)
+                m = re.search(r'\"meta\"\s*:\s*(\{.*?\})\s*,\s*\"', head, re.DOTALL)
+                if m:
+                    meta = json.loads(m.group(1))
+                else:
+                    fp.seek(0)
+                    doc = json.load(fp)
+                    meta = doc.get("meta")
         except Exception:
             continue                       # 半截 json：跳过不阻塞
+
+        if meta and meta.get("name") not in EXCLUDED_MODELS:
+            # 关联 ckpt / ckpt_local 伴生元数据校准真实 step
+            stem_base = meta.get("name", stem).replace("_ema", "")
+            for mc in [
+                os.path.join(PROJ, "ckpt", stem_base + ".meta.json"),
+                os.path.join(PROJ, "ckpt_local", stem_base + ".meta.json"),
+            ]:
+                if os.path.isfile(mc):
+                    try:
+                        with open(mc) as mfp:
+                            sm = json.load(mfp)
+                            if "global_steps" in sm:
+                                meta["global_step"] = int(sm["global_steps"])
+                            elif "global_step" in sm:
+                                meta["global_step"] = int(sm["global_step"])
+                            break
+                    except Exception:
+                        pass
+
+            it = meta.get("it")
+            gstep = meta.get("global_step") or 0
+            name = meta.get("name", stem)
+            if meta.get("display_name") == name or not meta.get("display_name"):
+                if it == 1100:
+                    meta["display_name"] = f"{name} (🏆8h长训全量完赛 13.8B步{' EMA' if '_ema' in name else ' 生权重'})"
+                elif it is not None and it > 0 and "params_it" in name:
+                    g_fmt = f"{gstep / 1e9:.2f}B" if gstep >= 1e9 else f"{gstep / 1e6:.0f}M"
+                    meta["display_name"] = f"{name} (8h长训 it{it} {g_fmt}步{' EMA' if '_ema' in name else ''})"
+            metas.append(meta)
     return metas
 
 

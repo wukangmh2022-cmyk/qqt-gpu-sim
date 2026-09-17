@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 9 节点 18 卡 DCU 进阶进攻超长训 - 优雅刺客与血量保全版 (Warm-Start 继承 it594)
+# DCU 进阶进攻超长训 - 优雅刺客与血量保全版 (Warm-Start 继承 it349_ema)
 # 由 configs/long_8h_aggressive_clean.toml 全权驱动
 # ==============================================================================
 set -euo pipefail
@@ -9,8 +9,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 NODES_FILE="$SCRIPT_DIR/nodes_current.txt"
 CONFIG_REL="configs/long_8h_aggressive_clean.toml"
-
-NW=9  # 当前在线的 9 台双卡机器共 18 卡
 
 # 1. 读取节点
 N_PORT=(); N_HOST=(); N_PASS=()
@@ -28,91 +26,107 @@ while IFS= read -r line || [ -n "$line" ]; do
     N_HOST+=("$PENDING_HOST")
     N_PASS+=("$line")
     PENDING_PORT=""; PENDING_HOST=""
-    [ "${#N_PORT[@]}" -ge "$NW" ] && break
   fi
 done < "$NODES_FILE"
 
-echo "=== 已提取全部 $NW 台节点用于 18 卡优雅刺客长训 ==="
+NW=${#N_PORT[@]}
+echo "=== 已提取全部 $NW 台在线双卡节点用于 $((NW * 2)) 卡优雅刺客长训 ==="
 
 WORK="/tmp/aggressive_clean_work"
 rm -rf "$WORK" && mkdir -p "$WORK"
 
 for i in $(seq 0 $((NW-1))); do
   cat > "$WORK/cmd_$i" <<EOcmd
-#!/usr/bin/expect -f
-set timeout 45
-set cmd [lindex \$argv 0]
-spawn ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p ${N_PORT[$i]} root@${N_HOST[$i]} \$cmd
-expect {
-  "password:" { send "${N_PASS[$i]}\r"; exp_continue }
-  "yes/no" { send "yes\r"; exp_continue }
-  eof { }
-  timeout { puts "TIMEOUT_$i" }
-}
+#!/bin/bash
+exec /opt/homebrew/bin/sshpass -p "${N_PASS[$i]}" ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15 -p ${N_PORT[$i]} root@${N_HOST[$i]} "\$@"
 EOcmd
   cat > "$WORK/scp_$i" <<EOscp
-#!/usr/bin/expect -f
-set timeout 300
-set src [lindex \$argv 0]
-set dst [lindex \$argv 1]
-spawn scp -o StrictHostKeyChecking=accept-new -P ${N_PORT[$i]} \$src root@${N_HOST[$i]}:\$dst
-expect {
-  "password:" { send "${N_PASS[$i]}\r"; exp_continue }
-  "yes/no" { send "yes\r"; exp_continue }
-  eof { }
-  timeout { puts "SCP_TIMEOUT_$i" }
-}
+#!/bin/bash
+exec /opt/homebrew/bin/sshpass -p "${N_PASS[$i]}" scp -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -P ${N_PORT[$i]} "\$1" "root@${N_HOST[$i]}:\$2"
 EOscp
   chmod +x "$WORK/cmd_$i" "$WORK/scp_$i"
 done
 
-echo "=== [1/4] 清理全部 9 台节点历史训练残留进程 ==="
+echo "=== [1/4] 清理全部 $NW 台节点历史训练残留进程 ==="
 for i in $(seq 0 $((NW-1))); do
   ( "$WORK/cmd_$i" "pkill -9 -f train_real 2>/dev/null; pkill -9 -f multicard_train 2>/dev/null; true" >/dev/null 2>&1 ) &
 done
 wait
-echo "  ✓ 9 台节点清理完毕"
+echo "  ✓ $NW 台节点清理完毕"
 
-echo "=== [2/4] 打包并同步最新代码、配置与 it594 底模到全部 9 节点 ==="
-rm -rf /tmp/jaxbomb_clean && mkdir -p /tmp/jaxbomb_clean/scripts /tmp/jaxbomb_clean/web/assets/maps /tmp/jaxbomb_clean/configs /tmp/jaxbomb_clean/ckpt /tmp/jaxbomb_clean/tests
+echo "=== [2/4] 打包并同步最新代码、配置、wheels 与 it349_ema 底模到全部 $NW 节点 ==="
+rm -rf /tmp/jaxbomb_clean && mkdir -p /tmp/jaxbomb_clean/scripts /tmp/jaxbomb_clean/web/assets/maps /tmp/jaxbomb_clean/configs /tmp/jaxbomb_clean/ckpt /tmp/jaxbomb_clean/tests /tmp/jaxbomb_clean/wheels
 cp -r "$ROOT/jax_bomb" /tmp/jaxbomb_clean/
 cp -r "$ROOT/tests" /tmp/jaxbomb_clean/
 cp "$ROOT/scripts/cluster_selfcheck.py" /tmp/jaxbomb_clean/cluster_selfcheck.py
 cp "$ROOT/levels.json" /tmp/jaxbomb_clean/levels.json
 cp -r "$ROOT/configs"/* /tmp/jaxbomb_clean/configs/
-cp "$ROOT/ckpt/params_clean_it251_ema.pkl" /tmp/jaxbomb_clean/ckpt/
+cp "$ROOT/ckpt/params_it00000349_ema.pkl" /tmp/jaxbomb_clean/ckpt/
+cp /tmp/dcu_wheels/*.whl /tmp/jaxbomb_clean/wheels/
+
+cat > /tmp/jaxbomb_clean/start_rank.sh <<'EOSTR'
+#!/bin/bash
+RANK=$1
+WORLD_SIZE=$2
+MASTER=$3
+CONFIG=$4
+
+export WORLD_SIZE=$WORLD_SIZE
+export RANK=$RANK
+export MASTER_ADDR=$MASTER
+export MASTER_PORT=29500
+
+source /opt/dtk/env.sh 2>/dev/null
+unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
+export LD_PRELOAD=$(ls /usr/mpi/gcc/openmpi-*/lib/libmpi.so /public/software/mpi/*/lib/libmpi.so 2>/dev/null | head -1)
+
+cd /root/private_data/qqt-gpu-sim_r$RANK
+nohup python3 -u -m jax_bomb.train_real --config $CONFIG </dev/null > /root/private_data/train_r$RANK.log 2>&1 &
+echo "STARTED_RANK_$RANK"
+EOSTR
+chmod +x /tmp/jaxbomb_clean/start_rank.sh
+
 find /tmp/jaxbomb_clean -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
-(cd /tmp/jaxbomb_clean && tar czf /tmp/jaxbomb_clean.tgz jax_bomb tests levels.json configs ckpt cluster_selfcheck.py)
+(cd /tmp/jaxbomb_clean && tar czf /tmp/jaxbomb_clean.tgz jax_bomb tests levels.json configs ckpt cluster_selfcheck.py start_rank.sh wheels)
 
 for i in $(seq 0 $((NW-1))); do
   (
     "$WORK/scp_$i" /tmp/jaxbomb_clean.tgz /root/private_data/ >/dev/null 2>&1
-    "$WORK/cmd_$i" "cd /root/private_data && rm -rf qqt-gpu-sim_r$i && mkdir -p qqt-gpu-sim_r$i && tar xzf jaxbomb_clean.tgz -C qqt-gpu-sim_r$i" >/dev/null 2>&1
-    echo "  ✓ [rank $i] 代码与 it594 底模部署完成"
+    "$WORK/cmd_$i" "cd /root/private_data && rm -rf qqt-gpu-sim_r$i && mkdir -p qqt-gpu-sim_r$i && tar xzf jaxbomb_clean.tgz -C qqt-gpu-sim_r$i && pip install --quiet --no-index --find-links=/root/private_data/qqt-gpu-sim_r$i/wheels --no-deps /root/private_data/qqt-gpu-sim_r$i/wheels/*.whl >/dev/null 2>&1 || true" >/dev/null 2>&1
+    echo "  ✓ [rank $i] 代码、wheels 与 it349_ema 底模部署完成"
   ) &
 done
 wait
 
-echo "=== [3/4] 获取 Rank0 内网协调 IP ==="
-N_IP=()
+echo "=== [3/4] 集群自检与获取 Rank0 内网协调 IP ==="
 for i in $(seq 0 $((NW-1))); do
-  ip=$("$WORK/cmd_$i" "hostname -I" | grep -oE '172\.31\.[0-9]+\.[0-9]+' | head -1)
-  N_IP+=("$ip")
-  echo "  rank $i ${N_HOST[$i]}:${N_PORT[$i]} -> $ip"
+  (
+    sleep 0.$((i % 4))
+    res=$("$WORK/cmd_$i" "source /opt/dtk/env.sh 2>/dev/null; export LD_PRELOAD=\$(ls /usr/mpi/gcc/openmpi-*/lib/libmpi.so /public/software/mpi/*/lib/libmpi.so 2>/dev/null | head -1); cd /root/private_data/qqt-gpu-sim_r$i && python3 cluster_selfcheck.py 2>/dev/null || true")
+    echo "  [rank $i] $res"
+  ) &
 done
-MASTER="${N_IP[0]:-127.0.0.1}"
-[ "$MASTER" = "127.0.0.1" ] && { echo "rank0 IP 获取失败"; exit 1; }
+wait
 
-echo "=== [4/4] 启动 9 节点 18 卡新训练 (MASTER: ${MASTER}:29500, NW=$NW) ==="
-# Rank 0
-"$WORK/cmd_0" "cd /root/private_data/qqt-gpu-sim_r0 && export WORLD_SIZE=$NW RANK=0 MASTER_ADDR=$MASTER MASTER_PORT=29500 && source /opt/dtk/env.sh 2>/dev/null && unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy && export LD_PRELOAD=\$(ls /usr/mpi/gcc/openmpi-*/lib/libmpi.so /public/software/mpi/*/lib/libmpi.so 2>/dev/null | head -1) && nohup python3 -u -m jax_bomb.train_real --config $CONFIG_REL </dev/null > /root/private_data/train_r0.log 2>&1 & echo RANK_0_LAUNCHED" | tail -1
+MASTER=$("$WORK/cmd_0" "hostname -I" | tr -d '\r' | grep -oE '172\.31\.[0-9]+\.[0-9]+' | head -1 || true)
+if [ -z "$MASTER" ]; then
+  MASTER="172.31.203.105"
+fi
+echo "  ✓ Rank 0 协调 IP: $MASTER"
 
-# Rank 1..8
+echo "=== [4/4] 启动 $NW 节点 $((NW * 2)) 卡新训练 (MASTER: ${MASTER}:29500, NW=$NW) ==="
+# Rank 0 先行启动 coordinator
+"$WORK/cmd_0" "bash /root/private_data/qqt-gpu-sim_r0/start_rank.sh 0 $NW $MASTER $CONFIG_REL"
+
+sleep 3
+
+# Rank 1..$((NW-1))
 for i in $(seq 1 $((NW-1))); do
   (
-    "$WORK/cmd_$i" "cd /root/private_data/qqt-gpu-sim_r$i && export WORLD_SIZE=$NW RANK=$i MASTER_ADDR=$MASTER MASTER_PORT=29500 && source /opt/dtk/env.sh 2>/dev/null && unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy && export LD_PRELOAD=\$(ls /usr/mpi/gcc/openmpi-*/lib/libmpi.so /public/software/mpi/*/lib/libmpi.so 2>/dev/null | head -1) && nohup python3 -u -m jax_bomb.train_real --config $CONFIG_REL </dev/null > /root/private_data/train_r$i.log 2>&1 & echo RANK_${i}_LAUNCHED" | tail -1
+    sleep 0.$((i % 4))
+    "$WORK/cmd_$i" "bash /root/private_data/qqt-gpu-sim_r$i/start_rank.sh $i $NW $MASTER $CONFIG_REL"
   ) &
 done
 wait
 
-echo "=== 全部 $NW 个 Rank (18 张 DCU 卡) 已全量点火，优雅刺客长训正式启动！ ==="
+echo "=== 全部 $NW 个 Rank ($((NW * 2)) 张 DCU 卡) 已全量点火，优雅刺客长训正式启动！ ==="

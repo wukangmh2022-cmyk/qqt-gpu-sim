@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 ckpt/
+ckpt_*/
 
 .DS_Store
 .env
@@ -62,4 +63,5 @@ params_surgery*.pkl
 !web/models/params_it00000131*
 !web/models/params_it00000065*
 !web/models/params_it00000032*
-!web/models/params_hunt_*
+# !web/models/params_hunt_*
+eval_local/

@@ -163,6 +163,11 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   const enemyDisplayName = qqt.enemySel === '__time_astar_hunt__' ? '高级时空 A*（竞技追猎版）' : (qqt.model ? qqt.model.meta.name : qqt.enemySel);
   console.log(`按空格开局成功: 敌人: ${enemyDisplayName}  地图: ${qqt.sim.level.name}`);
+  if (qqt.sim.initialHp !== 1) {
+    console.error(`FAIL: 普通地图（${qqt.sim.level.name}）初始血量应为 1，实际为 ${qqt.sim.initialHp}`);
+    process.exit(1);
+  }
+  console.log(`普通地图默认初始血量 1 格校验通过: hp=${qqt.sim.hp[0]} ✔`);
 
   // 当前加载敌人名正确显示
   const curText = els['cur-model'].textContent;
@@ -172,16 +177,16 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log(`当前敌人显示: ${curText} ✔`);
 
-  // 敌人 AI 下拉已有选项（静止 + 规则 Hunter + 高级时空 A*(追猎) + 高级时空 A*(漫游) + 模型列表）
+  // 敌人 AI 下拉已有选项（静态死靶 + 静止守备 + 逃跑反击 + 纯漫游 + 规则 Hunter + 高级时空 A*(追猎) + 高级时空 A*(漫游) + 模型列表）
   const aiCount = els['enemy-ai'].children.length;
   const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'web', 'models', 'index.json'), 'utf8'));
   const modelCount = idx.models ? idx.models.length : idx.length;
-  const expectAi = modelCount + 4;   // 静止 + 规则 Hunter + 高级时空 A*(追猎) + 高级时空 A*(漫游) + 模型数
+  const expectAi = modelCount + 7;   // 4 规则基础 + 3 高级规则 + 模型数
   if (aiCount !== expectAi) {
-    console.error(`FAIL: 敌人 AI 下拉应 ${expectAi} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter + 双版本高级时空 A*），实际 ${aiCount}`);
+    console.error(`FAIL: 敌人 AI 下拉应 ${expectAi} 个候选（${modelCount} 模型 + 7 个内置规则），实际 ${aiCount}`);
     process.exit(1);
   }
-  console.log(`敌人 AI 下拉: ${aiCount} 个候选（${modelCount} 模型 + 静止 + 规则 Hunter + 双版本高级时空 A*）✔`);
+  console.log(`敌人 AI 下拉: ${aiCount} 个候选（${modelCount} 模型 + 7 个内置规则）✔`);
 
   // 点击「应用」重载当前选中敌人 AI，不炸
   const click = (id) => (els[id].listeners['click'] || []).forEach((fn) => fn());
@@ -224,7 +229,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   console.log('敌人 AI 切到高级时空 A*（经典漫游连炮版）后正常 ✔');
 
   // 切回规则 Hunter（后续观战测试需要快速放泡产生爆炸特效）
-  const defaultModel = els['enemy-ai'].children[1].value;
+  const defaultModel = '__hunter__';
   els['enemy-ai'].value = defaultModel;
   (els['enemy-ai'].listeners['change'] || []).forEach((fn) => fn());
   await wait(400);
@@ -236,6 +241,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   els['bgm'].checked = false;
   (els['bgm'].listeners['change'] || []).forEach((fn) => fn());
   console.log('BGM 开关切换正常（on/off）✔');
+
+  // AI 反应时延下拉切换：默认 100ms，切换至 150/200/250/300ms 触发重置
+  if (els['ai-latency']) {
+    for (const lat of ['150', '200', '250', '300', '100']) {
+      els['ai-latency'].value = lat;
+      (els['ai-latency'].listeners['change'] || []).forEach((fn) => fn());
+    }
+    console.log('AI 反应时延下拉多档位切换正常 ✔');
+  }
 
   // 观战勾选 → 「我方：」下拉显示
   els['spectate'].checked = true;

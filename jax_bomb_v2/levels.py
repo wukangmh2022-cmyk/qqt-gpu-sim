@@ -257,6 +257,9 @@ def set_active(path: str, weights: str | dict = "empty=0.05,功夫=0.1,比武=0.
         cnt[i] = c_i
         for j, (r, c) in enumerate(sp[:S_MAX]):
             spawns[i, j] = (r, c)
+            if 0 <= r < h and 0 <= c < w:
+                brick[i, r, c] = False
+                wall[i, r, c] = False
         for (r, c) in lvl.get("initial_crates", []):
             if 0 <= r < h and 0 <= c < w:
                 crate[i, r, c] = True

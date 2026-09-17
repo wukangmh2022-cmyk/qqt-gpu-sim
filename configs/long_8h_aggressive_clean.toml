@@ -30,13 +30,13 @@ patch = 3
 heads = 4
 ff_factor = 4
 obs_channels = 14
-init_params = "ckpt/params_clean_it251_ema.pkl"
+init_params = "ckpt/params_it00000349_ema.pkl"
 ema_decay = 0.995
 
 [rollout]
-num_envs = 18432
+num_envs = 24576
 num_steps = 256
-minibatch = 18432
+minibatch = 24576
 epochs = 2
 
 [optimizer]
@@ -48,22 +48,23 @@ vf_coef = 0.5
 ent_coef = 0.01
 
 [reward]
-profile = "dense_win10_symmetric_pre_asym"
+profile = "dense_win6_natural_flee"
 step_penalty = 0.002
 hit_reward = 1.5
-win_bonus = 10.0
+win_bonus = 6.0
 trade_win_bonus = 3.5
-lose_bonus_start = 10.0
-lose_bonus_floor = 10.0
+lose_bonus_start = 6.0
+lose_bonus_floor = 5.0
 mutual_hit_penalty = 1.0
-double_death_penalty = 8.0
+double_death_penalty = 5.0
 win_hp_bonus = 0.5
+flee_bot_ratio = 0.20
 timeout_mode = "hp_diff_scaled"
 timeout_max_bonus = 2.0
 timeout_per_hp = 0.5
 timeout_alpha_mode = "shared_linear_anneal"
 timeout_lead_bonus = 2.0
-timeout_trail_penalty = 6.0
+timeout_trail_penalty = 5.0
 timeout_draw_bonus = -2.0
 adv_top_frac = 0.25
 crate_reward_coef = 0.5
@@ -83,7 +84,7 @@ v_max = 20.0
 sigma = 1.5
 
 [distributed]
-world_size = 9
+world_size = 12
 local_gpus = 2
 lsgd_k = 32
 lsgd_mode = "param"

@@ -52,7 +52,8 @@
         elLoading = $('loading'), elLoadingText = $('loading-text'),
         elSaveReplay = $('save-replay'), elSaveGif = $('save-gif'), elRecClip = $('rec-clip'),
         elSaveVideo = $('save-video'), elRecMsg = $('rec-msg'),
-        elModelLowfreq = $('model-lowfreq'),
+        elAiLatency = $('ai-latency') || $('model-lowfreq'),
+        elModelLowfreq = elAiLatency,
         elP0WinFill = $('p0-win-fill'), elP1WinFill = $('p1-win-fill'),
         elP0WinPct = $('p0-win-pct'), elP1WinPct = $('p1-win-pct'),
         elP0WinName = $('p0-win-name'), elP1WinName = $('p1-win-name');
@@ -64,6 +65,20 @@
     const my = (e.clientY - rect.top - canvas.clientTop) * (canvas.height / (rect.height - 2 * canvas.clientTop)) - BOARD_OFFSET;
     const gc = Math.floor(mx / CELL), gr = Math.floor(my / CELL);
     return gr >= 0 && gr < H && gc >= 0 && gc < W ? { r: gr, c: gc } : null;
+  }
+
+  function isBiwuOrDuobao(l) {
+    if (!l) return false;
+    const cat = l.category || '';
+    const mode = l.mode || '';
+    const name = l.name || '';
+    return cat.includes('比武') || cat.includes('夺宝') ||
+           mode.includes('比武') || mode.includes('夺宝') ||
+           name.includes('比武') || name.includes('夺宝');
+  }
+
+  function defaultLevelHp(l) {
+    return isBiwuOrDuobao(l) ? 5 : 1;
   }
 
   function cardinalDestinationLegalAt(y, x, dir) {
@@ -295,6 +310,12 @@
   let spaceDownSince = 0, joyDownSince = 0;   // 按下时刻: 长按>180ms 才连放, 点按=1颗
   const hunter = new Q.HunterAI();   // 规则 AI（纯进攻寻路），可当敌/我方
   const HUNTER_VAL = '__hunter__';   // 下拉里规则 AI 的 value 哨兵
+  const stationaryDefense = Q.StationaryDefenseAI ? new Q.StationaryDefenseAI() : null;
+  const fleeBot = Q.FleeBotAI ? new Q.FleeBotAI() : null;
+  const roamBot = Q.RoamBotAI ? new Q.RoamBotAI() : null;
+  const STATIONARY_VAL = '__stationary__'; // 静止守备（原地驻留 · 敌近放炮反击）
+  const FLEE_BOT_VAL = '__flee_bot__';     // 逃跑反击 Bot（训练同款：远离对手+贴身落雷）
+  const ROAM_BOT_VAL = '__roam_bot__';     // 纯漫游 Bot（训练同款：全图游走不放炮）
   const timeAStarClass = Q.TimeAStarAI || (typeof TimeAStarAI !== 'undefined' ? TimeAStarAI : (Q.NukemanAI || (typeof NukemanAI !== 'undefined' ? NukemanAI : null)));
   const timeAStarHunt = timeAStarClass ? new timeAStarClass({ mode: 'hunt' }) : null;
   const timeAStarRoam = timeAStarClass ? new timeAStarClass({ mode: 'roam' }) : null;
@@ -303,8 +324,11 @@
   const TIME_ASTAR_HUNT_VAL = '__time_astar_hunt__'; // 高级时空 A*（竞技追猎版）
   const TIME_ASTAR_ROAM_VAL = '__time_astar_roam__'; // 高级时空 A*（经典漫游连炮版）
   const NUKEMAN_VAL = '__nukeman__';       // 兼容别名
-  const IDLE_VAL = '__idle__';      // 静止敌人(不动不炸)哨兵
-  const isRuleAi = (sel) => sel === HUNTER_VAL || sel === TIME_ASTAR_VAL || sel === TIME_ASTAR_HUNT_VAL || sel === TIME_ASTAR_ROAM_VAL || sel === NUKEMAN_VAL || sel === IDLE_VAL;
+  const IDLE_VAL = '__idle__';      // 静态死靶(不动不炸)哨兵
+  const isRuleAi = (sel) =>
+    sel === HUNTER_VAL || sel === TIME_ASTAR_VAL || sel === TIME_ASTAR_HUNT_VAL ||
+    sel === TIME_ASTAR_ROAM_VAL || sel === NUKEMAN_VAL || sel === IDLE_VAL ||
+    sel === STATIONARY_VAL || sel === FLEE_BOT_VAL || sel === ROAM_BOT_VAL;
   const LATEST_VIT = 'ViTModel2_31.9B';       // 最新 ViT 模型
 
   // 敌/我方 AI 选择：'__time_astar_hunt__'（高级时空 A* 竞技追猎版，默认敌人秒开）、'__hunter__'（规则）或模型名。
@@ -436,9 +460,20 @@
       }
     }
 
-    m.inferEvery = elModelLowfreq.checked ? 2 : 1;   // 降频开关即时生效
+    m.inferEvery = 1;
     modelCache.set(name, m);
     return m;
+  }
+
+  function getRuleAiAction(sim, pid, sel) {
+    if (sel === IDLE_VAL) return [MOVE_IDLE, 0];   // 静态死靶：不动不炸
+    if (sel === STATIONARY_VAL && stationaryDefense) return stationaryDefense.act(sim, pid); // 静止守备：原地驻留+敌近放炮反击
+    if (sel === FLEE_BOT_VAL && fleeBot) return fleeBot.act(sim, pid); // 逃跑反击 Bot：远离对手+近身落雷
+    if (sel === ROAM_BOT_VAL && roamBot) return roamBot.act(sim, pid); // 纯漫游 Bot：全图游走不放雷
+    if (sel === HUNTER_VAL) return hunter.act(sim, pid);
+    if (sel === TIME_ASTAR_ROAM_VAL && timeAStarRoam) return timeAStarRoam.act(sim, pid);
+    if ((sel === TIME_ASTAR_HUNT_VAL || sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) && timeAStarHunt) return timeAStarHunt.act(sim, pid);
+    return [MOVE_IDLE, 0];
   }
 
   // 玩家决策来源：'human' | '__hunter__' | 模型名（观战/规则 AI 时用）。
@@ -446,10 +481,9 @@
   async function aiOf(pid) {
     if (pid === 0 && !elSpectate.checked) return [MOVE_IDLE, human.pendingBomb ? 1 : 0];
     const sel = pid === 0 ? p0Sel : enemySel;
-    if (sel === IDLE_VAL) return [MOVE_IDLE, 0];   // 静止：不动不炸
-    if (sel === HUNTER_VAL) return hunter.act(sim, pid);
-    if (sel === TIME_ASTAR_ROAM_VAL && timeAStarRoam) return timeAStarRoam.act(sim, pid);
-    if ((sel === TIME_ASTAR_HUNT_VAL || sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) && timeAStarHunt) return timeAStarHunt.act(sim, pid);
+    if (isRuleAi(sel)) {
+      return getRuleAiAction(sim, pid, sel);
+    }
     const m = sel ? modelCache.get(sel) : null;
     if (m) {
       try { return await m.act(sim, pid, rng); }
@@ -461,6 +495,88 @@
       }
     }
     return [MOVE_IDLE, 0];          // 模型还没加载好：先站着
+  }
+
+  // ------------------------------------------------------------ AI 动作后置传导时延队列 (Motor Delay)
+  // 模拟生物神经传导与物理击键过程：
+  // 1. AI 基于当前最新局面完成决策推理（避免感知延迟导致撞旧障碍发呆）；
+  // 2. 决策进入运动神经传导管道（FIFO Queue），经过所设时延后才真正传达至按键；
+  // 3. 在传导窗口期内，角色保持当前运动惯性（维持上一次有效移动方向），不放炮；
+  // 4. 到达传导时延后执行最新目标动作；若排队期间产生放炮意图，合并保留确保绝不丢泡。
+  const aiMotorQueues = [
+    { queue: [], lastMove: MOVE_IDLE, accum: 0 },
+    { queue: [], lastMove: MOVE_IDLE, accum: 0 },
+  ];
+
+  function resetAiMotorQueues() {
+    for (let p = 0; p < 2; p++) {
+      aiMotorQueues[p].queue = [];
+      aiMotorQueues[p].lastMove = MOVE_IDLE;
+      aiMotorQueues[p].accum = 0;
+    }
+  }
+
+  function applyAiMotorDelay(pid, rawAction) {
+    const rawMove = rawAction[0], rawBomb = rawAction[1];
+    const qState = aiMotorQueues[pid];
+    if (!qState) return rawAction;
+
+    const latencyVal = elAiLatency ? parseInt(elAiLatency.value, 10) : 100;
+    const latencyMs = Number.isFinite(latencyVal) ? latencyVal : 100;
+    if (latencyMs <= 100) {
+      // 100ms：原生 10Hz tick（0ms 额外按键延迟），直接执行
+      qState.queue.length = 0;
+      qState.lastMove = rawMove;
+      return rawAction;
+    }
+
+    // 额外按键延迟（单位：tick，每 tick = 100ms）
+    const extraDelayTicks = (latencyMs - 100) / 100;
+    const baseTicks = Math.floor(extraDelayTicks);
+    const frac = extraDelayTicks - baseTicks;
+
+    let delayTicks = baseTicks;
+    if (frac > 0) {
+      qState.accum += frac;
+      if (qState.accum >= 1.0 - 1e-4) {
+        delayTicks += 1;
+        qState.accum -= 1.0;
+      }
+    }
+
+    const curTick = (sim && typeof sim.t === 'number') ? sim.t : 0;
+    const dueTick = curTick + delayTicks;
+
+    // 压入当前决策指令
+    qState.queue.push({ move: rawMove, bomb: rawBomb, dueTick });
+
+    // 提取本 tick 或之前已到期的全部指令
+    let maturedMove = null;
+    let maturedBomb = 0;
+    let popIdx = -1;
+
+    for (let i = 0; i < qState.queue.length; i++) {
+      const item = qState.queue[i];
+      if (item.dueTick <= curTick) {
+        maturedMove = item.move;
+        if (item.bomb) maturedBomb = 1;
+        popIdx = i;
+      } else {
+        break; // 队列按 dueTick 单调递增排列
+      }
+    }
+
+    if (popIdx >= 0) {
+      qState.queue.splice(0, popIdx + 1);
+    }
+
+    if (maturedMove != null) {
+      qState.lastMove = maturedMove;
+      return [maturedMove, maturedBomb];
+    } else {
+      // 传导窗口期内尚未有新指令到达手指：保持前向惯性走位，不放炮
+      return [qState.lastMove, 0];
+    }
   }
 
   // ------------------------------------------------------------ 素材加载
@@ -560,6 +676,8 @@
     levelById = new Map(levels.map((l) => [l.id, l]));
     // 默认选中第一个普通竞技地图（黑屏菜单可改）
     selectedLevel = levels.find((l) => l.category === '普通竞技') || levels[0];
+    const elInitHpOnLoad = typeof document !== 'undefined' ? document.getElementById('initial-hp') : null;
+    if (elInitHpOnLoad) elInitHpOnLoad.value = String(defaultLevelHp(selectedLevel));
 
     // 主题背景（9 张，按关卡 background 引用；缩放同 build_static：比例 = CELL/40）
     const themes = [...new Set(levels.map((l) => l.theme).filter(Boolean))];
@@ -1178,7 +1296,7 @@
           const tr = rr + dy, tc = cc + dx;
           if (tr < 0 || tr >= H || tc < 0 || tc >= W) { ok = false; break; }
           const ti = tr * W + tc;
-          if (sim.wall[ti] || sim.brick[ti] || sim.fuse[ti] > 0 || sim.crate[ti] || sim.pushable[ti]) { ok = false; break; }
+          if (sim.wall[ti] || sim.brick[ti] || sim.fuse[ti] > 0 || sim.crate[ti] || sim.pushable[ti] || sim._cellOccupiedByPlayer(ti, pid)) { ok = false; break; }
           targetCells.push(ti);
         }
         if (ok) {
@@ -1266,6 +1384,20 @@
     sim.airdropPayload = 0;
     window.__sim = sim;                        // 调试钩子：读 sim 状态/帧率用
     sim.reset(selectedLevel, { oldMode: oldModeActive() });  // 旧模型: 13/14列填墙+13宽观测
+    const elInitHp = typeof document !== 'undefined' ? document.getElementById('initial-hp') : null;
+    const defaultHp = defaultLevelHp(selectedLevel);
+    let initialHp = defaultHp;
+    if (customStats && customStats.hp != null) {
+      initialHp = customStats.hp;
+    } else if (elInitHp && elInitHp._userChanged) {
+      initialHp = Number(elInitHp.value) || defaultHp;
+    }
+    initialHp = Math.min(5, Math.max(1, initialHp));
+    sim.initialHp = initialHp;
+    if (elInitHp) elInitHp.value = String(initialHp);
+    for (let p = 0; p < 2; p++) {
+      sim.hp[p] = initialHp;
+    }
     if (customStats) {
       const bombsMax = Math.max(1, customStats.bombsMax | 0);
       const blastMax = Math.max(1, customStats.blastMax | 0);
@@ -1284,6 +1416,7 @@
     structAnim.clear();
     rng = Q.mulberry32(gameSeed ^ 0x13579BDF);
     human.dirStack = []; human.latch.clear(); human.move = MOVE_IDLE; human.pendingBomb = false;
+    resetAiMotorQueues();
     mousePush = null;
     turnInput = -1;
     clearTurnSlide();
@@ -1346,8 +1479,23 @@
     sel.innerHTML = '';
     const idle = document.createElement('option');
     idle.value = IDLE_VAL;
-    idle.textContent = '静止（不动不炸）';
+    idle.textContent = '静态死靶（木桩靶子 · 不动不炸）';
     sel.appendChild(idle);
+
+    const stat = document.createElement('option');
+    stat.value = STATIONARY_VAL;
+    stat.textContent = '静止守备（原地驻留 · 敌近放炮反击）';
+    sel.appendChild(stat);
+
+    const flee = document.createElement('option');
+    flee.value = FLEE_BOT_VAL;
+    flee.textContent = '逃跑风筝 Bot（Hunter 逆向时空风筝 · 0自灭不放炮）';
+    sel.appendChild(flee);
+
+    const roam = document.createElement('option');
+    roam.value = ROAM_BOT_VAL;
+    roam.textContent = '纯漫游 Bot（全图游走不放雷 · 训练同款）';
+    sel.appendChild(roam);
     if (includeHunter) {
       const h = document.createElement('option');
       h.value = HUNTER_VAL;
@@ -1375,7 +1523,7 @@
   }
 
   async function loadModelList() {
-    const resp = await fetch('models/index.json?v=20260915-v3-fresh');
+    const resp = await fetch('models/index.json?v=20260917-it831-v1');
     modelList = (await resp.json()).models || [];
     // 按时间倒序排列（最新导出的模型排在最前）
     modelList.sort((a, b) => {
@@ -1444,8 +1592,35 @@
       enemySel = IDLE_VAL;
       modelLoaded = true;
       requestAnimationFrame(updateProgress);
-      elCurModel.textContent = '静止（不动不炸）';
-      elStatus.innerHTML = '敌人：<b>静止</b>（不动不炸）';
+      elCurModel.textContent = '静态死靶（木桩靶子 · 不动不炸）';
+      elStatus.innerHTML = '敌人：<b>静态死靶</b>（木桩靶子 · 不动不炸）';
+      if (sim) startGame();
+      return;
+    }
+    if (sel === STATIONARY_VAL) {
+      enemySel = STATIONARY_VAL;
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
+      elCurModel.textContent = '静止守备（原地驻留 · 敌近放炮反击）';
+      elStatus.innerHTML = '敌人：<b>静止守备</b>（真正智能体静止：原地驻留防守，敌人靠近放雷反击）';
+      if (sim) startGame();
+      return;
+    }
+    if (sel === FLEE_BOT_VAL) {
+      enemySel = FLEE_BOT_VAL;
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
+      elCurModel.textContent = '逃跑风筝 Bot（Hunter 逆向时空风筝 · 0自灭）';
+      elStatus.innerHTML = '敌人：<b>逃跑风筝 Bot</b>（Hunter 逆向时空寻路：全图风筝拉扯，极速脱险，不放炮绝不自灭）';
+      if (sim) startGame();
+      return;
+    }
+    if (sel === ROAM_BOT_VAL) {
+      enemySel = ROAM_BOT_VAL;
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
+      elCurModel.textContent = '纯漫游 Bot（全图游走不放雷）';
+      elStatus.innerHTML = '敌人：<b>纯漫游 Bot</b>（训练同款规则敌人：随机合法移动，专练追逐拦截）';
       if (sim) startGame();
       return;
     }
@@ -1496,6 +1671,16 @@
   // }
   const elMapBtn = $('map-btn');
   if (elMapBtn) elMapBtn.addEventListener('click', openMapMenu);
+  const elInitialHp = $('initial-hp');
+  if (elInitialHp) {
+    elInitialHp.addEventListener('change', () => {
+      const v = Number(elInitialHp.value) || 1;
+      elInitialHp._userChanged = true;
+      if (!customStats) customStats = {};
+      customStats.hp = v;
+      startGame();
+    });
+  }
   // 选图页由独立“点击进入”按钮确认，避免调滑块/展开分类时误开局。
   elSkin.addEventListener('change', () => {
     if (res && res.skins) res.players = res.skins[elSkin.value];   // 换皮肤
@@ -1512,12 +1697,15 @@
     elP0AiWrap.style.display = elSpectate.checked ? '' : 'none';
     startGame();
   });
-  // AI 模型推理降频：对已缓存模型即时生效（重新开局时新加载的模型在
-  // ensureModel 里同样读取该开关）
-  elModelLowfreq.addEventListener('change', () => {
-    const every = elModelLowfreq.checked ? 2 : 1;
-    for (const m of modelCache.values()) if (m.inferEvery) m.inferEvery = every;
-  });
+  // 反应时延切换：对模型与规则 AI 即时重置动作传导队列
+  if (elAiLatency) {
+    elAiLatency.addEventListener('change', () => {
+      resetAiMotorQueues();
+      for (const m of modelCache.values()) {
+        m.inferEvery = 1;
+      }
+    });
+  }
   // 「录制剪片」开关：只管 GIF/剪片采样（canvas 20fps 环形缓冲 + MediaRecorder）。
   // 状态帧与 60Hz 轨迹已恒录，保存视频无需此开关。
   elRecClip.addEventListener('change', () => {
@@ -2048,6 +2236,11 @@
       a1 = await aiOf(1);
     }
     const actionMs = performance.now() - actionT0;
+    // 后置动作传导时延：非观战时仅对敌方 AI 生效（保留人类实时操控）；观战时对双方 AI 均生效
+    if (spectate) {
+      a0 = applyAiMotorDelay(0, a0);
+    }
+    a1 = applyAiMotorDelay(1, a1);
     // 拾取判定：人类玩家脚下 step 前有宝箱 → step 后没有 = 吃到
     const hc = Math.floor(sim.pos[1]), hr = Math.floor(sim.pos[0]);
     const hadCrate = !spectate && sim.alive[0] && sim.crate[hr * W + hc] === 1;
@@ -2814,7 +3007,7 @@
         items.push([z - 1, res.shadow, shadowX, shadowY]);
       }
       items.push([z, s, blitX, blitY]);
-      chars.push({ pid, z, blitX, blitY, s, wudi, wx, wy, hpv: sim.hp[pid], mx: CFG.maxHp });
+      chars.push({ pid, z, blitX, blitY, s, wudi, wx, wy, hpv: sim.hp[pid], mx: sim.initialHp || CFG.maxHp });
     }
 
     // 画家算法：z 升序（远→近）绘制
@@ -2943,7 +3136,8 @@
       const tag = sim.alive[p] ? `P${p}` : `P${p}·阵亡`;
       const bx = 18 + p * pWidth;
       const tagStr = `（${tag}）`;
-      const attrStr = `HP ${sim.hp[p]}/${CFG.maxHp} · 泡 ${sim.bombsCap[p]} · 威 ${sim.blastCap[p]} · 速 ${sim.spdG[p].toFixed(2)}`;
+      const maxH = sim.initialHp || CFG.maxHp;
+      const attrStr = `HP ${sim.hp[p]}/${maxH} · 泡 ${sim.bombsCap[p]} · 威 ${sim.blastCap[p]} · 速 ${sim.spdG[p].toFixed(2)}`;
 
       ctx.font = '12px sans-serif';
       const attrW = ctx.measureText(attrStr).width;
@@ -3258,16 +3452,17 @@
            <div class="mm-prev-img"><img id="mm-prev-img" alt=""></div>
            <div class="mm-prev-name" id="mm-prev-name"></div>
            <div class="mm-prev-meta" id="mm-prev-meta"></div>
-           <div class="mm-stats" id="mm-stats">
-             <div class="mm-stat"><span>初始泡泡 <output id="mm-bombs-v"></output></span><input id="mm-bombs" type="range" min="1" max="10" step="1"></div>
-             <div class="mm-stat"><span>最大泡泡 <output id="mm-bombs-max-v"></output></span><input id="mm-bombs-max" type="range" min="1" max="10" step="1"></div>
-             <div class="mm-stat"><span>初始威力 <output id="mm-blast-v"></output></span><input id="mm-blast" type="range" min="1" max="8" step="1"></div>
-             <div class="mm-stat"><span>最大威力 <output id="mm-blast-max-v"></output></span><input id="mm-blast-max" type="range" min="1" max="8" step="1"></div>
-             <div class="mm-stat"><span>初始速度 <output id="mm-speed-v"></output></span><input id="mm-speed" type="range" min="0.5" max="2.5" step="0.05"></div>
-             <div class="mm-stat"><span>最大速度 <output id="mm-speed-max-v"></output></span><input id="mm-speed-max" type="range" min="0.5" max="2.5" step="0.05"></div>
-           </div>
-         </div>
-       </div>` +
+            <div class="mm-stats" id="mm-stats">
+              <div class="mm-stat" style="grid-column: 1 / -1;"><span>❤️ 初始血量 (1~5) <output id="mm-hp-v"></output></span><input id="mm-hp" type="range" min="1" max="5" step="1" value="1"></div>
+              <div class="mm-stat"><span>初始泡泡 <output id="mm-bombs-v"></output></span><input id="mm-bombs" type="range" min="1" max="10" step="1"></div>
+              <div class="mm-stat"><span>最大泡泡 <output id="mm-bombs-max-v"></output></span><input id="mm-bombs-max" type="range" min="1" max="10" step="1"></div>
+              <div class="mm-stat"><span>初始威力 <output id="mm-blast-v"></output></span><input id="mm-blast" type="range" min="1" max="8" step="1"></div>
+              <div class="mm-stat"><span>最大威力 <output id="mm-blast-max-v"></output></span><input id="mm-blast-max" type="range" min="1" max="8" step="1"></div>
+              <div class="mm-stat"><span>初始速度 <output id="mm-speed-v"></output></span><input id="mm-speed" type="range" min="0.5" max="2.5" step="0.05"></div>
+              <div class="mm-stat"><span>最大速度 <output id="mm-speed-max-v"></output></span><input id="mm-speed-max" type="range" min="0.5" max="2.5" step="0.05"></div>
+            </div>
+          </div>
+        </div>` +
       `<button id="mm-enter-btn" class="mm-enter" type="button">点击进入</button>` +
       (isTouch()
         ? `<span class="tip">左摇杆移动 · 💣 键放泡</span>`
@@ -3278,7 +3473,7 @@
     const prevName = document.getElementById('mm-prev-name');
     const prevMeta = document.getElementById('mm-prev-meta');
     const enterBtn = document.getElementById('mm-enter-btn');
-    const statIds = ['bombs', 'bombs-max', 'blast', 'blast-max', 'speed', 'speed-max'];
+    const statIds = ['hp', 'bombs', 'bombs-max', 'blast', 'blast-max', 'speed', 'speed-max'];
     const statEls = Object.fromEntries(statIds.map((id) => [id, document.getElementById(`mm-${id}`)]));
     const statOut = Object.fromEntries(statIds.map((id) => [id, document.getElementById(`mm-${id}-v`)]));
     let isRandomSelected = true;
@@ -3297,17 +3492,22 @@
       showPrev(null, '随机地图', '全 241 张地图随机抽取', RAND_IMG);
       if (!customStats) {
         customStats = {
+          hp: 1,
           bombs: 2, bombsMax: CFG.growthBombsMax,
           blast: 2, blastMax: CFG.growthBlastMax,
           speed: 1.3, speedMax: CFG.growthSpeedMax,
         };
       }
+      if (customStats.hp == null) customStats.hp = 1;
       const sMaxCap = Math.max(2.5, Number(customStats.speedMax || CFG.growthSpeedMax || 2.4));
       statEls['speed-max'].max = String(sMaxCap);
       statEls['speed'].max = String(sMaxCap);
-      const values = [customStats.bombs, customStats.bombsMax, customStats.blast,
+      const curHp = customStats.hp || 1;
+      const values = [curHp, customStats.bombs, customStats.bombsMax, customStats.blast,
                       customStats.blastMax, customStats.speed, customStats.speedMax];
-      statIds.forEach((id, i) => { statEls[id].value = values[i]; statOut[id].textContent = values[i]; });
+      const valLabels = [curHp + ' 血' + (curHp === 1 ? ' (生死局)' : ''), customStats.bombs, customStats.bombsMax, customStats.blast,
+                         customStats.blastMax, customStats.speed, customStats.speedMax];
+      statIds.forEach((id, i) => { statEls[id].value = values[i]; statOut[id].textContent = valLabels[i]; });
     };
 
     const restorePreview = () => {
@@ -3336,18 +3536,26 @@
       if (rndBtn) rndBtn.classList.remove('mm-cur');
       selectedLevel = l;
       const st = l.initial_stats || { bombs: 2, blast: 2, speed: 1.3 };
+      const curHp = defaultLevelHp(l);
       customStats = {
+        hp: curHp,
         bombs: st.bombs, blast: st.blast, speed: st.speed,
         bombsMax: l.bombs_max || CFG.growthBombsMax,
         blastMax: l.blast_max || CFG.growthBlastMax,
         speedMax: l.speed_max || CFG.growthSpeedMax,
       };
+      if (elInitialHp) {
+        elInitialHp.value = String(curHp);
+        elInitialHp._userChanged = false;
+      }
       const sMaxCap = Math.max(2.5, Number(customStats.speedMax || 2.4));
       statEls['speed-max'].max = String(sMaxCap);
       statEls['speed'].max = String(sMaxCap);
-      const values = [customStats.bombs, customStats.bombsMax, customStats.blast,
+      const values = [curHp, customStats.bombs, customStats.bombsMax, customStats.blast,
                       customStats.blastMax, customStats.speed, customStats.speedMax];
-      statIds.forEach((id, i) => { statEls[id].value = values[i]; statOut[id].textContent = values[i]; });
+      const valLabels = [curHp + ' 血' + (curHp === 1 ? ' (生死局)' : ''), customStats.bombs, customStats.bombsMax, customStats.blast,
+                         customStats.blastMax, customStats.speed, customStats.speedMax];
+      statIds.forEach((id, i) => { statEls[id].value = values[i]; statOut[id].textContent = valLabels[i]; });
       for (const el of tree.children) {
         const children = el.children && el.children[1];
         if (!children || !children.children) continue;
@@ -3360,14 +3568,19 @@
 
     const syncStats = () => {
       const n = (id) => Number(statEls[id].value);
+      let hp = Math.min(5, Math.max(1, n('hp') | 0 || 1));
       let bombsMax = n('bombs-max'), blastMax = n('blast-max'), speedMax = n('speed-max');
       let bombs = Math.min(n('bombs'), bombsMax);
       let blast = Math.min(n('blast'), blastMax);
       let speed = Math.min(n('speed'), speedMax);
-      statEls.bombs.value = bombs; statEls.blast.value = blast; statEls.speed.value = speed;
-      customStats = { bombs, blast, speed, bombsMax, blastMax, speedMax };
+      statEls.hp.value = hp; statEls.bombs.value = bombs; statEls.blast.value = blast; statEls.speed.value = speed;
+      customStats = { hp, bombs, blast, speed, bombsMax, blastMax, speedMax };
+      if (elInitialHp) {
+        elInitialHp.value = String(hp);
+        elInitialHp._userChanged = true;
+      }
       const fmt = (v) => (Number.isInteger(v) ? String(v) : String(Number(v.toFixed(2))));
-      const vals = [bombs, bombsMax, blast, blastMax, fmt(speed), fmt(speedMax)];
+      const vals = [hp + ' 血' + (hp === 1 ? ' (生死局)' : ''), bombs, bombsMax, blast, blastMax, fmt(speed), fmt(speedMax)];
       statIds.forEach((id, i) => { statOut[id].textContent = vals[i]; });
     };
     statIds.forEach((id) => statEls[id].addEventListener('input', (ev) => {
@@ -3378,6 +3591,12 @@
       ev.stopPropagation();
       if (isRandomSelected) {
         selectedLevel = levels[Math.floor(Math.random() * levels.length)];
+        const curHp = defaultLevelHp(selectedLevel);
+        if (customStats) customStats.hp = curHp;
+        if (elInitialHp) {
+          elInitialHp.value = String(curHp);
+          elInitialHp._userChanged = false;
+        }
       }
       if (selectedLevel) startGame();
     });
@@ -3494,5 +3713,8 @@
     get activeExplosions() { return activeExplosions; },
     get explosion() { return activeExplosions.length ? activeExplosions[activeExplosions.length - 1].covered : null; },
     get explosionTrig() { return activeExplosions.length ? activeExplosions[activeExplosions.length - 1].triggered : null; },
+    get aiMotorQueues() { return aiMotorQueues; },
+    get applyAiMotorDelay() { return applyAiMotorDelay; },
+    get resetAiMotorQueues() { return resetAiMotorQueues; },
   };
 })();

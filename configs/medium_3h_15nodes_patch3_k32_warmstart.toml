@@ -1,0 +1,106 @@
+# ============================================================================
+# 实验：15节点30卡 DCU 3小时中型长训 (Warm-Start 继承 it68 黄金战力)
+# 核心规格：
+# 1. 规模：15 机 × 2 卡 = 30 张 DCU，num_envs=30720 (单卡 1024 envs)
+# 2. 轮次：400 iters (~175 分钟 ≈ 2.9 小时)，全局训练量 = 6.29 Billion 步
+# 3. 底模继承 (Warm-Start)：基于 128 局实测 62.5% 胜率的 params_it00000068.pkl
+# 4. 参数平滑：ema_decay = 0.995 (双轨保存 params_itXXXX.pkl 与 params_itXXXX_ema.pkl)
+# 5. 黄金超参：Patch=3, K=32, 14 通道, Actor Top25% + Critic 全量, HL-Gauss 128
+# ============================================================================
+
+[run]
+name = "medium_3h_15nodes_patch3_k32_warmstart"
+iters = 400
+seed = 42
+fresh = true
+
+[model]
+arch = "transformer"
+embed = 392
+depth = 4
+patch = 3
+heads = 4
+ff_factor = 4
+obs_channels = 14
+init_params = "ckpt/params_it00000068.pkl"
+ema_decay = 0.995
+
+[rollout]
+num_envs = 30720
+num_steps = 256
+minibatch = 30720
+epochs = 2
+
+[optimizer]
+lr = 0.0003
+gamma = 0.995
+lam = 0.95
+clip_eps = 0.2
+vf_coef = 0.5
+ent_coef = 0.01
+
+[reward]
+profile = "dense_win10_symmetric_pre_asym"
+step_penalty = 0.001
+hit_reward = 1.5
+win_bonus = 10.0
+lose_bonus_start = 10.0
+lose_bonus_floor = 10.0
+timeout_mode = "hp_diff_scaled"
+timeout_max_bonus = 2.0
+timeout_per_hp = 0.5
+timeout_alpha_mode = "shared_linear_anneal"
+timeout_lead_bonus = 0.0
+timeout_trail_penalty = 0.0
+timeout_draw_bonus = 0.0
+adv_top_frac = 0.25
+crate_reward_coef = 0.5
+crate_reward_floor = 0.05
+crate_reward_anneal_steps = 6000000000
+explore_reward_coef = 0.0
+explore_reward_anneal_steps = 0
+brick_reward_coef = 0.0
+reward_anneal_k = 0.0
+reward_anneal_step_offset = 0
+
+[value]
+head = "hl_gauss"
+num_bins = 128
+v_min = -20.0
+v_max = 20.0
+sigma = 1.5
+
+[distributed]
+world_size = 15
+local_gpus = 2
+lsgd_k = 32
+lsgd_mode = "param"
+lsgd_bf16 = false
+lsgd_sync_state = false
+
+[environment]
+levels = "levels.json"
+level_weights = "empty=0.05,功夫=0.1,比武=0.15"
+curriculum_json = ""
+radius = 0.36
+n_total = 30
+map = "13x15"
+
+[runtime]
+no_mask = false
+obs_quant = false
+legacy_obs13 = false
+checkpoint = true
+tolerate_inconsistent = false
+
+[evaluation]
+eval_vs = ""
+eval_every = 0
+
+[checkpoint]
+ckpt_dir = "runs/medium_3h_15nodes_patch3_k32_warmstart/ckpt"
+ckpt_every = 30
+ckpt_local_dir = "runs/medium_3h_15nodes_patch3_k32_warmstart/ckpt_local"
+ckpt_local_every = 15
+ckpt_max_to_keep = 3
+ckpt_local_max_to_keep = 10

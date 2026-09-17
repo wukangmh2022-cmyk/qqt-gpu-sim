@@ -35,7 +35,7 @@ LEGACY_OBS13 = os.environ.get("JAXBOMB_LEGACY_OBS13", "0") == "1"
 # 终局击杀固定 win_bonus（超时血多者胜 × 退火系数，见 collect_rollout）。
 # danger_penalty/brick_reward/combo/place_bonus 暂缓（行为塑形，若补须乘
 # _explore_coef 退火到 0 —— 论文消融：塑形早期慢速提升、后期退化不稳定）。
-STEP_PENALTY = 0.001
+STEP_PENALTY = 0.004
 HIT_REWARD = 1.5
 WIN_BONUS = 10.0
 TRADE_WIN_BONUS = 3.5          # 同归于尽/换血险胜降级奖励（正奖励，不赶尽杀绝，但明显低于纯胜）
@@ -93,12 +93,18 @@ def reward_from_events(dmg, alive_before, alive_after, hp_after, done,
                        mutual_hit_penalty=MUTUAL_HIT_PENALTY,
                        double_death_penalty=DOUBLE_DEATH_PENALTY,
                        win_hp_bonus=WIN_HP_BONUS,
-                       trade_win_bonus=TRADE_WIN_BONUS):
+                       trade_win_bonus=TRADE_WIN_BONUS,
+                       moves=None, bombs=None, idle_penalty=0.015):
     """Compute JAX PPO rewards from post-step events without reset-state leakage."""
     dmg = dmg.astype(jnp.float32)
     dealt = dmg.sum(axis=-1, keepdims=True) - dmg
     rew = ((dealt - dmg) * HIT_REWARD
            - STEP_PENALTY * alive_before.astype(jnp.float32))
+    # 专属发呆惩罚：仅当存活且选择 move=4(IDLE) 且未放雷时扣除，杜绝原地对峙挂机
+    if moves is not None and bombs is not None:
+        is_idle = (moves == 4) & (bombs == 0) & alive_before
+        rew = rew - idle_penalty * is_idle.astype(jnp.float32)
+
     # 同 tick 双方互损换血惩罚（减弱无意义肉搏互损）
     mutual_hit = (dealt > 0.0) & (dmg > 0.0)
     rew = rew - mutual_hit_penalty * mutual_hit.astype(jnp.float32)
@@ -208,7 +214,76 @@ def both_states(states):
     return jnp.concatenate([v0, v1], axis=0)
 
 
-# ---------------- rollout ----------------
+# ---------------- flee bot & rollout ----------------
+
+
+def flee_bot_actions(p_bot, p_opp, mm, bm, key, idle_ratio=0.25, roam_ratio=0.05, pure_flee_ratio=0.50):
+    """Vectorized Mixture Rule Bot for JAX.
+    p_bot: (K, 2) float32 [y, x]
+    p_opp: (K, 2) float32 [y, x]
+    mm: (K, 5) bool  [0: UP, 1: DOWN, 2: LEFT, 3: RIGHT, 4: IDLE]
+    bm: (K, 2) bool  [0: NOOP, 1: BOMB]
+    key: PRNGKey
+
+    混合策略（按比例严格配比）：
+    1. 静态死靶 (Idle Bot, 占 25% 规则池 = 15% 全局): 完全静止不放炮 (move=4, bomb=0)，保持见不动靶即诛杀的反射；
+    2. 漫游走位 (Roam Bot, 占 5% 规则池 = 3% 全局): 纯合法随机走位不放炮；
+    3. 纯逃跑追逐靶 (Pure Flee / Runner Bot, 占 50% 规则池 = 30% 全局): 极速远离对手、绝不放雷 (move=kite, bomb=0)，专门解决被纯逃跑怪遛死的追杀短板！
+    4. 智能拉扯反击 (Smart Kite Bot, 占 20% 规则池 = 12% 全局): 远离对手并在贴身时落雷，具备防自灭机制。
+    """
+    k_type, k_mv, k_bm, k_rand = jrandom.split(key, 4)
+    K = p_bot.shape[0]
+    bot_type = jrandom.uniform(k_type, (K,))
+
+    offsets = jnp.array([
+        [-1.0, 0.0],  # 0: UP
+        [ 1.0, 0.0],  # 1: DOWN
+        [ 0.0,-1.0],  # 2: LEFT
+        [ 0.0, 1.0],  # 3: RIGHT
+        [ 0.0, 0.0],  # 4: IDLE
+    ], jnp.float32)
+    cand_pos = p_bot[:, None, :] + offsets[None, :, :]
+    opp_dist = jnp.linalg.norm(p_bot - p_opp, axis=-1)
+    cand_dists = jnp.linalg.norm(cand_pos - p_opp[:, None, :], axis=-1)
+
+    # 1. 智能拉扯走位：
+    # 敌近 (<=4.0 格) 优先远离对手拉开距离；敌远 (>4.0 格) 则合法方向均匀漫游，杜绝死卡墙角
+    rand_scores = jrandom.uniform(k_rand, (K, 5)) * 2.0
+    evade_scores = cand_dists
+    kite_scores = jnp.where(opp_dist[:, None] <= 4.0, evade_scores, rand_scores)
+    kite_scores = kite_scores + jnp.where(mm, 0.0, -1e6)
+    noise = jrandom.uniform(k_mv, (K, 5), minval=-0.05, maxval=0.05)
+    kite_move = jnp.argmax(kite_scores + noise, axis=-1)
+
+    # 2. 漫游走位 (合法移动中随机选取)
+    roam_scores = rand_scores + jnp.where(mm, 0.0, -1e6)
+    roam_move = jnp.argmax(roam_scores, axis=-1)
+
+    # 3. 静止走位 (动作 4: MOVE_IDLE)
+    idle_move = jnp.full((K,), 4, dtype=jnp.int32)
+
+    # 阈值切分
+    t_idle = idle_ratio
+    t_roam = idle_ratio + roam_ratio
+    t_flee = idle_ratio + roam_ratio + pure_flee_ratio
+
+    # 动作分配: idle -> roam -> kite (Pure Flee 和 Smart Kite 均使用 kite_move)
+    move_act = jnp.where(
+        bot_type < t_idle,
+        idle_move,
+        jnp.where(bot_type < t_roam, roam_move, kite_move)
+    )
+
+    # 炸弹动作：
+    # 仅 Smart Kite 版 (bot_type >= t_flee) 在近身且安全时放雷！
+    # 前面的 Idle、Roam 和 Pure Flee (占 70%) 全部 0 放雷！
+    can_escape = mm[:, :4].sum(axis=-1) >= 2
+    near = opp_dist <= 2.8
+    rand_drop = jrandom.uniform(k_bm, (K,)) < 0.45
+    want_bomb = (bot_type >= t_flee) & near & can_escape & rand_drop & bm[:, 1]
+    bomb_act = want_bomb.astype(jnp.int32)
+
+    return jnp.stack([move_act, bomb_act], axis=-1)
 
 
 def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
@@ -221,8 +296,10 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
                     mutual_hit_penalty=MUTUAL_HIT_PENALTY,
                     double_death_penalty=DOUBLE_DEATH_PENALTY,
                     win_hp_bonus=WIN_HP_BONUS,
-                    trade_win_bonus=TRADE_WIN_BONUS):
-    """自对弈：同一网络打两边。states (N, ...)。返回 (new_states, batch, nov, kills)。
+                    trade_win_bonus=TRADE_WIN_BONUS,
+                    flee_bot_ratio=0.20,
+                    idle_penalty=0.015):
+    """自对弈：同一网络打两边，可选混入部分逃跑对手环境。states (N, ...)。返回 (new_states, batch, nov, kills)。
 
     nov：每 env/玩家的 novelty 计数（未加权，与 batch.rew 同口径窗口累计）。
     训练侧除以 num_steps × coef 即得"探索分/帧"，与 rew 均值直接对比——
@@ -263,11 +340,13 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
     mutual_hit_penalty：同 tick 双方互损换血惩罚（默认 0.0）。
     double_death_penalty：双方同时暴毙双亡重罚（默认 0.0）。
     win_hp_bonus：获胜残余血量加成（默认 0.0）。
+    flee_bot_ratio：混入逃跑对手环境比例（默认 0.20）。
     返回 (final_states, batch, nov, kills)：nov 每 env/玩家 novelty 累计；
     kills 每 env 窗口内击杀局数（death_done 累计）——动态退火 α=1-tanh(k·x)
     的 x 来源（每局击杀率 = mean(kills)/n_episodes）。
     """
     n = states.pos.shape[0]
+    n_flee = int(n * flee_bot_ratio)
     ones_m = jnp.ones((2 * n, N_MOVES), jnp.bool_)
     ones_b = jnp.ones((2 * n, N_BOMB), jnp.bool_)
     visited0 = jnp.zeros((n, H, W), jnp.bool_)      # 探索掩码（scan carry）
@@ -283,6 +362,23 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
         acts, lps, vals = sample_actions(params, arch, obs, masks, key,
                                          state=gv)
         a0, a1 = acts[:n], acts[n:]
+        if n_flee > 0:
+            key, k_bot1, k_bot0 = jrandom.split(key, 3)
+            mm_all, bm_all = masks
+            n_flee_half = n_flee // 2
+            if n_flee_half > 0:
+                bot1_acts = flee_bot_actions(
+                    states.pos[:n_flee_half, 1], states.pos[:n_flee_half, 0],
+                    mm_all[n:n + n_flee_half], bm_all[n:n + n_flee_half], k_bot1
+                )
+                a1 = a1.at[:n_flee_half].set(bot1_acts)
+            if n_flee > n_flee_half:
+                bot0_acts = flee_bot_actions(
+                    states.pos[n_flee_half:n_flee, 0], states.pos[n_flee_half:n_flee, 1],
+                    mm_all[n_flee_half:n_flee], bm_all[n_flee_half:n_flee], k_bot0
+                )
+                a0 = a0.at[n_flee_half:n_flee].set(bot0_acts)
+
         env_acts = jnp.stack([a0, a1], axis=1)        # (N, 2, 2)
         keys = jrandom.split(kstep, n)                # 每 env 一步的 RNG（地图/宝箱）
         new_states, done, info = jax.vmap(
@@ -306,7 +402,8 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
             brick_coef, timeout_alpha, win_bonus, lose_bonus,
             timeout_lead_bonus, timeout_trail_penalty, timeout_draw_bonus,
             mutual_hit_penalty, double_death_penalty, win_hp_bonus,
-            trade_win_bonus)
+            trade_win_bonus,
+            moves=env_acts[:, :, 0], bombs=env_acts[:, :, 1], idle_penalty=idle_penalty)
         nov = nov + newly.astype(jnp.float32)       # 统计用：探索分/帧可监控
         n_alive = info["alive"].sum(axis=-1)          # (N,)
         death_done = done & (n_alive == 1)
@@ -317,7 +414,8 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
                  if obs_quant else obs)
         state_s = (jnp.round(gv * 255.0).astype(jnp.uint8)
                    if obs_quant else gv)
-        data = (obs_s, state_s, acts, lps, vals, rew, d, masks)
+        acts_exec = jnp.concatenate([a0, a1], axis=0)
+        data = (obs_s, state_s, acts_exec, lps, vals, rew, d, masks)
         return (new_states, key, new_visited, nov, kills), data
     body = (jax.checkpoint(one_step) if checkpoint else one_step)
     (final_states, _, _, nov, kills), data = jax.lax.scan(
@@ -387,6 +485,24 @@ def compute_gae(rew, val, next_val, done, gamma, lam):
     return advs[::-1]
 
 
+def mask_bot_advantages(advs, rets, vals, n, flee_bot_ratio):
+    """屏蔽规则 Bot 所在席位的 PPO 优势度与回报梯度。
+    Bot 席位并非由神经网络策略生成，将其优势度置 0、回报对齐当前估值，
+    确保神经网络仅从与 Bot 交手（击杀/追逐）的视角中学习，彻底避免 Bot 样本污染。
+    """
+    n_flee = int(n * flee_bot_ratio)
+    if n_flee <= 0:
+        return advs, rets
+    n_flee_half = n_flee // 2
+    if n_flee_half > 0:
+        advs = advs.at[:, n : n + n_flee_half].set(0.0)
+        rets = rets.at[:, n : n + n_flee_half].set(vals[:, n : n + n_flee_half])
+    if n_flee > n_flee_half:
+        advs = advs.at[:, n_flee_half : n_flee].set(0.0)
+        rets = rets.at[:, n_flee_half : n_flee].set(vals[:, n_flee_half : n_flee])
+    return advs, rets
+
+
 # ---------------- PPO update ----------------
 
 
@@ -403,12 +519,13 @@ def ppo_update(params, opt, opt_state, arch, batch, key, minibatch,
     obs, state, acts, old_lps, advs, rets, masks = batch
     total = obs.shape[0] * obs.shape[1]
     adv_f = advs.reshape(-1)
-    adv_norm = (adv_f - jnp.mean(adv_f)) / (jnp.std(adv_f) + 1e-8)
+    adv_norm = jnp.where(adv_f == 0.0, 0.0, (adv_f - jnp.mean(adv_f)) / (jnp.std(adv_f) + 1e-8))
     mb_half = max(minibatch // 2, 1)
     n_keep = max((int(total * adv_top_frac) // mb_half) * mb_half,
                  mb_half) if 0.0 < adv_top_frac < 1.0 else total
     n_keep = min(n_keep, total)
-    _, actor_idx = jax.lax.top_k(jnp.abs(adv_norm), n_keep) \
+    adv_for_topk = jnp.where(adv_f == 0.0, -1e9, jnp.abs(adv_norm))
+    _, actor_idx = jax.lax.top_k(adv_for_topk, n_keep) \
         if 0.0 < adv_top_frac < 1.0 else (jnp.zeros((0,)), jnp.arange(total))
     obs_q = (obs.dtype == jnp.uint8)
     obs_f = obs.reshape(total, *obs.shape[2:])   # 保持 uint8，body 内延迟反量化
@@ -508,12 +625,13 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
     obs, state, acts, old_lps, advs, rets, masks = batch
     total = obs.shape[0] * obs.shape[1]
     adv_f = advs.reshape(-1)
-    adv_norm = (adv_f - jnp.mean(adv_f)) / (jnp.std(adv_f) + 1e-8)
+    adv_norm = jnp.where(adv_f == 0.0, 0.0, (adv_f - jnp.mean(adv_f)) / (jnp.std(adv_f) + 1e-8))
     mb_half = max(minibatch // 2, 1)
     n_keep = max((int(total * adv_top_frac) // mb_half) * mb_half,
                  mb_half) if 0.0 < adv_top_frac < 1.0 else total
     n_keep = min(n_keep, total)
-    _, actor_idx = jax.lax.top_k(jnp.abs(adv_norm), n_keep) \
+    adv_for_topk = jnp.where(adv_f == 0.0, -1e9, jnp.abs(adv_norm))
+    _, actor_idx = jax.lax.top_k(adv_for_topk, n_keep) \
         if 0.0 < adv_top_frac < 1.0 else (jnp.zeros((0,)), jnp.arange(total))
     obs_q = (obs.dtype == jnp.uint8)
     obs_f = obs.reshape(total, *obs.shape[2:])   # 保持 uint8，body 内延迟反量化
@@ -575,7 +693,7 @@ def ppo_update_lsgd(params, opt, opt_state, arch, batch, key, minibatch,
         chunk_means = []
 
         if n_full > 0:
-            idx_c = idx[:n_full * sync_k].reshape(n_full, sync_k, minibatch)
+            idx_c = idx[:n_full * sync_k].reshape(n_full, sync_k, mb_half * 2)
 
             def run_chunk(carry, idx_k):
                 """sync_k 个本地 minibatch + 一次全量同步（scan 内嵌套 scan，
@@ -630,12 +748,13 @@ def ppo_update_gradsync(params, opt, opt_state, arch, batch, key, minibatch,
     obs, state, acts, old_lps, advs, rets, masks = batch
     total = obs.shape[0] * obs.shape[1]
     adv_f = advs.reshape(-1)
-    adv_norm = (adv_f - jnp.mean(adv_f)) / (jnp.std(adv_f) + 1e-8)
+    adv_norm = jnp.where(adv_f == 0.0, 0.0, (adv_f - jnp.mean(adv_f)) / (jnp.std(adv_f) + 1e-8))
     mb_half = max(minibatch // 2, 1)
     n_keep = max((int(total * adv_top_frac) // mb_half) * mb_half,
                  mb_half) if 0.0 < adv_top_frac < 1.0 else total
     n_keep = min(n_keep, total)
-    _, actor_idx = jax.lax.top_k(jnp.abs(adv_norm), n_keep) \
+    adv_for_topk = jnp.where(adv_f == 0.0, -1e9, jnp.abs(adv_norm))
+    _, actor_idx = jax.lax.top_k(adv_for_topk, n_keep) \
         if 0.0 < adv_top_frac < 1.0 else (jnp.zeros((0,)), jnp.arange(total))
     obs_q = (obs.dtype == jnp.uint8)
     obs_f = obs.reshape(total, *obs.shape[2:])
@@ -881,6 +1000,7 @@ def build_one_iter(params, opt, opt_state, states, key, args):
         next_val = jnp.concatenate([vals[1:], fval[None]], axis=0)
         advs = compute_gae(rew, vals, next_val, done, args.gamma, args.lam)
         rets = advs + vals
+        advs, rets = mask_bot_advantages(advs, rets, vals, n, getattr(args, "flee_bot_ratio", 0.0))
         upd = _lsgd_updater(args)
         if upd is None:
             params, opt_state = ppo_update(
@@ -924,7 +1044,8 @@ def build_dp_one_iter(params, opt, opt_state, states, key, args, n_dev):
             params, args.arch, states, key, steps,
             getattr(args, "no_mask", False),
             getattr(args, "obs_quant", False),
-            getattr(args, "checkpoint", False))
+            getattr(args, "checkpoint", False),
+            flee_bot_ratio=getattr(args, "flee_bot_ratio", 0.0))
         obs, state, acts, lps, vals, rew, done, masks = batch
         fobs = both_perspectives(states)
         fmasks = both_masks(states)
@@ -935,6 +1056,7 @@ def build_dp_one_iter(params, opt, opt_state, states, key, args, n_dev):
         next_val = jnp.concatenate([vals[1:], fval[None]], axis=0)
         advs = compute_gae(rew, vals, next_val, done, args.gamma, args.lam)
         rets = advs + vals
+        advs, rets = mask_bot_advantages(advs, rets, vals, states.pos.shape[0], getattr(args, "flee_bot_ratio", 0.0))
         upd = _lsgd_updater(args)
         if upd is None:
             params, opt_state = ppo_update(

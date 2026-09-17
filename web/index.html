@@ -49,6 +49,15 @@
         <label class="row">
           <button id="map-btn" type="button">🗺️ 换地图（黑屏菜单选择）</button>
         </label>
+        <label>初始血量
+          <select id="initial-hp">
+            <option value="1" selected>1 血（生死局一击必杀）</option>
+            <option value="2">2 血</option>
+            <option value="3">3 血</option>
+            <option value="4">4 血</option>
+            <option value="5">5 血（原版满血运营）</option>
+          </select>
+        </label>
         <label>人物皮肤
           <select id="skin"></select>
         </label>
@@ -77,8 +86,14 @@
           <span>碰撞体半径 <output id="radius-value">0.42 格（50px）</output></span>
           <input id="radius" type="range" min="0.20" max="0.49" step="0.01" value="0.42">
         </label>
-        <label class="row" title="AI 模型每隔 N tick 才推理一次，中间 tick 复用上次动作（省 CPU 提帧率；默认每 tick 推理）">
-          <input type="checkbox" id="model-lowfreq"> AI 模型推理降频（省 CPU）
+        <label title="模拟人类思维到按键传导过程：设置 AI 决策思考与按键生效的总时延">AI 反应时延
+          <select id="ai-latency">
+            <option value="100" selected>100ms（默认 · 电竞级 / 0ms 按键延迟）</option>
+            <option value="150">150ms（人类高手 · +50ms 按键延迟）</option>
+            <option value="200">200ms（普通玩家 · +100ms 按键延迟）</option>
+            <option value="250">250ms（新手友好 · +150ms 按键延迟）</option>
+            <option value="300">300ms（休闲娱乐 · +200ms 按键延迟）</option>
+          </select>
         </label>
         <label class="row">
           <input type="checkbox" id="sound" checked> 音效（M 键切换）
@@ -119,8 +134,8 @@
 
 <script src="vendor/ort/ort.all.min.js"></script>
 <script src="vendor/gifenc.global.js"></script>
-<script src="sim.js?v=20260915-v3-fresh"></script>
-<script src="time_astar_ai.js?v=20260915-v3-fresh"></script>
-<script src="main.js?v=20260915-v3-fresh"></script>
+<script src="sim.js?v=20260917-latency-tiers"></script>
+<script src="time_astar_ai.js?v=20260916-flee-v2"></script>
+<script src="main.js?v=20260917-latency-tiers"></script>
 </body>
 </html>

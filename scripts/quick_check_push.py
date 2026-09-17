@@ -128,6 +128,28 @@ check("中断后累计推动成功", bool(s4.brick[r, c + 1])
       and not bool(s4.brick[r, c]),
       f"箱子到 ({r},{c+1})")
 
+# ---- 测试 5：目标格有角色占位 → 推不动；移开后 → 可推 ----
+print("== 测试 5：目标格有角色占位 → 推不动；移开后 → 可推 ==")
+st = place(env0(states), r, left)
+# 把 P1 放置在箱子目标格 (r, c + 1)
+st = st._replace(pos=st.pos.at[1].set(jnp.array([r + 0.5, c + 1 + 0.5])))
+s5 = st
+for _ in range(5):
+    s5, _ = step(s5, a_r, jrandom.PRNGKey(8), auto_reset=False)
+check("目标格有角色时箱子原地不动", bool(s5.brick[r, c]) and bool(s5.pushable[r, c])
+      and not bool(s5.brick[r, c + 1]),
+      f"箱子仍占 ({r},{c})，目标格 ({r},{c+1}) 未推入")
+check("推动计时器受阻清零", bool(s5.push_t[r, c] == 0.0),
+      f"push_t[r,c]={s5.push_t[r, c]}")
+
+# 移开 P1 到远角
+s5 = s5._replace(pos=s5.pos.at[1].set(jnp.array([12.5, 14.5])))
+for _ in range(3):
+    s5, _ = step(s5, a_r, jrandom.PRNGKey(9), auto_reset=False)
+check("角色移开后推满0.3s成功移动", bool(s5.brick[r, c + 1])
+      and not bool(s5.brick[r, c]),
+      f"箱子到 ({r},{c+1})")
+
 print("----")
 if fails:
     print(f"FAIL: {fails}")

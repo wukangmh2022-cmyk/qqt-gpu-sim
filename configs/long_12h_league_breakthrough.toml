@@ -1,0 +1,158 @@
+# ============================================================================
+# 实验：12节点24卡 DCU 12 小时联赛攻防全开破局长训 - 联赛攻防全开宗师版 (Warm-Start 继承 aggr419)
+# 核心技术创新与根因攻克：
+# 1. 彻底根除发呆对峙：
+#    - 继承 0% 超时、开阔地极速肉搏战意之王：params_aggr_it00000419_ema.pkl
+#    - 彻底拆除消极避战惩罚：mutual_hit_penalty = 0.0, double_death_penalty = 0.0
+#    - 恢复强力进攻激励：win_bonus = 10.0, lose_bonus = 10.0
+# 2. 多元联赛对手池 (League Sparring Pool)：
+#    - 15% 纯静止木桩 (Pure Idle [4, 0])：永久保持“见不动靶即刻近身诛杀”的神经反射
+#    - 15% 高级时空 A* 竞技猎人 (TimeAStarAI)：保持巅峰级微操躲弹与引信博弈
+#    - 10% 修复版高智商拉扯 (FleeBotAI)：练习中距离追击围堵与反风筝能力
+#    - 60% 自对弈 (Self-Play) + 动态快照回滚
+# 3. 开阔地权重提升：
+#    - level_weights = "empty=0.20,功夫=0.30,比武=0.30,爱的考验=0.20"
+#    - 杜绝开阔地仅 5% 导致的分布饥饿
+# 4. 血量域随机化 (HP_DOMAIN_RAND=1: 1~5 血全覆盖，生死局与长线运营兼顾)
+# ============================================================================
+
+[run]
+name = "long_12h_league_breakthrough"
+iters = 1100
+seed = 2026
+fresh = true
+
+[model]
+arch = "transformer"
+embed = 392
+depth = 4
+patch = 3
+heads = 4
+ff_factor = 4
+obs_channels = 14
+init_params = "ckpt/params_aggr_it00000419_ema.pkl"
+ema_decay = 0.995
+
+[rollout]
+num_envs = 24576
+num_steps = 256
+minibatch = 24576
+epochs = 2
+
+[optimizer]
+lr = 0.00020
+gamma = 0.995
+lam = 0.95
+clip_eps = 0.2
+vf_coef = 0.5
+ent_coef = 0.008
+
+[reward]
+profile = "dense_win10_league_clean"
+step_penalty = 0.002
+idle_penalty = 0.015
+hit_reward = 1.5
+win_bonus = 10.0
+trade_win_bonus = 5.0
+lose_bonus_start = 5.0
+lose_bonus_floor = 5.0
+mutual_hit_penalty = 0.0
+double_death_penalty = 0.0
+win_hp_bonus = 0.2
+flee_bot_ratio = 0.60
+timeout_mode = "hp_diff_scaled"
+timeout_max_bonus = 2.0
+timeout_per_hp = 0.5
+timeout_alpha_mode = "shared_linear_anneal"
+timeout_lead_bonus = 2.0
+timeout_trail_penalty = 5.0
+timeout_draw_bonus = -3.0
+adv_top_frac = 0.25
+crate_reward_coef = 0.25
+crate_reward_floor = 0.10
+crate_reward_anneal_steps = 0
+explore_reward_coef = 0.0
+explore_reward_anneal_steps = 0
+brick_reward_coef = 0.20
+reward_anneal_k = 0.0
+reward_anneal_step_offset = 0
+
+[value]
+head = "hl_gauss"
+num_bins = 128
+v_min = -20.0
+v_max = 20.0
+sigma = 1.5
+
+[distributed]
+world_size = 11
+local_gpus = 2
+lsgd_k = 32
+lsgd_mode = "param"
+lsgd_bf16 = false
+lsgd_sync_state = false
+
+[environment]
+levels = "levels.json"
+level_weights = "empty=0.20,功夫=0.30,比武=0.30,爱的考验=0.20"
+curriculum_json = ""
+radius = 0.36
+n_total = 30
+map = "13x15"
+spawns = "symmetric"
+crates = true
+crate_rate = 0.25
+flame_linger = 3
+respawn = false
+blast_decay = 0.0
+pushable = true
+push_t = 0.5
+death_done = true
+auto_reset = true
+domain_rand = true
+speed_tiers = "1.0,1.25,1.5,1.75,2.0,2.5,3.0,3.5,4.0,4.5,5.0"
+max_bombs_range = "1,8"
+max_blast_range = "1,10"
+max_speed_range = "5,9"
+initial_stats = "random"
+initial_stats_weights = "min=0.10,mid=0.50,max=0.15,asym=0.25"
+item_spawn_rates = "bomb=0.35,blast=0.35,speed=0.30"
+item_pool_cap = 200
+reseed_curriculum_steps = 0
+episode_limit = 0
+obs_channels = 14
+encode_version = "v2"
+state_version = "v3"
+old_mode = false
+crate_type_rates = "random=0.20,bomb=0.25,blast=0.25,speed=0.30"
+super_crate_rate = 0.05
+recycle_crates = true
+airdrop = true
+airdrop_interval = 300
+airdrop_chance = 0.60
+airdrop_types = "super=0.30,bomb=0.25,blast=0.25,speed=0.20"
+airdrop_max_per_round = 3
+symmetric_items = true
+symmetric_spawns = true
+fair_powerups = true
+symmetric_stats = true
+fair_crates = true
+fair_map = true
+tile_events = false
+corridor = false
+danger_penalty = 0.0
+seed_offset = 0
+shared_reset = true
+shared_level_idx = true
+train_p0 = true
+train_p1 = true
+no_mask = false
+obs_quant = true
+
+[checkpoint]
+ckpt_dir = "ckpt"
+ckpt_every = 60
+ckpt_local_dir = "ckpt_local"
+ckpt_local_every = 15
+ckpt_max_to_keep = 3
+ckpt_local_max_to_keep = 15

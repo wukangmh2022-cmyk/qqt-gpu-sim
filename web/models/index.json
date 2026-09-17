@@ -38,7 +38,7 @@
   },
   {
    "name": "params_it00001100",
-   "display_name": "params_it00001100 (\ud83c\udfc68h\u957f\u8bad\u5168\u91cf\u5b8c\u8d5b 13.8B\u6b65 \u751f\u6743\u91cd)",
+   "display_name": "params_it00001100 (🏆8h长训全量完赛 13.8B步 生权重)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -56,7 +56,7 @@
   },
   {
    "name": "params_it00001100_ema",
-   "display_name": "params_it00001100_ema (\ud83c\udfc68h\u957f\u8bad\u5168\u91cf\u5b8c\u8d5b 13.8B\u6b65 EMA)",
+   "display_name": "params_it00001100_ema (🏆8h长训全量完赛 13.8B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -88,7 +88,7 @@
   },
   {
    "name": "params_it00001021_ema",
-   "display_name": "params_it00001021_ema (8h\u957f\u8bad it1021 12.83B\u6b65 EMA)",
+   "display_name": "params_it00001021_ema (8h长训 it1021 12.83B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -120,7 +120,7 @@
   },
   {
    "name": "params_it00000889_ema",
-   "display_name": "params_it00000889_ema (8h\u957f\u8bad it889 11.17B\u6b65 EMA)",
+   "display_name": "params_it00000889_ema (8h长训 it889 11.17B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -137,8 +137,98 @@
    "generated_at": "2026-09-14 21:32 UTC"
   },
   {
+   "name": "params_it00000831_ema",
+   "display_name": "params_it00000831_ema (🏆 12h百亿破局 6.5h 104.3亿步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 831,
+   "global_step": 10433617920,
+   "source": "params_it00000831_ema.pkl",
+   "generated_at": "2026-09-16 17:02 UTC"
+  },
+  {
+   "name": "params_it00000800_ema",
+   "display_name": "params_it00000800_ema (8h长训 it800 10.05B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 800,
+   "global_step": 10053746688,
+   "source": "params_it00000800_ema.pkl",
+   "generated_at": "2026-09-15 06:34 UTC"
+  },
+  {
+   "name": "params_it00000767_ema",
+   "display_name": "params_it00000767_ema (8h长训 it767 9.63B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 767,
+   "global_step": 9629097984,
+   "source": "params_it00000767_ema.pkl",
+   "generated_at": "2026-09-16 16:32 UTC"
+  },
+  {
+   "name": "params_it00000726_ema",
+   "display_name": "params_it00000726_ema (8h长训 it726 9.12B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 726,
+   "global_step": 9122611200,
+   "source": "params_it00000726_ema.pkl",
+   "generated_at": "2026-09-15 06:03 UTC"
+  },
+  {
+   "name": "params_it00000726_ema",
+   "display_name": "params_it00000726_ema (8h长训 it726 9.12B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 726,
+   "global_step": 9122611200,
+   "source": "params_it00000726_ema.pkl",
+   "generated_at": "2026-09-15 06:03 UTC"
+  },
+  {
    "name": "params_it00000724_ema",
-   "display_name": "params_it00000724_ema (8h\u957f\u8bad it724 9.10B\u6b65 EMA)",
+   "display_name": "params_it00000724_ema (8h长训 it724 9.10B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -153,6 +243,60 @@
    "global_step": 9097445376,
    "source": "params_it00000724_ema.pkl",
    "generated_at": "2026-09-14 20:16 UTC"
+  },
+  {
+   "name": "params_it00000703_ema",
+   "display_name": "params_it00000703_ema (8h长训 it703 8.82B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 703,
+   "global_step": 8824578048,
+   "source": "params_it00000703_ema.pkl",
+   "generated_at": "2026-09-16 16:02 UTC"
+  },
+  {
+   "name": "params_it00000646_ema",
+   "display_name": "params_it00000646_ema (8h长训 it646 8.12B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 646,
+   "global_step": 8115978240,
+   "source": "params_it00000646_ema.pkl",
+   "generated_at": "2026-09-15 12:15 UTC"
+  },
+  {
+   "name": "params_it00000639_ema",
+   "display_name": "params_it00000639_ema (8h长训 it639 8.02B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 639,
+   "global_step": 8020058112,
+   "source": "params_it00000639_ema.pkl",
+   "generated_at": "2026-09-16 15:33 UTC"
   },
   {
    "name": "duel_nobc_8b_live",
@@ -188,7 +332,7 @@
   },
   {
    "name": "params_it00000592_ema",
-   "display_name": "params_it00000592_ema (8h\u957f\u8bad it592 7.44B\u6b65 EMA)",
+   "display_name": "params_it00000592_ema (8h长训 it592 7.44B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -205,6 +349,42 @@
    "generated_at": "2026-09-14 19:15 UTC"
   },
   {
+   "name": "params_it00000575_ema",
+   "display_name": "params_it00000575_ema (8h长训 it575 7.22B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 575,
+   "global_step": 7215538176,
+   "source": "params_it00000575_ema.pkl",
+   "generated_at": "2026-09-16 15:01 UTC"
+  },
+  {
+   "name": "params_it00000782_ema",
+   "display_name": "params_it00000782_ema (8h长训 it782 6.56B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 782,
+   "global_step": 6559891456,
+   "source": "params_it00000782_ema.pkl",
+   "generated_at": "2026-09-15 13:03 UTC"
+  },
+  {
    "name": "duel_nobc_6.46B",
    "arch": "mlp",
    "obs_shape": [
@@ -217,6 +397,42 @@
    "elo": 4389.4,
    "source": "duel_nobc_6.46B.pt",
    "generated_at": "2026-08-16 15:11 UTC"
+  },
+  {
+   "name": "params_it00000512_ema",
+   "display_name": "params_it00000512_ema (8h长训 it512 6.42B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 512,
+   "global_step": 6423588864,
+   "source": "params_it00000512_ema.pkl",
+   "generated_at": "2026-09-16 08:30 UTC"
+  },
+  {
+   "name": "params_it00000511_ema",
+   "display_name": "params_it00000511_ema (8h长训 it511 6.41B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 511,
+   "global_step": 6411018240,
+   "source": "params_it00000511_ema.pkl",
+   "generated_at": "2026-09-16 14:32 UTC"
   },
   {
    "name": "duel_nobc_6.40B",
@@ -234,7 +450,7 @@
   },
   {
    "name": "params_it00000400_ema",
-   "display_name": "params_it00000400_ema (8h\u957f\u8bad it400 6.28B\u6b65 EMA)",
+   "display_name": "params_it00000400_ema (8h长训 it400 6.28B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -251,6 +467,24 @@
    "generated_at": "2026-09-13 16:19 UTC"
   },
   {
+   "name": "params_it00000748_ema",
+   "display_name": "params_it00000748_ema (8h长训 it748 6.27B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 748,
+   "global_step": 6274678784,
+   "source": "params_it00000748_ema.pkl",
+   "generated_at": "2026-09-15 12:50 UTC"
+  },
+  {
    "name": "duel_nobc_5.95B",
    "arch": "mlp",
    "obs_shape": [
@@ -265,8 +499,26 @@
    "generated_at": "2026-08-16 15:11 UTC"
   },
   {
+   "name": "params_it00000462_ema",
+   "display_name": "params_it00000462_ema (8h长训 it462 5.80B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 462,
+   "global_step": 5800722432,
+   "source": "params_it00000462_ema.pkl",
+   "generated_at": "2026-09-15 04:07 UTC"
+  },
+  {
    "name": "params_it00000460_ema",
-   "display_name": "params_it00000460_ema (8h\u957f\u8bad it460 5.78B\u6b65 EMA)",
+   "display_name": "params_it00000460_ema (8h长训 it460 5.78B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -283,8 +535,44 @@
    "generated_at": "2026-09-14 18:14 UTC"
   },
   {
+   "name": "params_it00000448_ema",
+   "display_name": "params_it00000448_ema (8h长训 it448 5.62B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 448,
+   "global_step": 5619068928,
+   "source": "params_it00000448_ema.pkl",
+   "generated_at": "2026-09-16 08:00 UTC"
+  },
+  {
+   "name": "params_it00000447_ema",
+   "display_name": "params_it00000447_ema (8h长训 it447 5.61B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 447,
+   "global_step": 5606498304,
+   "source": "params_it00000447_ema.pkl",
+   "generated_at": "2026-09-16 14:00 UTC"
+  },
+  {
    "name": "params_it00000593",
-   "display_name": "params_it00000593 (8h\u957f\u8bad it593 5.59B\u6b65)",
+   "display_name": "params_it00000593 (8h长训 it593 5.59B步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -302,7 +590,7 @@
   },
   {
    "name": "params_it00000593_ema",
-   "display_name": "params_it00000593_ema (8h\u957f\u8bad it593 5.59B\u6b65 EMA)",
+   "display_name": "params_it00000593_ema (8h长训 it593 5.59B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -319,8 +607,80 @@
    "generated_at": "2026-09-14 04:06 UTC"
   },
   {
+   "name": "params_it00000408_ema",
+   "display_name": "params_it00000408_ema (8h长训 it408 5.12B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 408,
+   "global_step": 5121245184,
+   "source": "params_it00000408_ema.pkl",
+   "generated_at": "2026-09-15 10:20 UTC"
+  },
+  {
+   "name": "params_it00000396_ema",
+   "display_name": "params_it00000396_ema (8h长训 it396 4.97B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 396,
+   "global_step": 4970250240,
+   "source": "params_it00000396_ema.pkl",
+   "generated_at": "2026-09-15 03:35 UTC"
+  },
+  {
+   "name": "params_it00000384_ema",
+   "display_name": "params_it00000384_ema (8h长训 it384 4.81B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 384,
+   "global_step": 4814548992,
+   "source": "params_it00000384_ema.pkl",
+   "generated_at": "2026-09-16 07:30 UTC"
+  },
+  {
+   "name": "params_it00000383_ema",
+   "display_name": "params_it00000383_ema (8h长训 it383 4.80B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 383,
+   "global_step": 4801978368,
+   "source": "params_it00000383_ema.pkl",
+   "generated_at": "2026-09-16 13:30 UTC"
+  },
+  {
    "name": "params_it00000361_ema",
-   "display_name": "params_it00000361_ema (8h\u957f\u8bad it361 4.53B\u6b65 EMA)",
+   "display_name": "params_it00000361_ema (8h长训 it361 4.53B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -335,6 +695,24 @@
    "global_step": 4529848320,
    "source": "params_it00000361_ema.pkl",
    "generated_at": "2026-09-14 17:28 UTC"
+  },
+  {
+   "name": "params_it00000351_ema",
+   "display_name": "params_it00000351_ema (8h长训 it351 4.40B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 351,
+   "global_step": 4399718400,
+   "source": "params_it00000351_ema.pkl",
+   "generated_at": "2026-09-16 13:06 UTC"
   },
   {
    "name": "duel_nobc_e3970",
@@ -352,7 +730,7 @@
   },
   {
    "name": "params_it00000278",
-   "display_name": "params_it00000278 (8h\u957f\u8bad it278 4.36B\u6b65)",
+   "display_name": "params_it00000278 (8h长训 it278 4.36B步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -370,7 +748,7 @@
   },
   {
    "name": "params_it00000278_ema",
-   "display_name": "params_it00000278_ema (8h\u957f\u8bad it278 4.36B\u6b65 EMA)",
+   "display_name": "params_it00000278_ema (8h长训 it278 4.36B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -404,6 +782,42 @@
    "generated_at": "2026-08-20 23:10 UTC"
   },
   {
+   "name": "params_it00000330_ema",
+   "display_name": "params_it00000330_ema (8h长训 it330 4.14B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 330,
+   "global_step": 4139778048,
+   "source": "params_it00000330_ema.pkl",
+   "generated_at": "2026-09-15 03:02 UTC"
+  },
+  {
+   "name": "params_it00000320_ema",
+   "display_name": "params_it00000320_ema (8h长训 it320 4.01B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 320,
+   "global_step": 4010029056,
+   "source": "params_it00000320_ema.pkl",
+   "generated_at": "2026-09-16 06:58 UTC"
+  },
+  {
    "name": "duel_nobc_4B",
    "arch": "mlp",
    "obs_shape": [
@@ -418,8 +832,26 @@
    "generated_at": "2026-08-16 15:14 UTC"
   },
   {
+   "name": "params_it00000319_ema",
+   "display_name": "params_it00000319_ema (8h长训 it319 4.00B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 319,
+   "global_step": 3997458432,
+   "source": "params_it00000319_ema.pkl",
+   "generated_at": "2026-09-16 12:49 UTC"
+  },
+  {
    "name": "params_aggr_it00000419",
-   "display_name": "params_aggr_it00000419 (\u26a1\ufe0f\u7834\u62c6\u8fdb\u653b\u7248 T+180m 39.4\u4ebf\u6b65)",
+   "display_name": "params_aggr_it00000419 (⚡️破拆进攻版 T+180m 39.4亿步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -437,7 +869,7 @@
   },
   {
    "name": "params_aggr_it00000419_ema",
-   "display_name": "params_aggr_it00000419_ema (\u26a1\ufe0f\u7834\u62c6\u8fdb\u653b\u7248 T+180m EMA)",
+   "display_name": "params_aggr_it00000419_ema (⚡️破拆进攻版 T+180m EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -455,7 +887,7 @@
   },
   {
    "name": "params_it00000295_ema",
-   "display_name": "params_it00000295_ema (8h\u957f\u8bad it295 3.70B\u6b65 EMA)",
+   "display_name": "params_it00000295_ema (8h长训 it295 3.70B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -473,7 +905,7 @@
   },
   {
    "name": "params_it00000400",
-   "display_name": "params_it00000400 (8h\u957f\u8bad it400 3.36B\u6b65)",
+   "display_name": "params_it00000400 (8h长训 it400 3.36B步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -491,7 +923,7 @@
   },
   {
    "name": "params_it00000210",
-   "display_name": "params_it00000210 (8h\u957f\u8bad it210 3.29B\u6b65)",
+   "display_name": "params_it00000210 (8h长训 it210 3.29B步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -509,7 +941,7 @@
   },
   {
    "name": "params_it00000210_ema",
-   "display_name": "params_it00000210_ema (8h\u957f\u8bad it210 3.29B\u6b65 EMA)",
+   "display_name": "params_it00000210_ema (8h长训 it210 3.29B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -526,6 +958,42 @@
    "generated_at": "2026-09-13 14:35 UTC"
   },
   {
+   "name": "params_it00000256_ema",
+   "display_name": "params_it00000256_ema (8h长训 it256 3.21B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 256,
+   "global_step": 3205509120,
+   "source": "params_it00000256_ema.pkl",
+   "generated_at": "2026-09-16 06:30 UTC"
+  },
+  {
+   "name": "params_it00000255_ema",
+   "display_name": "params_it00000255_ema (8h长训 it255 3.19B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 255,
+   "global_step": 3192938496,
+   "source": "params_it00000255_ema.pkl",
+   "generated_at": "2026-09-16 12:16 UTC"
+  },
+  {
    "name": "duel_nobc_3B",
    "arch": "mlp",
    "obs_shape": [
@@ -540,8 +1008,26 @@
    "generated_at": "2026-08-30 05:17 UTC"
   },
   {
+   "name": "params_it00000238_ema",
+   "display_name": "params_it00000238_ema (8h长训 it238 2.98B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 238,
+   "global_step": 2982150144,
+   "source": "params_it00000238_ema.pkl",
+   "generated_at": "2026-09-15 09:06 UTC"
+  },
+  {
    "name": "params_it00000349_ema",
-   "display_name": "params_it00000349_ema (8h\u957f\u8bad it349 2.93B\u6b65 EMA)",
+   "display_name": "params_it00000349_ema (8h长训 it349 2.93B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -559,7 +1045,7 @@
   },
   {
    "name": "params_it00000346_ema",
-   "display_name": "params_it00000346_ema (8h\u957f\u8bad it346 2.90B\u6b65 EMA)",
+   "display_name": "params_it00000346_ema (8h长训 it346 2.90B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -574,6 +1060,24 @@
    "global_step": 2902458368,
    "source": "params_it00000346_ema.pkl",
    "generated_at": "2026-08-29 12:49 UTC"
+  },
+  {
+   "name": "params_it00000231_ema",
+   "display_name": "params_it00000231_ema (8h长训 it231 2.89B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 231,
+   "global_step": 2894069760,
+   "source": "params_it00000231_ema.pkl",
+   "generated_at": "2026-09-15 02:10 UTC"
   },
   {
    "name": "ViTModel_340",
@@ -593,8 +1097,26 @@
    "generated_at": "2026-08-20 15:31 UTC"
   },
   {
+   "name": "params_it00000223_ema",
+   "display_name": "params_it00000223_ema (8h长训 it223 2.79B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 223,
+   "global_step": 2790678528,
+   "source": "params_it00000223_ema.pkl",
+   "generated_at": "2026-09-16 12:01 UTC"
+  },
+  {
    "name": "params_aggr_it00000280",
-   "display_name": "params_aggr_it00000280 (\u26a1\ufe0f\u7834\u62c6\u8fdb\u653b\u7248 T+120m 26.3\u4ebf\u6b65)",
+   "display_name": "params_aggr_it00000280 (⚡️破拆进攻版 T+120m 26.3亿步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -612,7 +1134,7 @@
   },
   {
    "name": "params_aggr_it00000280_ema",
-   "display_name": "params_aggr_it00000280_ema (\u26a1\ufe0f\u7834\u62c6\u8fdb\u653b\u7248 T+120m EMA)",
+   "display_name": "params_aggr_it00000280_ema (⚡️破拆进攻版 T+120m EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -629,8 +1151,26 @@
    "generated_at": "2026-09-14 02:06 UTC"
   },
   {
+   "name": "params_it00000204_ema",
+   "display_name": "params_it00000204_ema (8h长训 it204 2.55B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 204,
+   "global_step": 2554331136,
+   "source": "params_it00000204_ema.pkl",
+   "generated_at": "2026-09-15 08:46 UTC"
+  },
+  {
    "name": "params_it00000196_ema",
-   "display_name": "params_it00000196_ema (8h\u957f\u8bad it196 2.45B\u6b65 EMA)",
+   "display_name": "params_it00000196_ema (8h长训 it196 2.45B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -647,8 +1187,44 @@
    "generated_at": "2026-09-14 16:12 UTC"
   },
   {
+   "name": "params_it00000192_ema",
+   "display_name": "params_it00000192_ema (8h长训 it192 2.40B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 192,
+   "global_step": 2400989184,
+   "source": "params_it00000192_ema.pkl",
+   "generated_at": "2026-09-16 06:00 UTC"
+  },
+  {
+   "name": "params_it00000191_ema",
+   "display_name": "params_it00000191_ema (8h长训 it191 2.39B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 191,
+   "global_step": 2388418560,
+   "source": "params_it00000191_ema.pkl",
+   "generated_at": "2026-09-16 11:45 UTC"
+  },
+  {
    "name": "params_it00000280",
-   "display_name": "params_it00000280 (8h\u957f\u8bad it280 2.35B\u6b65)",
+   "display_name": "params_it00000280 (8h长训 it280 2.35B步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -666,7 +1242,7 @@
   },
   {
    "name": "params_it00000280_ema",
-   "display_name": "params_it00000280_ema (8h\u957f\u8bad it280 2.35B\u6b65 EMA)",
+   "display_name": "params_it00000280_ema (8h长训 it280 2.35B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -684,7 +1260,7 @@
   },
   {
    "name": "params_it00000279",
-   "display_name": "params_it00000279 (8h\u957f\u8bad it279 2.34B\u6b65)",
+   "display_name": "params_it00000279 (8h长训 it279 2.34B步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -702,7 +1278,7 @@
   },
   {
    "name": "params_it00000279_ema",
-   "display_name": "params_it00000279_ema (8h\u957f\u8bad it279 2.34B\u6b65 EMA)",
+   "display_name": "params_it00000279_ema (8h长训 it279 2.34B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -720,7 +1296,7 @@
   },
   {
    "name": "params_it00000140",
-   "display_name": "params_it00000140 (8h\u957f\u8bad it140 2.19B\u6b65)",
+   "display_name": "params_it00000140 (8h长训 it140 2.19B步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -738,7 +1314,7 @@
   },
   {
    "name": "params_it00000140_ema",
-   "display_name": "params_it00000140_ema (8h\u957f\u8bad it140 2.19B\u6b65 EMA)",
+   "display_name": "params_it00000140_ema (8h长训 it140 2.19B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -753,6 +1329,24 @@
    "global_step": 2186280960,
    "source": "params_it00000140_ema.pkl",
    "generated_at": "2026-09-13 14:04 UTC"
+  },
+  {
+   "name": "params_it00000170_ema",
+   "display_name": "params_it00000170_ema (8h长训 it170 2.13B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 170,
+   "global_step": 2126512128,
+   "source": "params_it00000170_ema.pkl",
+   "generated_at": "2026-09-15 08:27 UTC"
   },
   {
    "name": "params_clean_it251_ema",
@@ -790,8 +1384,26 @@
    "generated_at": "2026-08-20 14:06 UTC"
   },
   {
+   "name": "params_it00000159_ema",
+   "display_name": "params_it00000159_ema (8h长训 it159 1.99B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 159,
+   "global_step": 1986158592,
+   "source": "params_it00000159_ema.pkl",
+   "generated_at": "2026-09-16 11:29 UTC"
+  },
+  {
    "name": "params_aggr_it00000210",
-   "display_name": "params_aggr_it00000210 (\u26a1\ufe0f\u7834\u62c6\u8fdb\u653b\u7248 T+90m 19.7\u4ebf\u6b65)",
+   "display_name": "params_aggr_it00000210 (⚡️破拆进攻版 T+90m 19.7亿步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -809,7 +1421,7 @@
   },
   {
    "name": "params_aggr_it00000210_ema",
-   "display_name": "params_aggr_it00000210_ema (\u26a1\ufe0f\u7834\u62c6\u8fdb\u653b\u7248 T+90m EMA)",
+   "display_name": "params_aggr_it00000210_ema (⚡️破拆进攻版 T+90m EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -843,8 +1455,26 @@
    "generated_at": "2026-08-20 13:28 UTC"
   },
   {
+   "name": "params_it00000136_ema",
+   "display_name": "params_it00000136_ema (8h长训 it136 1.70B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 136,
+   "global_step": 1698693120,
+   "source": "params_it00000136_ema.pkl",
+   "generated_at": "2026-09-15 08:15 UTC"
+  },
+  {
    "name": "params_it00000105",
-   "display_name": "params_it00000105 (8h\u957f\u8bad it105 1.64B\u6b65)",
+   "display_name": "params_it00000105 (8h长训 it105 1.64B步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -862,7 +1492,7 @@
   },
   {
    "name": "params_it00000105_ema",
-   "display_name": "params_it00000105_ema (8h\u957f\u8bad it105 1.64B\u6b65 EMA)",
+   "display_name": "params_it00000105_ema (8h长训 it105 1.64B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -880,7 +1510,7 @@
   },
   {
    "name": "params_it00000131_ema",
-   "display_name": "params_it00000131_ema (8h\u957f\u8bad it131 1.64B\u6b65 EMA)",
+   "display_name": "params_it00000131_ema (8h长训 it131 1.64B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -897,8 +1527,26 @@
    "generated_at": "2026-09-14 15:42 UTC"
   },
   {
+   "name": "params_it00000128_ema",
+   "display_name": "params_it00000128_ema (8h长训 it128 1.60B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 128,
+   "global_step": 1596469248,
+   "source": "params_it00000128_ema.pkl",
+   "generated_at": "2026-09-16 05:30 UTC"
+  },
+  {
    "name": "params_8h_it00000102",
-   "display_name": "params_8h_it00000102 (\ud83d\udd258h\u957f\u8bad T+48m 1.59B\u6b65)",
+   "display_name": "params_8h_it00000102 (🔥8h长训 T+48m 1.59B步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -916,7 +1564,7 @@
   },
   {
    "name": "params_8h_it00000102_ema",
-   "display_name": "params_8h_it00000102_ema (\ud83d\udd258h\u957f\u8bad T+48m EMA)",
+   "display_name": "params_8h_it00000102_ema (🔥8h长训 T+48m EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -933,8 +1581,26 @@
    "generated_at": "2026-09-13 23:09 UTC"
   },
   {
+   "name": "params_it00000127_ema",
+   "display_name": "params_it00000127_ema (8h长训 it127 1.58B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 127,
+   "global_step": 1583898624,
+   "source": "params_it00000127_ema.pkl",
+   "generated_at": "2026-09-16 11:14 UTC"
+  },
+  {
    "name": "params_it00000174_ema",
-   "display_name": "params_it00000174_ema (8h\u957f\u8bad it174 1.46B\u6b65 EMA)",
+   "display_name": "params_it00000174_ema (8h长训 it174 1.46B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -952,7 +1618,7 @@
   },
   {
    "name": "params_aggr_it00000140",
-   "display_name": "params_aggr_it00000140 (\u26a1\ufe0f\u7834\u62c6\u8fdb\u653b\u7248 T+60m 13.1\u4ebf\u6b65)",
+   "display_name": "params_aggr_it00000140 (⚡️破拆进攻版 T+60m 13.1亿步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -970,7 +1636,7 @@
   },
   {
    "name": "params_aggr_it00000140_ema",
-   "display_name": "params_aggr_it00000140_ema (\u26a1\ufe0f\u7834\u62c6\u8fdb\u653b\u7248 T+60m EMA)",
+   "display_name": "params_aggr_it00000140_ema (⚡️破拆进攻版 T+60m EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -985,6 +1651,60 @@
    "global_step": 1311768576,
    "source": "params_aggr_it00000140_ema.pkl",
    "generated_at": "2026-09-14 00:56 UTC"
+  },
+  {
+   "name": "params_it00000102_ema",
+   "display_name": "params_it00000102_ema (8h长训 it102 1.27B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 102,
+   "global_step": 1270874112,
+   "source": "params_it00000102_ema.pkl",
+   "generated_at": "2026-09-15 08:01 UTC"
+  },
+  {
+   "name": "params_it00000096_ema",
+   "display_name": "params_it00000096_ema (8h长训 it96 1.19B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 96,
+   "global_step": 1194209280,
+   "source": "params_it00000096_ema.pkl",
+   "generated_at": "2026-09-16 05:09 UTC"
+  },
+  {
+   "name": "params_it00000095_ema",
+   "display_name": "params_it00000095_ema (8h长训 it95 1.18B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 95,
+   "global_step": 1181638656,
+   "source": "params_it00000095_ema.pkl",
+   "generated_at": "2026-09-16 10:59 UTC"
   },
   {
    "name": "params_it00000070",
@@ -1024,7 +1744,7 @@
   },
   {
    "name": "params_8h_it00000068",
-   "display_name": "params_8h_it00000068 (8h\u8bad 30m\u5feb\u7167 1.05B\u6b65)",
+   "display_name": "params_8h_it00000068 (8h训 30m快照 1.05B步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1042,7 +1762,7 @@
   },
   {
    "name": "params_8h_it00000068_ema",
-   "display_name": "params_8h_it00000068_ema (8h\u8bad 30m\u5feb\u7167 EMA)",
+   "display_name": "params_8h_it00000068_ema (8h训 30m快照 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1091,7 +1811,7 @@
   },
   {
    "name": "params_it00000102",
-   "display_name": "params_it00000102 (8h\u957f\u8bad it102 856M\u6b65)",
+   "display_name": "params_it00000102 (8h长训 it102 856M步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1108,8 +1828,26 @@
    "generated_at": "2026-09-13 23:41 UTC"
   },
   {
+   "name": "params_it00000068_ema",
+   "display_name": "params_it00000068_ema (8h长训 it68 843M步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 68,
+   "global_step": 843055104,
+   "source": "params_it00000068_ema.pkl",
+   "generated_at": "2026-09-15 07:39 UTC"
+  },
+  {
    "name": "params_it00000065_ema",
-   "display_name": "params_it00000065_ema (8h\u957f\u8bad it65 805M\u6b65 EMA)",
+   "display_name": "params_it00000065_ema (8h长训 it65 805M步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1126,8 +1864,44 @@
    "generated_at": "2026-09-14 15:11 UTC"
   },
   {
+   "name": "params_it00000064_ema",
+   "display_name": "params_it00000064_ema (8h长训 it64 792M步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 64,
+   "global_step": 791949312,
+   "source": "params_it00000064_ema.pkl",
+   "generated_at": "2026-09-16 09:32 UTC"
+  },
+  {
+   "name": "params_it00000063_ema",
+   "display_name": "params_it00000063_ema (8h长训 it63 779M步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 63,
+   "global_step": 779378688,
+   "source": "params_it00000063_ema.pkl",
+   "generated_at": "2026-09-16 10:42 UTC"
+  },
+  {
    "name": "params_aggr_it00000070",
-   "display_name": "params_aggr_it00000070 (\u26a1\ufe0f\u7834\u62c6\u8fdb\u653b\u7248 T+30m 6.51\u4ebf\u6b65)",
+   "display_name": "params_aggr_it00000070 (⚡️破拆进攻版 T+30m 6.51亿步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1145,7 +1919,7 @@
   },
   {
    "name": "params_aggr_it00000070_ema",
-   "display_name": "params_aggr_it00000070_ema (\u26a1\ufe0f\u7834\u62c6\u8fdb\u653b\u7248 T+30m EMA)",
+   "display_name": "params_aggr_it00000070_ema (⚡️破拆进攻版 T+30m EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1230,7 +2004,7 @@
   },
   {
    "name": "params_it00000068",
-   "display_name": "params_it00000068 (8h\u957f\u8bad it68 570M\u6b65)",
+   "display_name": "params_it00000068 (8h长训 it68 570M步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1248,7 +2022,7 @@
   },
   {
    "name": "params_it00000068_hlgauss_top25foractor_patch3_k32",
-   "display_name": "params_it00000068_hlgauss_top25foractor_patch3_k32 (8h\u957f\u8bad it68 570M\u6b65)",
+   "display_name": "params_it00000068_hlgauss_top25foractor_patch3_k32 (8h长训 it68 570M步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1294,7 +2068,7 @@
   },
   {
    "name": "params_it00000034",
-   "display_name": "params_it00000034 (8h\u957f\u8bad it34 554M\u6b65)",
+   "display_name": "params_it00000034 (8h长训 it34 554M步)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1312,7 +2086,7 @@
   },
   {
    "name": "params_it00000034_ema",
-   "display_name": "params_it00000034_ema (8h\u957f\u8bad it34 554M\u6b65 EMA)",
+   "display_name": "params_it00000034_ema (8h长训 it34 415M步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1320,13 +2094,13 @@
     15
    ],
    "embed": 392,
-   "patch": 4,
+   "patch": 3,
    "depth": 4,
    "n_players": 2,
    "it": 34,
    "global_step": 553512960,
    "source": "params_it00000034_ema.pkl",
-   "generated_at": "2026-09-13 11:01 UTC"
+   "generated_at": "2026-09-15 07:28 UTC"
   },
   {
    "name": "duel_course_453M",
@@ -1358,7 +2132,7 @@
   },
   {
    "name": "params_it00000032_ema",
-   "display_name": "params_it00000032_ema (8h\u957f\u8bad it32 390M\u6b65 EMA)",
+   "display_name": "params_it00000032_ema (8h长训 it32 390M步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1372,7 +2146,25 @@
    "it": 32,
    "global_step": 390070272,
    "source": "params_it00000032_ema.pkl",
-   "generated_at": "2026-09-14 14:56 UTC"
+   "generated_at": "2026-09-16 09:17 UTC"
+  },
+  {
+   "name": "params_it00000031_ema",
+   "display_name": "params_it00000031_ema (8h长训 it31 377M步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 31,
+   "global_step": 377118720,
+   "source": "params_it00000031_ema.pkl",
+   "generated_at": "2026-09-16 10:28 UTC"
   },
   {
    "name": "params_clean_it00000036",
@@ -1412,7 +2204,7 @@
   },
   {
    "name": "params_it00000036",
-   "display_name": "params_it00000036 (8h\u957f\u8bad it36 302M\u6b65)",
+   "display_name": "params_it00000036 (8h长训 it36 302M步)",
    "arch": "transformer",
    "obs_shape": [
     14,

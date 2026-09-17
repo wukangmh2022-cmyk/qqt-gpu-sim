@@ -294,6 +294,12 @@ def main():
     ap.add_argument("--trade-win-bonus", type=float,
                     default=cfg("reward", "trade_win_bonus", 3.5),
                     help="同归于尽/换血险胜奖励（不赶尽杀绝，但低于纯胜）")
+    ap.add_argument("--flee-bot-ratio", type=float,
+                    default=cfg("reward", "flee_bot_ratio", 0.20),
+                    help="混入逃跑/漫游对手的比例（默认 0.20，逼迫 AI 主动追猎）")
+    ap.add_argument("--idle-penalty", type=float,
+                    default=cfg("reward", "idle_penalty", 0.015),
+                    help="单 tick 原地发呆 (move=4 且未放雷) 专属惩罚")
     ap.add_argument("--adv-top-frac", type=float, default=cfg("reward", "adv_top_frac", 0.25),
                     help="保留 |Advantage| 排名前比例（历史 Iter68=0.25）")
     ap.add_argument("--no-mask", action="store_true",
@@ -335,7 +341,7 @@ def main():
                     default=cfg("runtime", "tolerate_inconsistent", False),
                     help="一致性校验失败时继续跑（诊断用），默认退出")
     ap.add_argument("--ckpt-dir", default=os.environ.get(
-        "CKPT_DIR", cfg("checkpoint", "ckpt_dir", None)),
+        "CKPT_DIR", cfg("checkpoint", "ckpt_dir", "ckpt")),
                     help="检查点目录；不设=不存盘（benchmark 模式）。"
                          "真实训练设 ckpt/（自动接续最新检查点）")
     ap.add_argument("--ckpt-every", type=int,
@@ -348,17 +354,17 @@ def main():
                     help="全量检查点滚动保留数（默认保留最新 3 个，避免磁盘暴涨超 30GB）")
     ap.add_argument("--ckpt-local-dir",
                     default=os.environ.get("CKPT_LOCAL_DIR",
-                                          cfg("checkpoint", "ckpt_local_dir", None)),
+                                          cfg("checkpoint", "ckpt_local_dir", "ckpt_local")),
                     help="rank0 轻量参数快照目录（供拉回本地/评估，params 仅 "
                          "~25MB pickle，不拖速度）。不设=不存")
     ap.add_argument("--ckpt-local-every", type=int,
                     default=int(os.environ.get("CKPT_LOCAL_EVERY", str(
-                        cfg("checkpoint", "ckpt_local_every", 30)))),
+                        cfg("checkpoint", "ckpt_local_every", 15)))),
                     help="参数快照间隔（分钟）；0=仅在结束/信号时存")
     ap.add_argument("--ckpt-local-max-to-keep", type=int,
                     default=int(os.environ.get("CKPT_LOCAL_MAX_TO_KEEP", str(
-                        cfg("checkpoint", "ckpt_local_max_to_keep", 10)))),
-                    help="轻量参数快照滚动保留数（默认最新 10 个）")
+                        cfg("checkpoint", "ckpt_local_max_to_keep", 15)))),
+                    help="轻量参数快照滚动保留数（默认最新 15 个）")
     # ---- 评估（当前策略 vs 冻结基线，两策略对打）----
     ap.add_argument("--eval-vs", default=os.environ.get(
         "EVAL_VS", cfg("evaluation", "eval_vs", None)),
@@ -468,6 +474,7 @@ def main():
     from jax_bomb.jax_train import (both_masks, both_perspectives,
                                     both_states, collect_rollout,
                                     collect_rollout_two, compute_gae,
+                                    mask_bot_advantages,
                                     ppo_update, ppo_update_gradsync,
                                     ppo_update_lsgd, sample_actions)
 
@@ -516,13 +523,17 @@ def main():
     # ---- 全局 minibatch / envs 按总卡数均分（与 build_dp_one_iter 同语义）。
     # 不能整除时自动下调到最近整除值（一份脚本适配任意 卡数×实例数 组合）。
     envs_per = args.num_envs // n_total
+    if envs_per % 2 != 0:
+        envs_per -= 1
     if envs_per * n_total != args.num_envs:
-        print(f"[{rank}] --num-envs {args.num_envs} 不能整除总卡数 {n_total}"
+        print(f"[{rank}] --num-envs {args.num_envs} 调整为每副本偶数整除总卡数 {n_total}"
               f"，已自动下调到 {envs_per * n_total}", flush=True)
         args.num_envs = envs_per * n_total
     mb_local = args.minibatch // n_total
+    if mb_local % 2 != 0:
+        mb_local -= 1
     if mb_local * n_total != args.minibatch:
-        print(f"[{rank}] --minibatch {args.minibatch} 不能整除总卡数 {n_total}"
+        print(f"[{rank}] --minibatch {args.minibatch} 调整为每副本偶数整除总卡数 {n_total}"
               f"，已自动下调到 {mb_local * n_total}", flush=True)
         args.minibatch = mb_local * n_total
     if envs_per < 1 or mb_local < 1:
@@ -712,7 +723,9 @@ def main():
             args.win_bonus, args.timeout_lead_bonus,
             args.timeout_trail_penalty, args.timeout_draw_bonus,
             args.mutual_hit_penalty, args.double_death_penalty,
-            args.win_hp_bonus, args.trade_win_bonus)
+            args.win_hp_bonus, args.trade_win_bonus,
+            flee_bot_ratio=args.flee_bot_ratio,
+            idle_penalty=getattr(args, "idle_penalty", 0.015))
         obs, state, acts, lps, vals, rew, done, masks = batch
         fobs = both_perspectives(states)
         fmasks = both_masks(states)
@@ -723,6 +736,7 @@ def main():
         next_val = jnp.concatenate([vals[1:], fval[None]], axis=0)
         advs = compute_gae(rew, vals, next_val, done, args.gamma, args.lam)
         rets = advs + vals
+        advs, rets = mask_bot_advantages(advs, rets, vals, states.pos.shape[0], getattr(args, "flee_bot_ratio", 0.0))
         if args.lsgd_k > 0:
             if args.lsgd_mode == "grad":
                 params, opt_state, last_loss = ppo_update_gradsync(

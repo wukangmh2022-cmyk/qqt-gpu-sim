@@ -264,7 +264,7 @@ def main():
         if not os.path.isdir(args.ckpt_dir):
             print(f"没有 ckpt 目录 {args.ckpt_dir}")
             return 1
-        from export_ckpt import EXCLUDED_MODELS
+        from deploy.export_ckpt import EXCLUDED_MODELS
         paths = sorted(os.path.join(args.ckpt_dir, f)
                        for f in os.listdir(args.ckpt_dir)
                        if (f.startswith("params_") or f.startswith("ViTModel"))

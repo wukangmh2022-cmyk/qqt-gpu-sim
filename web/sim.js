@@ -438,6 +438,14 @@
       this.pos[0] = s0[0] + 0.5; this.pos[1] = s0[1] + 0.5;
       this.pos[2] = s1[0] + 0.5; this.pos[3] = s1[1] + 0.5;
       this.spawnCells = sp;
+      // 强制清除出生点脚下的砖块与墙体（消除原版关卡出生点卡在障碍中的缺陷）
+      for (const [r, c] of [s0, s1]) {
+        const idx = r * W + c;
+        if (idx >= 0 && idx < N) {
+          this.brick[idx] = 0;
+          this.wall[idx] = 0;
+        }
+      }
       // 炸砖 → 宝箱的爆率（地图配置；空场景无砖，crate_rate=0 不走炸砖路径）
       this.crateRate = (level.crate_rate != null && level.crate_rate > 0)
         ? level.crate_rate : 1.0;
@@ -509,6 +517,20 @@
       return n;
     }
 
+    _cellOccupiedByPlayer(cell, excludeP = -1) {
+      const tr = Math.floor(cell / W), tc = cell % W;
+      const R = CFG.radius;
+      for (let q = 0; q < this.alive.length; q++) {
+        if (!this.alive[q] || q === excludeP) continue;
+        const qy = this.pos[q * 2], qx = this.pos[q * 2 + 1];
+        if (qy + R > tr + EPS && qy - R < tr + 1 - EPS &&
+            qx + R > tc + EPS && qx - R < tc + 1 - EPS) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     // ------------------------------------------------------- 一个 tick
     // actions: [[move0, bomb0], [move1, bomb1]]
     step(actions) {
@@ -572,8 +594,8 @@
               const tr = rr + dy, tc = cc + dx;
               if (tr < 0 || tr >= H || tc < 0 || tc >= W) { ok = false; break; }
               const ti = tr * W + tc;
-              // 目标格必须全空: 无墙/砖/泡/道具(宝箱)/其他箱子
-              if (this.wall[ti] || this.brick[ti] || this.fuse[ti] > 0 || this.crate[ti] || this.pushable[ti]) { ok = false; break; }
+              // 目标格必须全空: 无墙/砖/泡/道具(宝箱)/其他箱子/存活角色
+              if (this.wall[ti] || this.brick[ti] || this.fuse[ti] > 0 || this.crate[ti] || this.pushable[ti] || this._cellOccupiedByPlayer(ti, p)) { ok = false; break; }
               targetCells.push(ti);
             }
             if (ok) {
@@ -1261,8 +1283,9 @@
     }
 
     // jax_env.global_vec 的浏览器移植：玩家 pid 视角 24 维全局向量
-    // （state token 输入）。buffs/debuffs/items/gametype 训练侧当前全 0
-    // （预留位），Web 端同样给 0，与训练分布一致。
+    // （state token 输入）。
+    // g[0..10]: 基础状态（进度/血量/当前属性/存活）
+    // g[11..23]: 上限与饱和观测（当前地图上限 + 是否已满，对齐 jax_env）
     encodeStateJAX(pid) {
       const opp = 1 - pid;
       const g = new Float64Array(24);
@@ -1277,7 +1300,28 @@
       g[8] = this.spdG[opp] / CFG.growthSpeedMax;
       g[9] = this.alive[pid] ? 1 : 0;
       g[10] = this.alive[opp] ? 1 : 0;
-      return g;   // g[11..23] = 0（预留）
+
+      // g[11..23]: 自身与对手的上限归一化值及饱和布尔标志
+      const bMax = this.bombsMax || CFG.growthBombsMax;
+      const zMax = this.blastMax || CFG.growthBlastMax;
+      const sMax = this.speedMax !== undefined ? this.speedMax : CFG.growthSpeedMax;
+      g[11] = bMax / CFG.growthBombsMax;
+      g[12] = zMax / CFG.growthBlastMax;
+      g[13] = sMax / CFG.growthSpeedMax;
+      const myBFull = this.bombsCap[pid] >= bMax ? 1 : 0;
+      const myZFull = this.blastCap[pid] >= zMax ? 1 : 0;
+      const mySFull = this.spdG[pid] >= sMax - 1e-4 ? 1 : 0;
+      g[14] = myBFull;
+      g[15] = myZFull;
+      g[16] = mySFull;
+      g[17] = (myBFull && myZFull && mySFull) ? 1 : 0;
+      g[18] = bMax / CFG.growthBombsMax;
+      g[19] = zMax / CFG.growthBlastMax;
+      g[20] = sMax / CFG.growthSpeedMax;
+      g[21] = this.bombsCap[opp] >= bMax ? 1 : 0;
+      g[22] = this.blastCap[opp] >= zMax ? 1 : 0;
+      g[23] = this.spdG[opp] >= sMax - 1e-4 ? 1 : 0;
+      return g;
     }
 
     // 单方向移动尝试（原 Sim.step 移动块提取）：resolveAxis AABB 滑动碰撞 +
@@ -1589,13 +1633,31 @@
     // AI 决策：pid 是物理玩家位。模型统一用 pid=0 视角 —— 玩家 1 时观测
     // 先做通道互换把自己搬到通道 0（play/duel.py::_swap_player_channels）。
     act(sim, pid, rng) {
-      const obs = sim.encodeObs();
-      if (pid === 1) this._swapChannels(obs);
-      const { mm, bm } = sim.legalMask();
-      const logits = this.forward(obs);
-      const aM = this._sampleMasked(logits.move, mm[pid], rng);
-      const aB = this._sampleMasked(logits.bomb, bm[pid], rng);
-      return [aM, aB];
+      const every = this.inferEvery || 1;
+      const changed = sim !== this._cSim || sim._gen !== this._cGen;
+      if (changed || !this._nextInferT) {
+        this._cT = [-1, -1];
+        this._cA = [null, null];
+        this._nextInferT = [0, 0];
+      }
+      const need = changed || this._cT[pid] < 0 || (sim.t >= this._nextInferT[pid]);
+      if (need) {
+        this._cSim = sim; this._cGen = sim._gen;
+        const obs = sim.encodeObs();
+        if (pid === 1) this._swapChannels(obs);
+        const { mm, bm } = sim.legalMask();
+        const logits = this.forward(obs);
+        const aM = this._sampleMasked(logits.move, mm[pid], rng);
+        const aB = this._sampleMasked(logits.bomb, bm[pid], rng);
+        this._cA[pid] = [aM, aB];
+        this._cT[pid] = sim.t;
+        if (sim.t - this._nextInferT[pid] > every) {
+          this._nextInferT[pid] = sim.t + every;
+        } else {
+          this._nextInferT[pid] += every;
+        }
+      }
+      return this._cA[pid];
     }
 
     _swapChannels(obs) {
@@ -2102,21 +2164,26 @@
     // AI 决策：每玩家自己的视角，不需要通道互换。按 (sim, pid, tick) 缓存：
     // 同一 tick 重复询问同一玩家不再重复推理；不同玩家各算各的（人机对局
     // 只算 pid=1，不白跑 pid=0）。inferEvery>1 时每隔 N tick 才推理一次，
-    // 中间 tick 复用上一次的动作（省 CPU 的玩法选项；默认 1 = 每 tick）。
+    // 中间 tick 复用上一次的动作（支持 1.5 对应 150ms 降频；默认 1 = 每 tick 100ms）。
     act(sim, pid, rng) {
       const every = this.inferEvery || 1;
       const changed = sim !== this._cSim || sim._gen !== this._cGen;
-      if (changed) {
-        this._cT[0] = -1; this._cT[1] = -1;
-        this._cA[0] = null; this._cA[1] = null;
+      if (changed || !this._nextInferT) {
+        this._cT = [-1, -1];
+        this._cA = [null, null];
+        this._nextInferT = [0, 0];
       }
-      const need = changed || this._cT[pid] < 0 ||
-        (sim.t - this._cT[pid] >= every);
+      const need = changed || this._cT[pid] < 0 || (sim.t >= this._nextInferT[pid]);
       if (need) {
         this._cSim = sim; this._cGen = sim._gen;
         const { mm, bm } = sim.legalMask();
         this._cA[pid] = this._decide(sim, pid, mm, bm, rng);
         this._cT[pid] = sim.t;
+        if (sim.t - this._nextInferT[pid] > every) {
+          this._nextInferT[pid] = sim.t + every;
+        } else {
+          this._nextInferT[pid] += every;
+        }
       }
       return this._cA[pid];
     }
@@ -2135,8 +2202,13 @@
     // 前向省 ~35%）。返回 [a0, a1]，缓存语义与 act 一致（含降频）。
     bothAct(sim, rng) {
       const every = this.inferEvery || 1;
-      const need = sim !== this._cSim || sim._gen !== this._cGen ||
-        this._cT[0] < 0 || (sim.t - this._cT[0] >= every);
+      const changed = sim !== this._cSim || sim._gen !== this._cGen;
+      if (changed || !this._nextInferT) {
+        this._cT = [-1, -1];
+        this._cA = [null, null];
+        this._nextInferT = [0, 0];
+      }
+      const need = changed || this._cT[0] < 0 || (sim.t >= this._nextInferT[0]);
       if (need) {
         this._cSim = sim; this._cGen = sim._gen;
         const { mm, bm } = sim.legalMask();
@@ -2149,6 +2221,12 @@
         this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
                       this._sampleMasked(f1.bomb, bm[1], rng)];
         this._cT[0] = sim.t; this._cT[1] = sim.t;
+        if (sim.t - this._nextInferT[0] > every) {
+          this._nextInferT[0] = sim.t + every;
+        } else {
+          this._nextInferT[0] += every;
+        }
+        this._nextInferT[1] = this._nextInferT[0];
       }
       return this._cA;
     }
@@ -2235,25 +2313,35 @@
     async act(sim, pid, rng) {
       const every = this.inferEvery || 1;
       const changed = sim !== this._cSim || sim._gen !== this._cGen;
-      if (changed) {
-        this._cT[0] = -1; this._cT[1] = -1;
-        this._cA[0] = null; this._cA[1] = null;
+      if (changed || !this._nextInferT) {
+        this._cT = [-1, -1];
+        this._cA = [null, null];
+        this._nextInferT = [0, 0];
       }
-      const need = changed || this._cT[pid] < 0 ||
-        (sim.t - this._cT[pid] >= every);
+      const need = changed || this._cT[pid] < 0 || (sim.t >= this._nextInferT[pid]);
       if (need) {
         this._cSim = sim; this._cGen = sim._gen;
         const { mm, bm } = sim.legalMask();
         this._cA[pid] = await this._decide(sim, pid, mm, bm, rng);
         this._cT[pid] = sim.t;
+        if (sim.t - this._nextInferT[pid] > every) {
+          this._nextInferT[pid] = sim.t + every;
+        } else {
+          this._nextInferT[pid] += every;
+        }
       }
       return this._cA[pid];
     }
 
     async bothAct(sim, rng) {
       const every = this.inferEvery || 1;
-      const need = sim !== this._cSim || sim._gen !== this._cGen ||
-        this._cT[0] < 0 || (sim.t - this._cT[0] >= every);
+      const changed = sim !== this._cSim || sim._gen !== this._cGen;
+      if (changed || !this._nextInferT) {
+        this._cT = [-1, -1];
+        this._cA = [null, null];
+        this._nextInferT = [0, 0];
+      }
+      const need = changed || this._cT[0] < 0 || (sim.t >= this._nextInferT[0]);
       if (need) {
         this._cSim = sim; this._cGen = sim._gen;
         const { mm, bm } = sim.legalMask();
@@ -2266,6 +2354,12 @@
         this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
                       this._sampleMasked(f1.bomb, bm[1], rng)];
         this._cT[0] = sim.t; this._cT[1] = sim.t;
+        if (sim.t - this._nextInferT[0] > every) {
+          this._nextInferT[0] = sim.t + every;
+        } else {
+          this._nextInferT[0] += every;
+        }
+        this._nextInferT[1] = this._nextInferT[0];
       }
       return this._cA;
     }
@@ -2530,9 +2624,9 @@
           if (f > 0 && f <= 10) { chain = true; break; }
         }
       }
-      // 能撤：有合法且低危险且非威胁的目标格
+      // 能撤：有合法且低危险且非威胁的目标格（必须是 4 邻真实位移格，绝不能把原地 MOVE_IDLE 算作逃生）
       let canEscape = false;
-      for (let mv = 0; mv < 5; mv++) {
+      for (let mv = 0; mv < 4; mv++) {
         if (legal[mv] && dngC[mv] < 0.35 && !thrC[mv]) { canEscape = true; break; }
       }
       // 破砖开路：面前（4 邻）有可炸砖、且在"忽略砖"逼近场上比脚下更接近
@@ -2557,6 +2651,324 @@
     }
   }
 
+  // ------------------------------------------------------------ 训练同款辅助对手 Bot
+  // 1. 原地守备智能体：身体原地驻留 (MOVE_IDLE)，但在受到威胁时紧急避险，并在敌近且安全时放雷反击
+  class StationaryDefenseAI {
+    act(sim, pid) {
+      if (!sim.alive[pid]) return [MOVE_IDLE, 0];
+      const danger = sim.dangerMap();
+      const own = sim.centerCell(pid);
+      const ownIdx = own[0] * W + own[1];
+      const ownDng = danger[ownIdx];
+      const opp = 1 - pid;
+      const { mm, bm } = sim.legalMask();
+      const myMm = mm[pid];
+      const myBm = bm[pid];
+      const py = sim.pos[pid * 2], px = sim.pos[pid * 2 + 1];
+      const oy = sim.pos[opp * 2], ox = sim.pos[opp * 2 + 1];
+      const oppDist = Math.hypot(py - oy, px - ox);
+
+      // 如果脚下有危险或站立在炸弹上，必须紧急避险走向安全格！
+      if (ownDng > 0.05 || sim.fuse[ownIdx] > 0) {
+        let bestMove = MOVE_IDLE;
+        let minScore = 1e9;
+        const offsets = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+        for (let d = 0; d < 4; d++) {
+          if (!myMm[d]) continue;
+          const nr = own[0] + offsets[d][0], nc = own[1] + offsets[d][1];
+          if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+          const nDng = danger[nr * W + nc];
+          const distToOpp = Math.hypot(nr - oy, nc - ox);
+          const score = nDng * 1000 - distToOpp * 0.1;
+          if (score < minScore) {
+            minScore = score;
+            bestMove = d;
+          }
+        }
+        return [bestMove, 0];
+      }
+
+      // 如果脚下安全：对手逼近 <= 2.5 格且有合法雷可放时，检查是否存在至少 1 个安全的相邻逃生格
+      let wantBomb = 0;
+      let escapeMove = MOVE_IDLE;
+      if (oppDist <= 2.5 && myBm[1] === 1) {
+        const offsets = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+        let safeEscapeCount = 0;
+        let maxOppDist = -1;
+        for (let d = 0; d < 4; d++) {
+          if (!myMm[d]) continue;
+          const nr = own[0] + offsets[d][0], nc = own[1] + offsets[d][1];
+          if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+          if (danger[nr * W + nc] < 0.1) {
+            safeEscapeCount++;
+            const dist = Math.hypot(nr - oy, nc - ox);
+            if (dist > maxOppDist) {
+              maxOppDist = dist;
+              escapeMove = d;
+            }
+          }
+        }
+        if (safeEscapeCount >= 1) {
+          wantBomb = 1;
+          return [escapeMove, wantBomb]; // 放雷当 tick 立即朝安全格起步避险！
+        }
+      }
+
+      return [MOVE_IDLE, wantBomb];
+    }
+  }
+
+  // 2. 逃跑风筝 Bot（Hunter 级全图时空规避 + 开阔地拉扯风筝 + 0自灭不放炮）
+  class FleeBotAI {
+    constructor() {
+      this.rng = mulberry32(0xF1EE);
+    }
+
+    // 继承 Hunter 核心多源 Dijkstra 价值场
+    _dijkstra(source, danger, blocked) {
+      const inf = Infinity;
+      const dist = new Float64Array(N);
+      const cost = new Float64Array(N);
+      for (let i = 0; i < N; i++) {
+        dist[i] = source[i] ? 0 : inf;
+        cost[i] = blocked[i] ? inf : 1 + 2 * danger[i];
+      }
+      let changed = true;
+      let passes = 0;
+      while (changed && passes < N) {
+        changed = false;
+        passes++;
+        for (let i = 0; i < N; i++) {
+          if (dist[i] === inf) continue;
+          const r = (i / W) | 0, c = i % W;
+          for (let d = 0; d < 4; d++) {
+            const nr = r + DIRS[d][0], nc = c + DIRS[d][1];
+            if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+            const j = nr * W + nc;
+            if (cost[j] === inf) continue;
+            const nd = dist[i] + cost[j];
+            if (nd < dist[j]) { dist[j] = nd; changed = true; }
+          }
+        }
+      }
+      return dist;
+    }
+
+    act(sim, pid) {
+      if (!sim.alive[pid]) return [MOVE_IDLE, 0];
+      const opp = 1 - pid;
+      const danger = sim.dangerMap();
+      const own = sim.centerCell(pid);
+      const ownIdx = own[0] * W + own[1];
+      const ownDng = danger[ownIdx];
+
+      const r = sim.pos[pid * 2], c = sim.pos[pid * 2 + 1];
+      const rIdx = Math.min(Math.max(Math.floor(r), 0), H - 1);
+      const cIdx = Math.min(Math.max(Math.floor(c), 0), W - 1);
+
+      // 全图威胁区：场上所有活动炸弹的十字延伸危险带（提前预判避让）
+      const threat = new Uint8Array(N);
+      for (let i = 0; i < N; i++) {
+        if (sim.fuse[i] > 0) {
+          threat[i] = 1;
+          const blast = sim.bombBlast[i] > 0 ? sim.bombBlast[i] : CFG.blast;
+          const br = (i / W) | 0, bc = i % W;
+          for (let d = 0; d < 4; d++) {
+            for (let k = 1; k <= blast; k++) {
+              const nr = br + DIRS[d][0] * k, nc = bc + DIRS[d][1] * k;
+              if (nr < 0 || nr >= H || nc < 0 || nc >= W) break;
+              const idx = nr * W + nc;
+              if (sim.wall[idx]) break;
+              threat[idx] = 1;
+              if (sim.brick[idx] || sim.fuse[idx] > 0) break;
+            }
+          }
+        }
+      }
+
+      // 障碍物：永久墙、砖块、在场泡
+      const blocked = new Uint8Array(N);
+      for (let i = 0; i < N; i++) {
+        blocked[i] = sim.wall[i] || sim.brick[i] || sim.fuse[i] > 0 ? 1 : 0;
+      }
+      const blockedWalls = new Uint8Array(N);
+      for (let i = 0; i < N; i++) blockedWalls[i] = sim.wall[i] ? 1 : 0;
+
+      // 逃生场：完全安全且非威胁的格子为源（绝对高优先级脱险）
+      const safeSrc = new Uint8Array(N);
+      let safeCount = 0;
+      for (let i = 0; i < N; i++) {
+        if (danger[i] < 0.2 && !threat[i] && !blocked[i]) {
+          safeSrc[i] = 1;
+          safeCount++;
+        }
+      }
+      if (safeCount === 0) {
+        for (let i = 0; i < N; i++) {
+          if (danger[i] < 0.35 && !blocked[i]) {
+            safeSrc[i] = 1;
+          }
+        }
+      }
+      const V_safe = this._dijkstra(safeSrc, danger, blocked);
+
+      // 自身连通距离场
+      const selfSrc = new Uint8Array(N);
+      selfSrc[ownIdx] = 1;
+      const V_self = this._dijkstra(selfSrc, danger, blocked);
+
+      // 对手距离场（用于计算真实拓扑距离）
+      const oppSrc = new Uint8Array(N);
+      if (sim.alive[opp]) {
+        const [ro, co] = sim.centerCell(opp);
+        oppSrc[ro * W + co] = 1;
+      }
+      const V_opp = this._dijkstra(oppSrc, danger, blocked);
+      const V_opp_walls = this._dijkstra(oppSrc, danger, blockedWalls);
+
+      // 全局搜索开阔安全逃跑锚点：
+      // 在自身可达、当前完全安全的格子中，挑选：
+      // 1) 离对手最远（V_opp 最大）
+      // 2) 出路最多（非死胡同，freeDeg >= 3）
+      // 3) 远离死角边缘
+      let bestTarget = -1;
+      let bestUtility = -Infinity;
+      const inf = Infinity;
+
+      for (let i = 0; i < N; i++) {
+        if (V_self[i] === inf) continue; // 必须自身连通可达
+        if (blocked[i] || threat[i] || danger[i] >= 0.2) continue; // 必须安全且非障碍
+
+        const distOpp = Math.min(V_opp[i], V_opp_walls[i]);
+        if (distOpp === inf) continue;
+
+        const tr = (i / W) | 0, tc = i % W;
+        let freeDeg = 0;
+        for (let d = 0; d < 4; d++) {
+          const nr = tr + DIRS[d][0], nc = tc + DIRS[d][1];
+          if (nr >= 0 && nr < H && nc >= 0 && nc < W) {
+            const nIdx = nr * W + nc;
+            if (!sim.wall[nIdx] && !sim.brick[nIdx]) freeDeg++;
+          }
+        }
+        let degScore = 0;
+        if (freeDeg <= 1) degScore = -60.0; // 死胡同致命惩罚（绝不把自己逼进死胡同）
+        else if (freeDeg === 2) degScore = -10.0;
+        else degScore = freeDeg * 5.0;
+
+        let edgePen = 0;
+        if (tr === 0 || tr === H - 1 || tc === 0 || tc === W - 1) edgePen = 12.0;
+
+        const utility = distOpp * 3.0 + degScore - edgePen - V_self[i] * 0.4;
+        if (utility > bestUtility) {
+          bestUtility = utility;
+          bestTarget = i;
+        }
+      }
+
+      // 计算朝向最佳逃生锚点的导航场
+      let V_target = null;
+      if (bestTarget >= 0) {
+        const targetSrc = new Uint8Array(N);
+        targetSrc[bestTarget] = 1;
+        V_target = this._dijkstra(targetSrc, danger, blocked);
+      }
+
+      // 评估 5 个候选动作 (上、下、左、右、原地)
+      const { mm } = sim.legalMask();
+      const myMm = mm[pid];
+      const cells = new Int32Array(5);
+      const dngC = new Float64Array(5), thrC = new Float64Array(5);
+      for (let mv = 0; mv < 4; mv++) {
+        const nr = rIdx + DIRS[mv][0], nc = cIdx + DIRS[mv][1];
+        if (nr < 0 || nr >= H || nc < 0 || nc >= W) {
+          cells[mv] = -1;
+        } else {
+          cells[mv] = nr * W + nc;
+        }
+      }
+      cells[MOVE_IDLE] = ownIdx;
+
+      const legal = [];
+      for (let mv = 0; mv < 5; mv++) {
+        const c = cells[mv];
+        dngC[mv] = c >= 0 ? danger[c] : 1.0;
+        thrC[mv] = c >= 0 ? threat[c] : 1.0;
+        legal.push(c >= 0 && myMm[mv] === 1 && !(sim.wall[c] || sim.brick[c]));
+      }
+
+      const noise = [];
+      for (let mv = 0; mv < 5; mv++) noise.push(0.02 * this.rng());
+
+      const esc = [], flee = [];
+      for (let mv = 0; mv < 5; mv++) {
+        const c = cells[mv];
+        // 逃生打分：按 V_safe + 威胁度
+        let e = (c >= 0 ? V_safe[c] : inf) * 100 + dngC[mv] * 300 + thrC[mv] * 50 + noise[mv];
+        if (!legal[mv]) e = inf;
+        esc.push(e);
+
+        // 逃跑打分：按 V_target + 严格避雷避险
+        let f = (V_target && c >= 0 ? V_target[c] : inf) * 10 + dngC[mv] * 400 + thrC[mv] * 100 + noise[mv];
+        if (!legal[mv] || dngC[mv] >= 0.3 || thrC[mv] > 0) f = inf; // 绝不踏入即将爆炸的危险格
+        flee.push(f);
+      }
+
+      // 如果脚下有危险或身处威胁区，强制进入绝对逃生模式，且禁止在危险格停步
+      const underThreat = ownDng >= 0.15 || threat[ownIdx] === 1;
+      let fleeOk = false;
+      for (let mv = 0; mv < 5; mv++) if (isFinite(flee[mv])) fleeOk = true;
+
+      const useEsc = underThreat || !fleeOk;
+      if (useEsc) {
+        esc[MOVE_IDLE] = inf; // 危险时刻绝不发呆等死
+      }
+
+      const score = useEsc ? esc : flee;
+      let bestMove = MOVE_IDLE;
+      let minScore = inf;
+      for (let mv = 0; mv < 5; mv++) {
+        if (score[mv] < minScore) {
+          minScore = score[mv];
+          bestMove = mv;
+        }
+      }
+
+      // 终极兜底：若全为 inf，选择合法格中危险度最小的方向逃跑
+      if (!isFinite(minScore)) {
+        let bm = MOVE_IDLE, bs = inf, bm2 = MOVE_IDLE, bs2 = inf;
+        for (let mv = 0; mv < 5; mv++) {
+          if (!legal[mv]) continue;
+          if (dngC[mv] < bs2) { bs2 = dngC[mv]; bm2 = mv; }
+          if (mv !== MOVE_IDLE && dngC[mv] < bs) { bs = dngC[mv]; bm = mv; }
+        }
+        bestMove = isFinite(bs) ? bm : bm2;
+      }
+
+      // 严格 0 放炮：遵从指示不放炮，杜绝一切自爆悲剧，全力时空风筝走位
+      return [bestMove, 0];
+    }
+  }
+
+  // 3. 纯漫游走位 Bot（训练侧 roam_bot 100% 对齐：纯合法随机走位不放雷）
+  class RoamBotAI {
+    constructor() {
+      this.rng = mulberry32(0x80A3);
+    }
+    act(sim, pid) {
+      if (!sim.alive[pid]) return [MOVE_IDLE, 0];
+      const { mm } = sim.legalMask();
+      const myMm = mm[pid];
+      const legals = [];
+      for (let mv = 0; mv < 5; mv++) {
+        if (myMm[mv]) legals.push(mv);
+      }
+      if (legals.length === 0) return [MOVE_IDLE, 0];
+      const chosen = legals[Math.floor(this.rng() * legals.length)];
+      return [chosen, 0];
+    }
+  }
+
   let TimeAStarAI = null;
   if (typeof require !== 'undefined') {
     try { TimeAStarAI = require('./time_astar_ai.js'); } catch (_) {}
@@ -2569,7 +2981,9 @@
     H, W, N, N_PLAYERS, N_MOVES, N_BOMB,
     MOVE_UP, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, MOVE_IDLE,
     DIRS, EPS, CFG,
-    Sim, MLPModel, CNNModel, TransformerModel, ORTTransformerModel, HunterAI, TimeAStarAI, NukemanAI,
+    Sim, MLPModel, CNNModel, TransformerModel, ORTTransformerModel,
+    HunterAI, TimeAStarAI, NukemanAI,
+    StationaryDefenseAI, FleeBotAI, RoamBotAI,
     mulberry32, resolveAxis, decodeB64,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = QQT;
