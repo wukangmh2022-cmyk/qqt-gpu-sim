@@ -138,7 +138,7 @@
   },
   {
    "name": "params_it00000831_ema",
-   "display_name": "params_it00000831_ema (🏆 12h百亿破局 6.5h 104.3亿步 EMA)",
+   "display_name": "params_it00000831_ema (🏆 破局宗师 · 最新旗舰版 104.3亿步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -558,7 +558,7 @@
   },
   {
    "name": "params_it00000223_ema",
-   "display_name": "params_it00000223_ema (⚡️破局宗师标杆 27.9亿步 EMA)",
+   "display_name": "params_it00000223_ema (🥈 破局宗师 · 稍弱版 27.9亿步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
