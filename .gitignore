@@ -32,6 +32,7 @@ upload_2x8gpu/
 # 这些文件通常每个几十 MB，批量实验时会迅速膨胀到数 GB，不纳入源码提交。
 web/models/params_*.json
 web/models/params_*.onnx
+web/models/index.all_local.json
 !web/models/params_it00000068_hlgauss_top25foractor_patch3_k32.json
 !web/models/params_it00000068_hlgauss_top25foractor_patch3_k32.onnx
 !web/models/params_Pre-Train_Test.*
@@ -63,5 +64,7 @@ params_surgery*.pkl
 !web/models/params_it00000131*
 !web/models/params_it00000065*
 !web/models/params_it00000032*
+!web/models/params_it00000831*
+!web/models/params_it00000223*
 # !web/models/params_hunt_*
 eval_local/

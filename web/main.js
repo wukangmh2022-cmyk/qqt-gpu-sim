@@ -521,6 +521,14 @@
     const qState = aiMotorQueues[pid];
     if (!qState) return rawAction;
 
+    // 仅对神经网络模型生效：规则敌人（Hunter、时空 A* 等）或人类操控保持原生反应，不加动作延迟
+    const isModel = pid === 0 ? (spectate && !isRuleAi(p0Sel)) : !isRuleAi(enemySel);
+    if (!isModel) {
+      qState.queue.length = 0;
+      qState.lastMove = rawMove;
+      return rawAction;
+    }
+
     const latencyVal = elAiLatency ? parseInt(elAiLatency.value, 10) : 100;
     const latencyMs = Number.isFinite(latencyVal) ? latencyVal : 100;
     if (latencyMs <= 100) {
@@ -1523,7 +1531,7 @@
   }
 
   async function loadModelList() {
-    const resp = await fetch('models/index.json?v=20260917-it831-v1');
+    const resp = await fetch('models/index.json?v=20260917-it831-v2');
     modelList = (await resp.json()).models || [];
     // 按时间倒序排列（最新导出的模型排在最前）
     modelList.sort((a, b) => {
@@ -1721,8 +1729,12 @@
       recMsg('录制剪片：已关闭（零开销）');
     }
   });
-  elEnemyAi.addEventListener('change', applyModel);   // 换敌人 AI → 应用并重开
+  elEnemyAi.addEventListener('change', () => {
+    resetAiMotorQueues();
+    applyModel();
+  });   // 换敌人 AI → 应用并重开
   elP0Ai.addEventListener('change', async () => {
+    resetAiMotorQueues();
     // 观战「我方：」：规则 → hunter / time_astar；模型 → 懒加载进缓存（不阻塞开局）
     p0Sel = elP0Ai.value;
     if (!isRuleAi(p0Sel)) {
@@ -2236,11 +2248,13 @@
       a1 = await aiOf(1);
     }
     const actionMs = performance.now() - actionT0;
-    // 后置动作传导时延：非观战时仅对敌方 AI 生效（保留人类实时操控）；观战时对双方 AI 均生效
-    if (spectate) {
+    // 后置动作传导时延：仅对神经网络模型生效（规则敌人与人类玩家保持原生无延迟）
+    if (spectate && !isRuleAi(p0Sel)) {
       a0 = applyAiMotorDelay(0, a0);
     }
-    a1 = applyAiMotorDelay(1, a1);
+    if (!isRuleAi(enemySel)) {
+      a1 = applyAiMotorDelay(1, a1);
+    }
     // 拾取判定：人类玩家脚下 step 前有宝箱 → step 后没有 = 吃到
     const hc = Math.floor(sim.pos[1]), hr = Math.floor(sim.pos[0]);
     const hadCrate = !spectate && sim.alive[0] && sim.crate[hr * W + hc] === 1;
