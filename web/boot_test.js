@@ -242,13 +242,13 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   (els['bgm'].listeners['change'] || []).forEach((fn) => fn());
   console.log('BGM 开关切换正常（on/off）✔');
 
-  // AI 反应时延下拉切换：默认 100ms，切换至 150/200/250/300ms 触发重置
+  // AI 反应降频下拉切换：默认 100ms，切换至 150/200/250ms 触发重置
   if (els['ai-latency']) {
-    for (const lat of ['150', '200', '250', '300', '100']) {
+    for (const lat of ['150', '200', '250', '100']) {
       els['ai-latency'].value = lat;
       (els['ai-latency'].listeners['change'] || []).forEach((fn) => fn());
     }
-    console.log('AI 反应时延下拉多档位切换正常 ✔');
+    console.log('AI 反应降频下拉多档位切换正常 ✔');
   }
 
   // 观战勾选 → 「我方：」下拉显示

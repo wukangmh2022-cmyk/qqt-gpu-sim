@@ -460,7 +460,7 @@
       }
     }
 
-    m.inferEvery = 1;
+    m.inferEvery = getInferEveryFromUi();
     modelCache.set(name, m);
     return m;
   }
@@ -497,12 +497,22 @@
     return [MOVE_IDLE, 0];          // 模型还没加载好：先站着
   }
 
-  // ------------------------------------------------------------ AI 动作后置传导时延队列 (Motor Delay)
-  // 模拟生物神经传导与物理击键过程：
-  // 1. AI 基于当前最新局面完成决策推理（避免感知延迟导致撞旧障碍发呆）；
-  // 2. 决策进入运动神经传导管道（FIFO Queue），经过所设时延后才真正传达至按键；
-  // 3. 在传导窗口期内，角色保持当前运动惯性（维持上一次有效移动方向），不放炮；
-  // 4. 到达传导时延后执行最新目标动作；若排队期间产生放炮意图，合并保留确保绝不丢泡。
+  // ------------------------------------------------------------ AI 动作即时执行与推理降频
+  // 推理即行动架构：模型完成局势推理后即刻执行动作（0 控制滞后，彻底根除动作延迟导致的左右摇摆/震荡 bug）。
+  // 反应调速由模型的 inferEvery 原生降频机制负责：
+  // 100ms -> 每 tick 100ms 推理，原生电竞级极速反应；
+  // 150ms -> 每 150ms 推理（降频 50%），推理 tick 即刻行动，中间帧平滑维持惯性走位；
+  // 200ms -> 每 200ms 推理（降频 100%）；
+  // 250ms -> 每 250ms 推理（降频 150%）。
+  // 规则敌人（Hunter、时空 A* 等）不受 inferEvery 影响，保持原生每 tick 决策。
+  function getInferEveryFromUi() {
+    const val = elAiLatency ? parseInt(elAiLatency.value, 10) : 100;
+    if (val === 150) return 1.5;
+    if (val === 200) return 2.0;
+    if (val === 250) return 2.5;
+    return 1.0;
+  }
+
   const aiMotorQueues = [
     { queue: [], lastMove: MOVE_IDLE, accum: 0 },
     { queue: [], lastMove: MOVE_IDLE, accum: 0 },
@@ -514,77 +524,17 @@
       aiMotorQueues[p].lastMove = MOVE_IDLE;
       aiMotorQueues[p].accum = 0;
     }
+    const every = getInferEveryFromUi();
+    for (const m of modelCache.values()) {
+      m.inferEvery = every;
+      m._cSim = null;
+      m._nextInferT = null;
+    }
   }
 
   function applyAiMotorDelay(pid, rawAction) {
-    const rawMove = rawAction[0], rawBomb = rawAction[1];
-    const qState = aiMotorQueues[pid];
-    if (!qState) return rawAction;
-
-    // 仅对神经网络模型生效：规则敌人（Hunter、时空 A* 等）或人类操控保持原生反应，不加动作延迟
-    const isModel = pid === 0 ? (spectate && !isRuleAi(p0Sel)) : !isRuleAi(enemySel);
-    if (!isModel) {
-      qState.queue.length = 0;
-      qState.lastMove = rawMove;
-      return rawAction;
-    }
-
-    const latencyVal = elAiLatency ? parseInt(elAiLatency.value, 10) : 100;
-    const latencyMs = Number.isFinite(latencyVal) ? latencyVal : 100;
-    if (latencyMs <= 100) {
-      // 100ms：原生 10Hz tick（0ms 额外按键延迟），直接执行
-      qState.queue.length = 0;
-      qState.lastMove = rawMove;
-      return rawAction;
-    }
-
-    // 额外按键延迟（单位：tick，每 tick = 100ms）
-    const extraDelayTicks = (latencyMs - 100) / 100;
-    const baseTicks = Math.floor(extraDelayTicks);
-    const frac = extraDelayTicks - baseTicks;
-
-    let delayTicks = baseTicks;
-    if (frac > 0) {
-      qState.accum += frac;
-      if (qState.accum >= 1.0 - 1e-4) {
-        delayTicks += 1;
-        qState.accum -= 1.0;
-      }
-    }
-
-    const curTick = (sim && typeof sim.t === 'number') ? sim.t : 0;
-    const dueTick = curTick + delayTicks;
-
-    // 压入当前决策指令
-    qState.queue.push({ move: rawMove, bomb: rawBomb, dueTick });
-
-    // 提取本 tick 或之前已到期的全部指令
-    let maturedMove = null;
-    let maturedBomb = 0;
-    let popIdx = -1;
-
-    for (let i = 0; i < qState.queue.length; i++) {
-      const item = qState.queue[i];
-      if (item.dueTick <= curTick) {
-        maturedMove = item.move;
-        if (item.bomb) maturedBomb = 1;
-        popIdx = i;
-      } else {
-        break; // 队列按 dueTick 单调递增排列
-      }
-    }
-
-    if (popIdx >= 0) {
-      qState.queue.splice(0, popIdx + 1);
-    }
-
-    if (maturedMove != null) {
-      qState.lastMove = maturedMove;
-      return [maturedMove, maturedBomb];
-    } else {
-      // 传导窗口期内尚未有新指令到达手指：保持前向惯性走位，不放炮
-      return [qState.lastMove, 0];
-    }
+    // 动作即时执行，绝无延迟管道引起的超调震荡
+    return rawAction;
   }
 
   // ------------------------------------------------------------ 素材加载
@@ -2248,13 +2198,7 @@
       a1 = await aiOf(1);
     }
     const actionMs = performance.now() - actionT0;
-    // 后置动作传导时延：仅对神经网络模型生效（规则敌人与人类玩家保持原生无延迟）
-    if (spectate && !isRuleAi(p0Sel)) {
-      a0 = applyAiMotorDelay(0, a0);
-    }
-    if (!isRuleAi(enemySel)) {
-      a1 = applyAiMotorDelay(1, a1);
-    }
+    // 推理后即刻行动：零控制延迟，彻底消除左右摇摆震荡；AI 反应调速由模型的 inferEvery 降频负责
     // 拾取判定：人类玩家脚下 step 前有宝箱 → step 后没有 = 吃到
     const hc = Math.floor(sim.pos[1]), hr = Math.floor(sim.pos[0]);
     const hadCrate = !spectate && sim.alive[0] && sim.crate[hr * W + hc] === 1;

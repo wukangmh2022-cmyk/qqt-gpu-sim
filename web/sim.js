@@ -1656,8 +1656,10 @@
         } else {
           this._nextInferT[pid] += every;
         }
+        return this._cA[pid];
       }
-      return this._cA[pid];
+      // 非推理 tick：延续上一次移动惯性，放炮指令仅在推理决策帧触发单次脉冲
+      return [this._cA[pid][0], 0];
     }
 
     _swapChannels(obs) {
@@ -2184,8 +2186,10 @@
         } else {
           this._nextInferT[pid] += every;
         }
+        return this._cA[pid];
       }
-      return this._cA[pid];
+      // 非推理 tick：延续上一次移动惯性，放炮指令仅在推理决策帧触发单次脉冲
+      return [this._cA[pid][0], 0];
     }
 
     _decide(sim, pid, mm, bm, rng) {
@@ -2227,8 +2231,9 @@
           this._nextInferT[0] += every;
         }
         this._nextInferT[1] = this._nextInferT[0];
+        return this._cA;
       }
-      return this._cA;
+      return [[this._cA[0][0], 0], [this._cA[1][0], 0]];
     }
   }
 
@@ -2329,8 +2334,10 @@
         } else {
           this._nextInferT[pid] += every;
         }
+        return this._cA[pid];
       }
-      return this._cA[pid];
+      // 非推理 tick：延续上一次移动惯性，放炮指令仅在推理决策帧触发单次脉冲
+      return [this._cA[pid][0], 0];
     }
 
     async bothAct(sim, rng) {
@@ -2360,8 +2367,9 @@
           this._nextInferT[0] += every;
         }
         this._nextInferT[1] = this._nextInferT[0];
+        return this._cA;
       }
-      return this._cA;
+      return [[this._cA[0][0], 0], [this._cA[1][0], 0]];
     }
 
     async _decide(sim, pid, mm, bm, rng) {

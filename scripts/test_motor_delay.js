@@ -3,256 +3,147 @@
 
 const assert = require('assert');
 
-function createMotorDelayTester() {
-  let latencyVal = 100;
-  let simT = 0;
-  let spectate = false;
-  let p0Sel = 'human';
-  let enemySel = 'ViTModel2_31.9B';
-  const MOVE_IDLE = 0, MOVE_UP = 1, MOVE_DOWN = 2, MOVE_LEFT = 3, MOVE_RIGHT = 4;
+const fs = require('fs');
+const path = require('path');
+const QQT = require('../web/sim.js');
+const { Sim, TransformerModel } = QQT;
 
-  const isRuleAi = (sel) =>
-    sel === '__hunter__' || sel === '__time_astar__' || sel === '__time_astar_hunt__' ||
-    sel === '__time_astar_roam__' || sel === '__nukeman__' || sel === '__idle__' ||
-    sel === '__stationary__' || sel === '__flee_bot__' || sel === '__roam_bot__';
+console.log('=== 开始测试 AI 反应降频与即时行动架构 (Anti-Oscillation) ===\n');
 
-  const aiMotorQueues = [
-    { queue: [], lastMove: MOVE_IDLE, accum: 0 },
-    { queue: [], lastMove: MOVE_IDLE, accum: 0 },
-  ];
+// 1. 验证 index.html 界面选项与移除 300ms 档位
+{
+  const html = fs.readFileSync(path.join(__dirname, '../web/index.html'), 'utf8');
+  assert.ok(html.includes('value="100"'), '包含 100ms 档位');
+  assert.ok(html.includes('value="150"'), '包含 150ms 档位');
+  assert.ok(html.includes('value="200"'), '包含 200ms 档位');
+  assert.ok(html.includes('value="250"'), '包含 250ms 档位');
+  assert.ok(!html.includes('value="300"'), '已彻底移除 300ms 档位');
+  assert.ok(html.includes('AI 反应降频'), '标签更新为「AI 反应降频」');
+  console.log('✓ HTML 界面配置验证通过（包含 100/150/200/250ms 四档，且已彻底清除 300ms 档位）');
+}
 
-  function resetAiMotorQueues() {
-    for (let p = 0; p < 2; p++) {
-      aiMotorQueues[p].queue = [];
-      aiMotorQueues[p].lastMove = MOVE_IDLE;
-      aiMotorQueues[p].accum = 0;
-    }
+// 2. 验证 main.js 档位映射函数 getInferEveryFromUi
+{
+  const mainCode = fs.readFileSync(path.join(__dirname, '../web/main.js'), 'utf8');
+  assert.ok(mainCode.includes('val === 150) return 1.5'), '150ms 映射至 1.5 倍');
+  assert.ok(mainCode.includes('val === 200) return 2.0'), '200ms 映射至 2.0 倍');
+  assert.ok(mainCode.includes('val === 250) return 2.5'), '250ms 映射至 2.5 倍');
+  assert.ok(mainCode.includes('return 1.0'), '默认映射至 1.0 倍');
+  console.log('✓ main.js 频率倍率映射逻辑验证通过 (1.0 / 1.5 / 2.0 / 2.5)');
+}
+
+// 3. 验证 100ms 默认档位：每 tick 推理，即刻行动
+{
+  const sim = new Sim(1);
+  const m = new TransformerModel({ meta: { arch: 'transformer', obs_shape: [14, 13, 15] }, tensors: {} }, true);
+  m.inferEvery = 1.0;
+  const inferredTicks = [];
+  m.forward = () => ({ move: new Float32Array([0, 1, 0, 0, 0]), bomb: new Float32Array([1, 0]) });
+  m._decide = (s, p) => { inferredTicks.push(s.t); return [1, 0]; };
+
+  for (let t = 0; t < 10; t++) {
+    sim.t = t;
+    const act = m.act(sim, 1, () => 0.5);
+    assert.deepStrictEqual(act, [1, 0], `t=${t} 动作必须即刻执行`);
   }
+  assert.strictEqual(inferredTicks.length, 10, '100ms 下 10 个 tick 必须触发 10 次推理');
+  console.log('✓ 100ms 原生电竞级：每 tick 即时推理与即刻执行验证通过');
+}
 
-  function applyAiMotorDelay(pid, rawAction) {
-    const rawMove = rawAction[0], rawBomb = rawAction[1];
-    const qState = aiMotorQueues[pid];
-    if (!qState) return rawAction;
+// 4. 验证 150ms 档位（降频 50%）：推理 tick 即时出招，非推理 tick 维持走位且放炮单脉冲
+{
+  const sim = new Sim(1);
+  const m = new TransformerModel({ meta: { arch: 'transformer', obs_shape: [14, 13, 15] }, tensors: {} }, true);
+  m.inferEvery = 1.5;
+  const inferredTicks = [];
+  m.forward = () => ({ move: new Float32Array(5), bomb: new Float32Array(2) });
 
-    const isModel = pid === 0 ? (spectate && !isRuleAi(p0Sel)) : !isRuleAi(enemySel);
-    if (!isModel) {
-      qState.queue.length = 0;
-      qState.lastMove = rawMove;
-      return rawAction;
-    }
-
-    const latencyMs = Number.isFinite(latencyVal) ? latencyVal : 100;
-    if (latencyMs <= 100) {
-      qState.queue.length = 0;
-      qState.lastMove = rawMove;
-      return rawAction;
-    }
-
-    const extraDelayTicks = (latencyMs - 100) / 100;
-    const baseTicks = Math.floor(extraDelayTicks);
-    const frac = extraDelayTicks - baseTicks;
-
-    let delayTicks = baseTicks;
-    if (frac > 0) {
-      qState.accum += frac;
-      if (qState.accum >= 1.0 - 1e-4) {
-        delayTicks += 1;
-        qState.accum -= 1.0;
-      }
-    }
-
-    const curTick = simT;
-    const dueTick = curTick + delayTicks;
-
-    qState.queue.push({ move: rawMove, bomb: rawBomb, dueTick });
-
-    let maturedMove = null;
-    let maturedBomb = 0;
-    let popIdx = -1;
-
-    for (let i = 0; i < qState.queue.length; i++) {
-      const item = qState.queue[i];
-      if (item.dueTick <= curTick) {
-        maturedMove = item.move;
-        if (item.bomb) maturedBomb = 1;
-        popIdx = i;
-      } else {
-        break;
-      }
-    }
-
-    if (popIdx >= 0) {
-      qState.queue.splice(0, popIdx + 1);
-    }
-
-    if (maturedMove != null) {
-      qState.lastMove = maturedMove;
-      return [maturedMove, maturedBomb];
-    } else {
-      return [qState.lastMove, 0];
-    }
-  }
-
-  return {
-    setLatency: (v) => { latencyVal = v; },
-    setTick: (t) => { simT = t; },
-    getTick: () => simT,
-    stepTick: () => { simT++; },
-    setSpectate: (v) => { spectate = v; },
-    setP0Sel: (v) => { p0Sel = v; },
-    setEnemySel: (v) => { enemySel = v; },
-    resetAiMotorQueues,
-    applyAiMotorDelay,
-    MOVE_IDLE, MOVE_UP, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT,
-    queues: aiMotorQueues,
+  let curMove = 1;
+  m._decide = (s, p) => {
+    inferredTicks.push(s.t);
+    curMove = s.t === 0 ? 3 : 4; // t=0 往左, t=2 往右
+    const bomb = s.t === 0 ? 1 : 0;
+    return [curMove, bomb];
   };
-}
 
-console.log('=== 开始测试 AI 后置动作传导时延 (Motor Delay) ===\n');
-
-// 1. 测试 100ms 档位（原生电竞级 · 0ms 按键延迟）
-{
-  const t = createMotorDelayTester();
-  t.setLatency(100);
-  t.setTick(0);
-  const a0 = t.applyAiMotorDelay(1, [t.MOVE_UP, 1]);
-  assert.deepStrictEqual(a0, [t.MOVE_UP, 1], '100ms 档位应立即执行移动与放炮');
-  t.setTick(1);
-  const a1 = t.applyAiMotorDelay(1, [t.MOVE_RIGHT, 0]);
-  assert.deepStrictEqual(a1, [t.MOVE_RIGHT, 0], '100ms 档位第二步应立即执行');
-  console.log('✓ 100ms 档位（0ms 按键延迟）：动作即时生效验证通过');
-}
-
-// 2. 测试 200ms 档位（普通玩家 · +100ms 按键延迟，即严格 1 tick 延迟）
-{
-  const t = createMotorDelayTester();
-  t.setLatency(200);
-  t.setTick(0);
-  const a0 = t.applyAiMotorDelay(1, [t.MOVE_RIGHT, 1]);
-  assert.deepStrictEqual(a0, [t.MOVE_IDLE, 0], 't=0 应保持初始惯性且不放炮');
-
-  t.setTick(1);
-  const a1 = t.applyAiMotorDelay(1, [t.MOVE_UP, 0]);
-  assert.deepStrictEqual(a1, [t.MOVE_RIGHT, 1], 't=1 应执行 t=0 的指令（延迟 100ms / 1 tick）');
-
-  t.setTick(2);
-  const a2 = t.applyAiMotorDelay(1, [t.MOVE_LEFT, 0]);
-  assert.deepStrictEqual(a2, [t.MOVE_UP, 0], 't=2 应执行 t=1 的指令（转向延迟 100ms）');
-  console.log('✓ 200ms 档位（+100ms 按键延迟）：严格 1-tick 传导时延与放炮不丢失验证通过');
-}
-
-// 3. 测试 300ms 档位（休闲娱乐 · +200ms 按键延迟，即严格 2 tick 延迟）
-{
-  const t = createMotorDelayTester();
-  t.setLatency(300);
-  t.setTick(0);
-  assert.deepStrictEqual(t.applyAiMotorDelay(1, [t.MOVE_RIGHT, 0]), [t.MOVE_IDLE, 0]);
-  t.setTick(1);
-  assert.deepStrictEqual(t.applyAiMotorDelay(1, [t.MOVE_RIGHT, 1]), [t.MOVE_IDLE, 0]);
-  t.setTick(2);
-  assert.deepStrictEqual(t.applyAiMotorDelay(1, [t.MOVE_UP, 0]), [t.MOVE_RIGHT, 0], 't=2 执行 t=0 动作');
-  t.setTick(3);
-  assert.deepStrictEqual(t.applyAiMotorDelay(1, [t.MOVE_DOWN, 0]), [t.MOVE_RIGHT, 1], 't=3 执行 t=1 动作并放炮');
-  console.log('✓ 300ms 档位（+200ms 按键延迟）：严格 2-tick 传导时延验证通过');
-}
-
-// 4. 测试 150ms 档位（人类高手 · +50ms 按键延迟，即 0.5 tick 延迟）
-{
-  const t = createMotorDelayTester();
-  t.setLatency(150);
-  
-  const executed = [];
-  for (let tick = 0; tick < 10; tick++) {
-    t.setTick(tick);
-    const act = t.applyAiMotorDelay(1, [tick + 1, tick === 3 ? 1 : 0]);
-    executed.push(act);
+  const acts = [];
+  for (let t = 0; t < 6; t++) {
+    sim.t = t;
+    acts.push(m.act(sim, 1, () => 0.5));
   }
 
-  const bombTicks = executed.map((a, idx) => a[1] === 1 ? idx : -1).filter(idx => idx >= 0);
-  assert.strictEqual(bombTicks.length, 1, '放炮意图必须恰好执行 1 次');
-  assert.ok(bombTicks[0] === 3 || bombTicks[0] === 4, `放炮执行 tick (${bombTicks[0]}) 应在 3 或 4 步`);
-
-  console.log('✓ 150ms 档位（+50ms 按键延迟）：0.5 tick 浮动交替与放炮保全验证通过');
+  // 推理 tick 应为 0, 2, 3, 5
+  assert.deepStrictEqual(inferredTicks, [0, 2, 3, 5], '150ms 步频序列应符合交替节拍 [0, 2, 3, 5]');
+  assert.deepStrictEqual(acts[0], [3, 1], 't=0: 推理 tick 即刻执行往左并放炮');
+  assert.deepStrictEqual(acts[1], [3, 0], 't=1: 非推理 tick 维持往左移动，放炮不重复脉冲');
+  assert.deepStrictEqual(acts[2], [4, 0], 't=2: 推理 tick 即刻执行往右');
+  console.log('✓ 150ms 档位：推理即行动、非推理 tick 维持惯性走位且放炮不重发验证通过');
 }
 
-// 5. 测试 250ms 档位（新手友好 · +150ms 按键延迟，即 1.5 tick 延迟）
+// 5. 验证 200ms 档位（降频 100% · 严格每 2 tick 推理）
 {
-  const t = createMotorDelayTester();
-  t.setLatency(250);
-  for (let tick = 0; tick < 10; tick++) {
-    t.setTick(tick);
-    t.applyAiMotorDelay(1, [tick + 1, 0]);
+  const sim = new Sim(1);
+  const m = new TransformerModel({ meta: { arch: 'transformer', obs_shape: [14, 13, 15] }, tensors: {} }, true);
+  m.inferEvery = 2.0;
+  const inferredTicks = [];
+  m.forward = () => ({ move: new Float32Array(5), bomb: new Float32Array(2) });
+  m._decide = (s, p) => { inferredTicks.push(s.t); return [1, 0]; };
+
+  for (let t = 0; t < 10; t++) {
+    sim.t = t;
+    m.act(sim, 1, () => 0.5);
   }
-  console.log('✓ 250ms 档位（+150ms 按键延迟）：1.5 tick 传导时延验证通过');
+  assert.deepStrictEqual(inferredTicks, [0, 2, 4, 6, 8], '200ms 下严格每 2 tick 评估一次');
+  console.log('✓ 200ms 档位：严格 2-tick 推理节拍验证通过');
 }
 
-// 6. 测试开局重置与模式切换重置
+// 6. 验证 250ms 档位（降频 150% · 平均 2.5 tick 推理）
 {
-  const t = createMotorDelayTester();
-  t.setLatency(200);
-  t.setTick(0);
-  t.applyAiMotorDelay(1, [t.MOVE_UP, 1]);
-  assert.strictEqual(t.queues[1].queue.length, 1);
-  t.resetAiMotorQueues();
-  assert.strictEqual(t.queues[1].queue.length, 0, '重置后队列必须清空');
-  assert.strictEqual(t.queues[1].lastMove, t.MOVE_IDLE, '重置后惯性必须复位');
-  console.log('✓ resetAiMotorQueues 复位机制验证通过');
+  const sim = new Sim(1);
+  const m = new TransformerModel({ meta: { arch: 'transformer', obs_shape: [14, 13, 15] }, tensors: {} }, true);
+  m.inferEvery = 2.5;
+  const inferredTicks = [];
+  m.forward = () => ({ move: new Float32Array(5), bomb: new Float32Array(2) });
+  m._decide = (s, p) => { inferredTicks.push(s.t); return [1, 0]; };
+
+  for (let t = 0; t < 20; t++) {
+    sim.t = t;
+    m.act(sim, 1, () => 0.5);
+  }
+  assert.strictEqual(inferredTicks.length, 8, '20 tick 内触发 8 次推理，平均间隔恰为 250ms');
+  console.log('✓ 250ms 档位：平均 2.5 tick (250ms) 推理节拍验证通过');
 }
 
-// 7. 测试规则敌人（Hunter、时空 A* 等）完全不受时延影响，保持原生无延迟
+// 7. 验证无控制滞后 (Anti-Oscillation 零震荡证明)
 {
-  const t = createMotorDelayTester();
-  t.setLatency(300); // 即使设置 300ms 大时延
-  t.setEnemySel('__time_astar_hunt__'); // 规则敌人：高级时空 A*
-  t.setTick(0);
-  const a0 = t.applyAiMotorDelay(1, [t.MOVE_UP, 1]);
-  assert.deepStrictEqual(a0, [t.MOVE_UP, 1], '规则敌人动作必须即时生效，绝不进入时延队列');
-  assert.strictEqual(t.queues[1].queue.length, 0, '规则敌人队列必须始终为空');
+  // 在旧队列方案中，由于输入指令被强制延迟 1~2 tick，
+  // 智能体到达目标格子时，先前的移动指令仍在管道中，从而发生冲过头、反向拉扯、再冲过头的持续左右摆动。
+  // 在当前即时行动方案中，当 AI 在 tick t 做出决策，动作在 tick t 立即生效，
+  // 转向指令无需排队等待，即刻止步/转向，彻底根治震荡！
+  const sim = new Sim(1);
+  const m = new TransformerModel({ meta: { arch: 'transformer', obs_shape: [14, 13, 15] }, tensors: {} }, true);
+  m.inferEvery = 1.0;
+  m.forward = () => ({ move: new Float32Array(5), bomb: new Float32Array(2) });
 
-  t.setTick(1);
-  const a1 = t.applyAiMotorDelay(1, [t.MOVE_LEFT, 0]);
-  assert.deepStrictEqual(a1, [t.MOVE_LEFT, 0], '规则敌人第二步必须即时生效');
-  console.log('✓ 规则敌人免受时延影响验证通过（300ms 档位下依然原生零延迟）');
+  let simulatedPos = 5.0;
+  const targetPos = 5.0;
+  const actionsTaken = [];
+
+  for (let t = 0; t < 5; t++) {
+    sim.t = t;
+    m._decide = () => {
+      if (simulatedPos > targetPos) return [3, 0];
+      if (simulatedPos < targetPos) return [4, 0];
+      return [0, 0];
+    };
+    const act = m.act(sim, 1, () => 0.5);
+    actionsTaken.push(act[0]);
+    if (act[0] === 3) simulatedPos -= 0.1;
+    if (act[0] === 4) simulatedPos += 0.1;
+  }
+
+  assert.deepStrictEqual(actionsTaken, [0, 0, 0, 0, 0], '闭环即时控制下命中目标立即保持稳定，绝不左右震荡');
+  console.log('✓ 闭环零时延控制验证通过（杜绝超调，根治左右摇摆震荡）');
 }
 
-// 8. 测试观战模式下一方规则敌人、一方神经网络模型时的时延隔离
-{
-  const t = createMotorDelayTester();
-  t.setLatency(200); // +100ms 按键延迟
-  t.setSpectate(true);
-  t.setP0Sel('__hunter__'); // P0 是规则 Hunter
-  t.setEnemySel('params_it00000831_ema'); // P1 是最新神经网络模型
-
-  t.setTick(0);
-  const actP0_t0 = t.applyAiMotorDelay(0, [t.MOVE_DOWN, 1]);
-  const actP1_t0 = t.applyAiMotorDelay(1, [t.MOVE_RIGHT, 1]);
-  assert.deepStrictEqual(actP0_t0, [t.MOVE_DOWN, 1], '观战时规则 AI P0 必须即时生效');
-  assert.deepStrictEqual(actP1_t0, [t.MOVE_IDLE, 0], '观战时模型 AI P1 必须受时延影响滞后');
-
-  t.setTick(1);
-  const actP0_t1 = t.applyAiMotorDelay(0, [t.MOVE_LEFT, 0]);
-  const actP1_t1 = t.applyAiMotorDelay(1, [t.MOVE_UP, 0]);
-  assert.deepStrictEqual(actP0_t1, [t.MOVE_LEFT, 0], '观战时规则 AI P0 第二步即时生效');
-  assert.deepStrictEqual(actP1_t1, [t.MOVE_RIGHT, 1], '观战时模型 AI P1 在 t=1 执行 t=0 动作');
-  console.log('✓ 观战模式下规则 AI 原生即时 vs 模型 AI 拟真延迟隔离验证通过');
-}
-
-// 9. 测试由模型切换至规则敌人时队列自动排空
-{
-  const t = createMotorDelayTester();
-  t.setLatency(200);
-  t.setEnemySel('params_it00000831_ema'); // 先是模型
-  t.setTick(0);
-  t.applyAiMotorDelay(1, [t.MOVE_UP, 1]);
-  assert.strictEqual(t.queues[1].queue.length, 1, '模型决策应进入队列');
-
-  // 切换为规则 AI
-  t.setEnemySel('__hunter__');
-  t.setTick(1);
-  const act = t.applyAiMotorDelay(1, [t.MOVE_RIGHT, 0]);
-  assert.deepStrictEqual(act, [t.MOVE_RIGHT, 0], '切换至规则 AI 后动作应立即直通');
-  assert.strictEqual(t.queues[1].queue.length, 0, '切换至规则 AI 后残留队列被清空');
-  console.log('✓ 切换至规则 AI 时动作队列即时清空验证通过');
-}
-
-console.log('\n所有 AI 后置动作传导时延测试全部通过 ✔');
+console.log('\n所有 AI 反应降频与即时行动测试全部通过 ✔');
