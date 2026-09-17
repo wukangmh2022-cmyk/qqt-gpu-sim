@@ -4,6 +4,14 @@ JAX intentionally has different reward-hacking protections for crate, novelty, a
 annealed timeout HP lead. Those policies are covered by tests/test_jax_rewards.py;
 this script excludes all-alive timeout terminals and verifies only the common core.
 """
+import os
+import sys
+from pathlib import Path
+
+_ROOT = str(Path(__file__).resolve().parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 import numpy as np
 import torch
 

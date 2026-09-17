@@ -3,6 +3,14 @@
 每 case 泡数 ≤ 20（K 内），覆盖稠密阵/随机阵/墙/砖/chain_cap 8/4。
 所有 case 一次性 vmap 编译。比较 (covered, triggered) 逐位一致。
 """
+import os
+import sys
+from pathlib import Path
+
+_ROOT = str(Path(__file__).resolve().parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 import jax
 import jax.numpy as jnp
 from jax_bomb.jax_env import (H, W, BLAST, FUSE, MAX_BOMBS,

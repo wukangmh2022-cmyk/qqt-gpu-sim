@@ -9,6 +9,14 @@
 用法：python3 verify_dp_parity.py [--envs 2048 --steps 64 --iters 3]
 """
 import argparse
+import os
+import sys
+from pathlib import Path
+
+_ROOT = str(Path(__file__).resolve().parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom

@@ -3,6 +3,14 @@
 同 seed 序列跑 250 tick（随机动作 + 掉血/回收/拾取全链路），比较全部
 BombState 字段。monkeypatch 切换 jax_env._resolve_explosions。
 """
+import os
+import sys
+from pathlib import Path
+
+_ROOT = str(Path(__file__).resolve().parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 import jax
 import jax.numpy as jnp
 import jax_bomb.jax_env as E

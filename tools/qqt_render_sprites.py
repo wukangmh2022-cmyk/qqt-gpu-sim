@@ -27,6 +27,13 @@ from pathlib import Path
 
 from PIL import Image
 
+TOOLS_DIR = Path(__file__).resolve().parent
+ROOT = TOOLS_DIR.parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import qqt_map_parser as qp
 
 CELL = 40  # QQ堂一格 = 40x40 px (编辑器 kGridPixels)
@@ -163,7 +170,7 @@ def main():
 
     elems = load_prop(PROP_PATH)
     if args.manifest:
-        build_manifest(elems, "qqt_element_manifest.csv")
+        build_manifest(elems, str(TOOLS_DIR / "qqt_element_manifest.csv"))
 
     if args.map:
         out_dir = Path(args.out)

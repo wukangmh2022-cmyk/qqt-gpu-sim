@@ -11,8 +11,12 @@
   7. make_obs ch4 = wall
   8. bomb mask：bomb=0 恒合法；死亡角色 move/bomb 整行放开
 """
-import sys
-sys.path.insert(0, ".")
+import os, sys
+from pathlib import Path
+
+_ROOT = str(Path(__file__).resolve().parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 import jax
 import jax.numpy as jnp

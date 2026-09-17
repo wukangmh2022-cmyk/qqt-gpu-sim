@@ -1,7 +1,17 @@
 """danger_map parallel(4-stream) vs 单 stream 位级对拍 + 阶段计时。"""
-import sys, time, torch, torch_npu
+import os, sys, time, torch
+from pathlib import Path
+
+_ROOT = str(Path(__file__).resolve().parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+try:
+    import torch_npu
+except ImportError:
+    pass
+
 torch.manual_seed(0)
-sys.path.insert(0, ".")
 from sim.dev import pick_device
 import sim.blast as B
 

@@ -54,12 +54,19 @@ from pathlib import Path
 
 import torch
 
+TOOLS_DIR = Path(__file__).resolve().parent
+ROOT = TOOLS_DIR.parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import qqt_map_parser as qp
 
 # ---------------------------------------------------------------- 常量
 
 PROP_PATH = "qqt/qqt_map_editor_fin-main/mapElem.prop"
-MAPDESC_PATH = "QQTang_extract/map/mapDesc.py"
+MAPDESC_PATH = str(TOOLS_DIR / "mapDesc.py") if (TOOLS_DIR / "mapDesc.py").exists() else "QQTang_extract/map/mapDesc.py"
 GAME_MODES = qp.GAME_MODES  # 复用
 
 # 推箱子模式的"可推动箱子"元素判定: city==14 且 special 带 0x2 位 (实证)

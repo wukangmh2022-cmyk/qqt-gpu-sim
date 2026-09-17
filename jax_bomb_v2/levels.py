@@ -1,8 +1,8 @@
 """标准化关卡数据加载与采样（纯 jax，无 torch 依赖）。
 
 训练地图改为从 241 张 QQ堂原版关卡随机采样，替代过程式生成：
-- 权威格式 levels_qqt/*.pt（qqt_to_levels.py + qqt_level_enrich.py 产出），
-  但 DCU 训练机无 torch，统一从 export_web.py 导出的
+- 权威格式 levels_qqt/*.pt（tools/qqt_to_levels.py + tools/qqt_level_enrich.py 产出），
+  但 DCU 训练机无 torch，统一从 tools/export_web.py 导出的
   web/assets/maps/levels.json 加载 —— 同一数据的 torch-free 标准导出，
   Web 推理侧同源，保证训练与 Web 用同一批关卡。
 

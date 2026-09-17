@@ -53,7 +53,7 @@
   参数 7,461,336 不变（实测）。出生点/走廊格按 torch spawn 公式推 13×15 值。
 
 ### 2.2 标准化关卡（levels.json 为标准真相源）
-- 241 关从 `levels_qqt/*.pt` 导出为 torch-free 的 levels.json（export_web.py 与 JS Web 同源）。
+- 241 关从 `levels_qqt/*.pt` 导出为 torch-free 的 levels.json（tools/export_web.py 与 JS Web 同源）。
 - LevelSet 栈：wall/brick/crate(预置)/rec/lo(掉血下限)/rate(炸砖爆率)/spawns(多维数组,
   S_MAX=12)/cnt/logw/is_open。权重解析 `"240=0.2"` / `"empty=0.2"`（空场景 = 名字含"空"）。
 - 出生点双人不同：`randint(0,cnt)` + `randint(0,cnt-1)` + bump 技巧（vmap 安全，无动态 shape），
@@ -85,7 +85,7 @@
 
 ## 3. 已知边界与后续
 - crate_rate 原始值直接来自 levels.json；JS 的 `>0?rate:1.0` 钳制已镜像到 levels.py。
-  **levels.json 每次重新导出（export_web.py）会改 crate_rate**——测试断言必须从
+  **levels.json 每次重新导出（tools/export_web.py）会改 crate_rate**——测试断言必须从
   ls.rate 动态读，不能硬编码（level4 曾因 0.6→0.6316 误报）。
 - 1 出生点的关不存在（241 关全部 ≥2），`max(cnt,2)` 采样安全。
 - `pushable` 字段 JS/JAX 两侧都未参与玩法，仅渲染用，两端一致忽略。

@@ -13,7 +13,7 @@
   web/assets/music/<名>.ogg        音乐 (241 关引用去重)
 
 用法:
-  ./.venv/bin/python export_web.py
+  ./.venv/bin/python tools/export_web.py
 """
 
 import csv
@@ -30,7 +30,12 @@ try:
 except ImportError:
     raise SystemExit("缺少 pillow: 用 PYTHONPATH=<pylibs312目录> 运行, 或 pip install --target ./pylibs312 pillow")
 
-ROOT = Path(__file__).resolve().parent
+TOOLS_DIR = Path(__file__).resolve().parent
+ROOT = TOOLS_DIR.parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 LEVELS = ROOT / "levels_qqt"
 WEB = ROOT / "web" / "assets"
 OUT_LEVELS = WEB / "maps"
@@ -152,7 +157,10 @@ def main():
     OUT_MUSIC.mkdir(parents=True, exist_ok=True)
 
     # 元素表: 只保留地图实际引用且有 PNG 的元素 (渲染按需取)
-    elems = load_elements(ROOT / "qqt_element_manifest.csv")
+    manifest_path = TOOLS_DIR / "qqt_element_manifest.csv"
+    if not manifest_path.exists():
+        manifest_path = ROOT / "qqt_element_manifest.csv"
+    elems = load_elements(manifest_path)
     used_ids = set()
     for pt in LEVELS.glob("level_*.pt"):
         d = torch.load(pt, map_location="cpu", weights_only=False)

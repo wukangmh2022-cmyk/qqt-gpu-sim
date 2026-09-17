@@ -10,6 +10,14 @@
   7. 移动：连续坐标 + 泡挡路滑动碰撞
 """
 
+import os
+import sys
+from pathlib import Path
+
+_ROOT = str(Path(__file__).resolve().parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom

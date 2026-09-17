@@ -43,16 +43,23 @@ from pathlib import Path
 
 import torch
 
+TOOLS_DIR = Path(__file__).resolve().parent
+ROOT = TOOLS_DIR.parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 # ---------- 模拟器数值上限(与 sim/config.py 对齐, 可 CLI 覆盖) ----------
 DEFAULTS = dict(
     bombs_start=2, bombs_max=10,
     blast_start=2, blast_max=8,
-    speed_start=1.3, speed_max=2.1, speed_step=0.8 / 7,  # 7档: (2.1-1.3)/7=0.1143
-    target_mult=3.0,          # 300% 单人满属性
+    speed_start=1.2, speed_max=2.1, speed_step=0.15,
+    target_units=60,
 )
 
 SIM_ROOT = "qqt-gpu-sim-copy"
-MAPDESC_PATH = "mapDesc.py"
+MAPDESC_PATH = str(TOOLS_DIR / "mapDesc.py") if (TOOLS_DIR / "mapDesc.py").exists() else "mapDesc.py"
 ELEM_PNG_SRC = "geno-extracted/QQTang5.2_Beta1Build1/data/object/mapElem"
 ELEM_IMG_SRC = "qqt/qqt_map_editor_fin-main/mapElem"
 
