@@ -1,6 +1,6 @@
 # qqt-gpu-sim — 泡泡堂风格 1v1 格斗：GPU 批量模拟器 + 自博弈 PPO
 
-一句话：**写一个全张量化炸弹人模拟器（GPU 一次跑几千局），用 PPO 自博弈训出能打赢手写寻路 AI 的模型。** 方案从 torch 时代的 CNN/MLP 课程化训练起步，08 月中旬用 JAX 重写全链路并换成 7.5M 参数 ViT，**目前已迭代到第三次大训练（48 卡 × 48 小时，正在进行）**。
+一句话：**写一个全张量化炸弹人模拟器（GPU 一次跑几千局），用 PPO 自博弈训出能打赢手写寻路 AI 的模型。** 方案从 torch 时代的 CNN/MLP 课程化训练起步，08 月中旬用 JAX 重写全链路并换成 7.5M 参数 ViT，**目前已全面进阶至第四阶段：破局宗师与全能泛化训练（12 机 × 2 卡 = 24 副本集群，彻底攻克对峙纳什陷阱）**。
 
 ---
 
@@ -10,10 +10,11 @@
 
 原版 `res/` 素材渲染（角色精灵/炸弹/爆炸/场景皮肤/音效），方向键/WASD 移动、空格放泡、支持推箱。模型下拉可选：
 
+- **破局宗师旗舰系列**（Patch3 ViT 7.5M）：`params_it00000831_ema`（10.43B 单轮 / 17.3B 终生累计步）与标杆 `params_it00000223_ema`（2.79B 步），阶段四攻克对峙纳什陷阱与全图泛化旗舰；
 - **ViTModel2 系列**（JAX ViT，按累计训练步数命名）：`1.1B / 7.5B / 22.6B / 31.9B`（第二次大训练的快照）；
 - **Pre-Train Test**（Patch3 ViT 7.5M）：第三次大训练前的试水模型（双卡 30 分钟预训练）；
 - torch 时代遗产模型（`duel_course / duel_cnn / duel_nobc` 等）；
-- 规则 AI（Hunter 等）。
+- 规则 AI（Hunter、高级时空 A* 等）。
 
 页面含实时 AI 胜率对峙条（Win Probability Gauge）、录像回放与 60FPS 视频导出。
 
@@ -108,24 +109,24 @@
 
 ---
 
-## 现役训练运行配置（破局宗师版）
+## 现役训练运行配置（阶段四 · 破局宗师版）
 
 | 项 | 值 |
 |---|---|
-| 拓扑 | 24 机 × 2 卡 = 48 副本（`deploy_10node/launch_24nodes.sh`，LSGD 跨机 pmap） |
-| 模型 | transformer embed 392 / depth 4 / **patch 3** / heads 4 / FF×4 ≈ 7.5M |
-| 负载 | 32768 envs（全局）→ 每卡 682（48 卡自动取整 32736）× 256 steps，epochs 1 |
-| 奖励 | 零和生命演进 `r=(造成−受到)/5`，**无任何塑形项** |
-| 价值头 | HL-Gauss 128 桶，[−1,1]，σ=0.04，交叉熵 |
-| PPO | γ=1.0，λ=0.95，clip 0.2，vf 0.5，ent 0.01，Adam 3e-4 恒定 |
-| 更新 | 每 iter 256 次 minibatch 更新：前半 Actor（Top-25% \|A\| 帧）+ 后半 Critic（均匀无偏），优势整批标准化 |
-| 分布式 | LSGD K=256 / mode=param（fp32 全量参数 pmean，约每 iter 一次同步）；跨副本参数摘要 all_gather 校验 |
-| 课程 | 5 阶段累积图池 [1, 22, 93, 145, 241] 张（Stage0 道场空景 → Stage4 全图 241 张）；步数兜底 [0.5%, 2%, 6%, 18%]；阶梯胜率门禁 [85%, 80%, 75%, 65%]（每 50 iter vs 阶段起点冻结参数，阶段内 ≥50 iter 方可晋级） |
-| 对称性 | tick 奇偶轮换先手 + 出生点 50/50 翻转 |
-| 存档 | `ckpt/` 每 30 分钟（重跑自动接续）；rank0 `params_it*.pkl` + **EMA(0.999)** 快照每 30 分钟 |
+| 拓扑 | 12 机 × 2 卡 = 24 副本（`deploy_10node/launch_league_breakthrough.sh`，LSGD 跨机 pmap） |
+| 模型 | transformer embed 392 / depth 4 / **patch 3** / heads 4 / FF×4 ≈ 7.5M（14 观测通道含可推箱） |
+| 负载 | 24,576 envs（全局）→ 每卡 1024 envs × 256 steps，minibatch 24,576，epochs 2 |
+| 奖励机制 | 联赛破局与攻防全开激励（win_bonus=10.0, lose_bonus=5.0, trade_win=5.0，彻底拆除双亡/互损消极避战惩罚） |
+| 对手池 | 多态联赛对抗池（Sparring Pool）：15% 纯静止木桩 + 15% 高级时空 A* 竞技猎人 + 10% 修复版拉扯 FleeBot + 60% 自对弈动态快照 |
+| 域随机化 | 初始血量全覆盖（1~5 血随机化，兼顾一击必杀生死局与长线运营）+ 道具掉落/全速阶梯随机化 |
+| 地图配比 | 开阔地高压演练（`empty=0.20,功夫=0.30,比武=0.30,爱的考验=0.20`），彻底粉碎开阔地发呆死锁 |
+| 价值头 | HL-Gauss 128 桶，[−20, 20]，σ=1.5，交叉熵 |
+| PPO | γ=0.995，λ=0.95，clip 0.2，vf 0.5，ent 0.008，Adam 2e-4，Top-25% \|A\| 优势过滤 + 优势标准化 |
+| 分布式 | Local SGD K=32 / mode=param（fp32 全量参数 pmean）；跨副本参数摘要 all_gather 校验 |
+| 存档 | `ckpt/` 每 60 分钟自动归档；rank0 本地 `ckpt_local/` 每 15 分钟保存参数快照 + **EMA(0.995)** |
 | 训练量口径 | **终生累计训练量（含 Warm-Start 继承底模）**：**约 17.30B 全局步（173.0 亿步）**<br>· **直系继承链路**：初代 8h 长训（`it349` 2.93B 步）$\to$ 进阶破拆版（`aggr419` 3.94B 步）$\to$ 本次联赛宗师破局长训（`it831` 纯增量 10.43B 步）$= 17.30\text{B}$ 步；<br>· **本次独立 Run 增量**：**831 iter × 12.57M 步/iter = 10,433,617,920 步（约 10.43B 步）**；<br>· （阶段三 8h 完赛基线 `it1100_ema` 独立跑量 13.83B 步；原 15500 iter ≈ 260B 为前期理论满配上限规划） |
 
-监控：`bash deploy_10node/watch_24nodes.sh deploy_10node/nodes_24x2.txt`（60s 刷新各 rank 日志/磁盘/卡死检测）；快照回拉 `bash deploy_10node/pull_ckpt_local.sh deploy_10node/nodes_24x2.txt`。
+监控与管理：`python3 scripts/poll_cluster_and_pull.py`（自动化 12 节点状态轮巡与检查点拉取）；回拉快照即时部署至 `web/models/`。
 
 ---
 
@@ -140,7 +141,7 @@
 
 | 环境 | 用途 | 实测 |
 |---|---|---|
-| **SCNet DCU 集群（DTK 26.04）** | **JAX 正式训练**（第一次 8 卡 → 第二次 2×8/10 机 → **现在 24 机×2 卡**） | 第二次 155k sps/8 卡；第三次见 `watch_24nodes` 日志 |
+| **SCNet DCU 集群（DTK 26.04）** | **JAX 正式训练**（第一次 8 卡 → 第二次 2×8/10 机 → 第三次 24 机×2 卡 → **阶段四 12 机×2 卡 = 24 副本**） | 第二次 155k sps/8 卡；阶段四 436k~466k sps/24 卡 |
 | DCU 单机（torch 后端） | 阶段一训练/回归 | 36~41k sps（5632 env × 128） |
 | BW-1（SCNet 910B） | torch 时代正式训练 | 249k sps（N=16384），见 `docs/bw1_notes.md` |
 | 本地 MPS（macOS） | 开发/对拍/验收 | ~2.2k sps |
@@ -153,10 +154,10 @@
 uv venv --python 3.12 && uv pip install -r requirements.txt
 pytest tests -q                                    # 规则/训练侧/parity 测试
 
-# ── JAX 现役：多卡部署（第三次大训练同款）──
-bash deploy_10node/launch_24nodes.sh deploy_10node/nodes_24x2.txt --deploy  # 首次
-bash deploy_10node/launch_24nodes.sh deploy_10node/nodes_24x2.txt          # 续跑（自动接续断点）
-bash deploy_10node/watch_24nodes.sh deploy_10node/nodes_24x2.txt           # 监控
+# ── JAX 现役：阶段四 12 机 24 卡联赛破局长训 ──
+bash deploy_10node/launch_league_breakthrough.sh                             # 阶段四联赛破局长训一键启动
+python3 scripts/poll_cluster_and_pull.py                                    # 集群 12 节点状态轮巡与快照自动拉取
+bash deploy_10node/launch_12nodes.sh                                        # 通用 12 机 24 卡启动（nodes_current 驱动）
 
 # ── JAX 单机 8 卡（第一/二次大训练同款）──
 bash deploy_10node/launch_8gpu.sh
@@ -185,8 +186,8 @@ python scripts/duel_arena.py --ckpt ckpt/duel_course_*.pt --map-mode corridor  #
 jax_bomb/      现役 JAX 训练栈：jax_env(模拟器) / jax_net(ViT+HL-Gauss) /
                jax_train(rollout/PPO/LSGD) / multicard_train(多卡主循环) /
                levels(241 关卡+出生点对课程) / train_real(长训入口)
-deploy_10node/ 多卡部署：launch_24nodes(48卡现役) / launch_8gpu / launch_10nodes /
-               launch_warmstart_889_48h(热启动) / watch_* / pull_ckpt_local /
+deploy_10node/ 多卡部署：launch_league_breakthrough(阶段四 12机24卡现役) / launch_12nodes / launch_24nodes /
+               launch_8gpu / launch_10nodes / launch_warmstart_889_48h(热启动) / watch_* / pull_ckpt_local /
                nodes_24x2.example.txt(节点清单模板)
 web/           浏览器版（sim.js 引擎 + ViT/MLP 权重 + 原版素材），Pages 直发
                assets/maps/levels.json(241 关卡) + curriculum.json(5 阶段课程)
