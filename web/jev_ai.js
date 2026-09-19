@@ -403,7 +403,8 @@
 
       // 1. 定期触发 Jev 研判（或危险状态突变时立即重新研判）
       const nextStart = danger.nextDangerStart(ownIdx, nowMs);
-      const inImminentDanger = danger.hitTest(ownIdx, nowMs, 0) || (nextStart !== null && nextStart - nowMs <= 800);
+      const inImminentDanger = danger.hitTest(ownIdx, nowMs, 0) || (nextStart !== null && nextStart - nowMs <= 1000);
+      const hasDanger = danger.hitTest(ownIdx, nowMs, 0) || danger.hasFutureDanger(ownIdx, nowMs);
 
       if (!this.isInferring && (curTick - this.lastInferTick >= this.inferIntervalTicks || inImminentDanger)) {
         this.lastInferTick = curTick;
@@ -413,7 +414,16 @@
 
       // 2. 承诺逃生路径（放泡后单向撤出）
       if (this.helperAi.escapePath && this.helperAi.escapePath.length > 0) {
-        if (ownIdx === this.helperAi.escapeTarget) {
+        // 关键防御：逃生目的地必须真正安全，绝不能撤入外部炸弹火线中
+        const targetSafe = this.helperAi.escapeTarget >= 0 &&
+                           !danger.hasFutureDanger(this.helperAi.escapeTarget, nowMs) &&
+                           !danger.hitTest(this.helperAi.escapeTarget, nowMs, 0);
+
+        if (!targetSafe) {
+          // 掩体已受外部火线覆盖威胁，原逃生路径作废，立即重新规划避险！
+          this.helperAi.escapePath = [];
+          this.helperAi.escapeTarget = -1;
+        } else if (ownIdx === this.helperAi.escapeTarget) {
           if (this.lastPlacedBombCell >= 0 && sim.fuse[this.lastPlacedBombCell] > 0) {
             this.lastMove = MOVE_IDLE;
             return [MOVE_IDLE, 0];
@@ -448,19 +458,23 @@
         }
       }
 
-      // 3. 物理安全网：脚下有火或即将爆炸，必须绝对避险
+      // 3. 物理安全网：脚下有即时火险（<=1000ms 即将引爆或当前有火），必须绝对避险
       if (inImminentDanger) {
         const safeCells = [];
+        const r0 = own[0], c0 = own[1];
         for (let i = 0; i < N; i++) {
           if (sim.wall[i] || sim.brick[i] || sim.fuse[i] > 0) continue;
-          if (!danger.hasFutureDanger(i, nowMs)) {
-            const dist = Math.abs(((i / W) | 0) - own[0]) + Math.abs((i % W) - own[1]);
+          if (!danger.hasFutureDanger(i, nowMs) && !danger.hitTest(i, nowMs, 0)) {
+            const dist = Math.abs(((i / W) | 0) - r0) + Math.abs((i % W) - c0);
             safeCells.push({ cell: i, dist });
           }
         }
         safeCells.sort((a, b) => a.dist - b.dist);
-        for (let s = 0; s < Math.min(safeCells.length, 5); s++) {
-          const res = this.helperAi.search(sim, danger, ownIdx, safeCells[s].cell, spd, nowMs, { allowBreakBrick: false });
+        for (let s = 0; s < Math.min(safeCells.length, 8); s++) {
+          const res = this.helperAi.search(sim, danger, ownIdx, safeCells[s].cell, spd, nowMs, {
+            allowBreakBrick: false,
+            lastMove: this.lastMove
+          });
           if (res && res.path.length > 1) {
             const mv = this.helperAi._cellToMove(ownIdx, res.path[1], W);
             if (mm[pid][mv] === 1) {
@@ -469,6 +483,26 @@
               return safeAct;
             }
           }
+        }
+
+        // 贪心兜底
+        let bestMv = MOVE_IDLE, maxScore = -1e9;
+        for (let d = 0; d < 4; d++) {
+          const nr = r0 + DIRS[d][0], nc = c0 + DIRS[d][1];
+          if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+          const np = nr * W + nc;
+          if (mm[pid][d] !== 1) continue;
+          if (sim.wall[np] || sim.brick[np] || sim.fuse[np] > 0) continue;
+          if (danger.hitTest(np, nowMs, 0)) continue;
+          const s = danger.nextDangerStart(np, nowMs) || 999999;
+          const isOpp = this.lastMove >= 0 && this.lastMove < 4 && d === (this.lastMove ^ 1);
+          const isCont = this.lastMove >= 0 && this.lastMove < 4 && d === this.lastMove;
+          const score = s + (isCont ? 50 : 0) - (isOpp ? 100 : 0);
+          if (score > maxScore) { maxScore = score; bestMv = d; }
+        }
+        if (bestMv !== MOVE_IDLE) {
+          this.lastMove = bestMv;
+          return [bestMv, 0];
         }
       }
 
@@ -577,6 +611,55 @@
         }
       }
 
+      // 核心防御：若主路径受阻导致 chosenMove === MOVE_IDLE，但当前脚下处于未来火线覆盖中：
+      // 绝不能在火线中发呆！立即触发紧急避险前往真正安全的无火线掩体！
+      if (chosenMove === MOVE_IDLE && danger.hasFutureDanger(ownIdx, nowMs)) {
+        const safeCells = [];
+        const r0 = own[0], c0 = own[1];
+        for (let i = 0; i < N; i++) {
+          if (sim.wall[i] || sim.brick[i] || sim.fuse[i] > 0) continue;
+          if (!danger.hasFutureDanger(i, nowMs) && !danger.hitTest(i, nowMs, 0)) {
+            const dist = Math.abs(((i / W) | 0) - r0) + Math.abs((i % W) - c0);
+            safeCells.push({ cell: i, dist });
+          }
+        }
+        safeCells.sort((a, b) => a.dist - b.dist);
+        for (let s = 0; s < Math.min(safeCells.length, 8); s++) {
+          const res = this.helperAi.search(sim, danger, ownIdx, safeCells[s].cell, spd, nowMs, {
+            allowBreakBrick: false,
+            lastMove: this.lastMove
+          });
+          if (res && res.path.length > 1) {
+            const mv = this.helperAi._cellToMove(ownIdx, res.path[1], W);
+            if (mm[pid][mv] === 1) {
+              chosenMove = mv;
+              break;
+            }
+          }
+        }
+
+        if (chosenMove === MOVE_IDLE) {
+          // 贪心兜底
+          let bestMv = MOVE_IDLE, maxScore = -1e9;
+          for (let d = 0; d < 4; d++) {
+            const nr = r0 + DIRS[d][0], nc = c0 + DIRS[d][1];
+            if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+            const np = nr * W + nc;
+            if (mm[pid][d] !== 1) continue;
+            if (sim.wall[np] || sim.brick[np] || sim.fuse[np] > 0) continue;
+            if (danger.hitTest(np, nowMs, 0)) continue;
+            const s = danger.nextDangerStart(np, nowMs) || 999999;
+            const isOpp = this.lastMove >= 0 && this.lastMove < 4 && d === (this.lastMove ^ 1);
+            const isCont = this.lastMove >= 0 && this.lastMove < 4 && d === this.lastMove;
+            const score = s + (isCont ? 50 : 0) - (isOpp ? 100 : 0);
+            if (score > maxScore) { maxScore = score; bestMv = d; }
+          }
+          if (bestMv !== MOVE_IDLE) {
+            chosenMove = bestMv;
+          }
+        }
+      }
+
       // 5. 实时进攻态势（直瞄锁敌 / 贴身锁死）
       const opp = 1 - pid;
       const oppCell = sim.centerCell(opp);
@@ -610,7 +693,7 @@
       // 条件 C: 贴身压迫对手 (oppDist <= 1) 且战术处于进攻模式
       // 条件 D: Jev 决策 shouldBomb
       const canDrop = bm[pid][1] === 1 && sim.fuse[ownIdx] === 0 && sim.liveBombs(pid) < sim.bombsCap[pid];
-      if (canDrop && !inImminentDanger) {
+      if (canDrop && !hasDanger) {
         const shouldDropForBrick = nextStepIsBrick;
         const shouldDropForDirectHit = directLineAttack;
         const shouldDropForNearOpp = (oppDist <= 1) && (wantBomb || (dec && dec.priority === 'attack_opponent'));
