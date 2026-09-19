@@ -667,13 +667,160 @@
         }
       }
 
-      // 5. 动作执行：仅进行物理引擎有效性校验（撞墙/越界保护），绝不禁止踩火！
+      // 5. 100ms 临界底层防自杀底线 (100ms Imminent Anti-Suicide Gate):
+      // 允许踩初级/远期火焰与穿雷走位（绝不因初级火焰被 stop），但当炸弹处于 <= 100ms (1 tick) 临界起火爆炸或当前格正在燃烧时：
+      // 绝对别走进去（别过去），若身处险境则紧急机动脱险！
+      const [safeMove, safeBomb] = this.filter100msSuicide(sim, pid, chosenMove, finalBomb, targetCell);
+      chosenMove = safeMove;
+      finalBomb = safeBomb;
+
+      // 物理引擎有效性校验（撞墙/越界保护）
       if (chosenMove !== MOVE_IDLE && mm[pid][chosenMove] !== 1) {
         chosenMove = MOVE_IDLE;
       }
 
       this.lastMove = chosenMove;
       this.recentMoves.push(MOVE_NAMES[chosenMove]);
+      return [chosenMove, finalBomb];
+    }
+
+    getImminentLethalMask(sim) {
+      const W = sim.W || 15, H = sim.H || 13, N = W * H;
+      const lethal = new Uint8Array(N);
+
+      // 1. 正在燃烧的烈焰残威
+      if (sim.blastLinger) {
+        for (let i = 0; i < N; i++) {
+          if (sim.blastLinger[i] > 0) lethal[i] = 1;
+        }
+      }
+
+      // 2. 查找所有还有 <= 1 tick (<= 100ms) 爆炸的炸弹
+      const detonatingBombs = [];
+      const bombList = [];
+      if (sim.fuse) {
+        for (let i = 0; i < N; i++) {
+          if (sim.fuse[i] > 0) {
+            const bObj = {
+              idx: i,
+              r: (i / W) | 0,
+              c: i % W,
+              blast: sim.bombBlast ? (sim.bombBlast[i] || 2) : 2,
+              fuse: sim.fuse[i],
+              willExplode: sim.fuse[i] <= 1
+            };
+            bombList.push(bObj);
+            if (bObj.willExplode) detonatingBombs.push(bObj);
+          }
+        }
+      }
+
+      // 3. 连锁引爆传播：fuse <= 1 的炸弹引发的连锁引爆
+      let changed = true;
+      let pass = 0;
+      while (changed && pass < 10) {
+        changed = false;
+        pass++;
+        for (let d = 0; d < detonatingBombs.length; d++) {
+          const bA = detonatingBombs[d];
+          for (let dir = 0; dir < 4; dir++) {
+            const [dr, dc] = DIRS[dir];
+            for (let k = 1; k <= bA.blast; k++) {
+              const nr = bA.r + dr * k, nc = bA.c + dc * k;
+              if (nr < 0 || nr >= H || nc < 0 || nc >= W) break;
+              const ni = nr * W + nc;
+              if (sim.wall && sim.wall[ni]) break;
+              for (let b = 0; b < bombList.length; b++) {
+                const bB = bombList[b];
+                if (bB.idx === ni && !bB.willExplode) {
+                  bB.willExplode = true;
+                  detonatingBombs.push(bB);
+                  changed = true;
+                }
+              }
+              if ((sim.brick && sim.brick[ni]) || (sim.pushable && sim.pushable[ni])) break;
+            }
+          }
+        }
+      }
+
+      // 4. 涂布所有将在 <= 100ms 内致命起火爆炸的十字范围
+      for (let d = 0; d < detonatingBombs.length; d++) {
+        const b = detonatingBombs[d];
+        lethal[b.idx] = 1;
+        for (let dir = 0; dir < 4; dir++) {
+          const [dr, dc] = DIRS[dir];
+          for (let k = 1; k <= b.blast; k++) {
+            const nr = b.r + dr * k, nc = b.c + dc * k;
+            if (nr < 0 || nr >= H || nc < 0 || nc >= W) break;
+            const ni = nr * W + nc;
+            if (sim.wall && sim.wall[ni]) break;
+            lethal[ni] = 1;
+            if ((sim.brick && sim.brick[ni]) || (sim.pushable && sim.pushable[ni])) break;
+          }
+        }
+      }
+
+      return lethal;
+    }
+
+    filter100msSuicide(sim, pid, chosenMove, finalBomb, targetCell) {
+      const W = sim.W || 15, H = sim.H || 13;
+      const lethal = this.getImminentLethalMask(sim);
+      const own = sim.centerCell(pid);
+      const ownIdx = own[0] * W + own[1];
+      const { mm } = sim.legalMask();
+
+      // Case A: 自身当前格处于 <= 100ms 即刻爆炸火线或燃烧中！必须紧急机动脱险
+      if (lethal[ownIdx] === 1) {
+        let moveIsSafe = false;
+        if (chosenMove !== MOVE_IDLE && mm[pid][chosenMove] === 1) {
+          const nr = own[0] + DIRS[chosenMove][0], nc = own[1] + DIRS[chosenMove][1];
+          if (nr >= 0 && nr < H && nc >= 0 && nc < W) {
+            const ni = nr * W + nc;
+            if (lethal[ni] === 0 && !sim.wall[ni] && !sim.brick[ni]) {
+              moveIsSafe = true;
+            }
+          }
+        }
+
+        if (!moveIsSafe) {
+          let bestD = MOVE_IDLE;
+          let bestDist = Infinity;
+          const targetR = targetCell >= 0 ? (targetCell / W) | 0 : own[0];
+          const targetC = targetCell >= 0 ? targetCell % W : own[1];
+
+          for (let d = 0; d < 4; d++) {
+            if (mm[pid][d] === 1) {
+              const nr = own[0] + DIRS[d][0], nc = own[1] + DIRS[d][1];
+              if (nr >= 0 && nr < H && nc >= 0 && nc < W) {
+                const ni = nr * W + nc;
+                if (lethal[ni] === 0 && !sim.wall[ni] && !sim.brick[ni]) {
+                  const dist = Math.abs(nr - targetR) + Math.abs(nc - targetC);
+                  if (dist < bestDist) {
+                    bestDist = dist;
+                    bestD = d;
+                  }
+                }
+              }
+            }
+          }
+          chosenMove = bestD;
+        }
+        finalBomb = 0; // 濒死脱险瞬间取消放泡，全力逃生
+      }
+      // Case B: 自身当前格安全，但拟迈入的格子处于 <= 100ms 临界爆炸区！“别过去”拦截！
+      else if (chosenMove !== MOVE_IDLE) {
+        const nr = own[0] + DIRS[chosenMove][0], nc = own[1] + DIRS[chosenMove][1];
+        if (nr >= 0 && nr < H && nc >= 0 && nc < W) {
+          const ni = nr * W + nc;
+          if (lethal[ni] === 1) {
+            // 目标格即将爆炸：绝对别走进去！在当前安全格驻留等待起火结束
+            chosenMove = MOVE_IDLE;
+          }
+        }
+      }
+
       return [chosenMove, finalBomb];
     }
   }

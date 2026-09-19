@@ -340,10 +340,139 @@ RULES:
         if (this.lastDecision) this.lastDecision.bombAct = 'hold_bomb';
       }
 
+      // 100ms 临界底层防自杀底线 (Ultra-Short 100ms Anti-Suicide Gate):
+      // 允许踩初级/远期火焰与穿雷走位，但当炸弹处于 <= 100ms 临界爆炸或当前格正在燃烧时拦截！
+      const [safeMove, safeBomb] = this.filter100msSuicide(sim, pid, chosenMove, finalBomb);
+      chosenMove = safeMove;
+      finalBomb = safeBomb;
+
+      const { mm } = sim.legalMask();
+      if (chosenMove !== MOVE_IDLE && mm && mm[pid] && mm[pid][chosenMove] !== 1) {
+        chosenMove = MOVE_IDLE;
+      }
+
       this.lastMove = chosenMove;
       this.lastBomb = finalBomb;
+      return [chosenMove, finalBomb];
+    }
 
-      // 纯净直出：直接返回 [chosenMove, finalBomb]，完全由 Jev 大模型决定！
+    getImminentLethalMask(sim) {
+      const W = sim.W || 15, H = sim.H || 13, N = W * H;
+      const lethal = new Uint8Array(N);
+      if (sim.blastLinger) {
+        for (let i = 0; i < N; i++) {
+          if (sim.blastLinger[i] > 0) lethal[i] = 1;
+        }
+      }
+      const detonatingBombs = [];
+      const bombList = [];
+      if (sim.fuse) {
+        for (let i = 0; i < N; i++) {
+          if (sim.fuse[i] > 0) {
+            const bObj = {
+              idx: i,
+              r: (i / W) | 0,
+              c: i % W,
+              blast: sim.bombBlast ? (sim.bombBlast[i] || 2) : 2,
+              fuse: sim.fuse[i],
+              willExplode: sim.fuse[i] <= 1
+            };
+            bombList.push(bObj);
+            if (bObj.willExplode) detonatingBombs.push(bObj);
+          }
+        }
+      }
+      let changed = true;
+      let pass = 0;
+      while (changed && pass < 10) {
+        changed = false;
+        pass++;
+        for (let d = 0; d < detonatingBombs.length; d++) {
+          const bA = detonatingBombs[d];
+          for (let dir = 0; dir < 4; dir++) {
+            const [dr, dc] = DIRS[dir];
+            for (let k = 1; k <= bA.blast; k++) {
+              const nr = bA.r + dr * k, nc = bA.c + dc * k;
+              if (nr < 0 || nr >= H || nc < 0 || nc >= W) break;
+              const ni = nr * W + nc;
+              if (sim.wall && sim.wall[ni]) break;
+              for (let b = 0; b < bombList.length; b++) {
+                const bB = bombList[b];
+                if (bB.idx === ni && !bB.willExplode) {
+                  bB.willExplode = true;
+                  detonatingBombs.push(bB);
+                  changed = true;
+                }
+              }
+              if ((sim.brick && sim.brick[ni]) || (sim.pushable && sim.pushable[ni])) break;
+            }
+          }
+        }
+      }
+      for (let d = 0; d < detonatingBombs.length; d++) {
+        const b = detonatingBombs[d];
+        lethal[b.idx] = 1;
+        for (let dir = 0; dir < 4; dir++) {
+          const [dr, dc] = DIRS[dir];
+          for (let k = 1; k <= b.blast; k++) {
+            const nr = b.r + dr * k, nc = b.c + dc * k;
+            if (nr < 0 || nr >= H || nc < 0 || nc >= W) break;
+            const ni = nr * W + nc;
+            if (sim.wall && sim.wall[ni]) break;
+            lethal[ni] = 1;
+            if ((sim.brick && sim.brick[ni]) || (sim.pushable && sim.pushable[ni])) break;
+          }
+        }
+      }
+      return lethal;
+    }
+
+    filter100msSuicide(sim, pid, chosenMove, finalBomb) {
+      const W = sim.W || 15, H = sim.H || 13;
+      const lethal = this.getImminentLethalMask(sim);
+      const own = sim.centerCell(pid);
+      const ownIdx = own[0] * W + own[1];
+      const { mm } = sim.legalMask();
+
+      if (lethal[ownIdx] === 1) {
+        let moveIsSafe = false;
+        if (chosenMove !== MOVE_IDLE && mm[pid][chosenMove] === 1) {
+          const nr = own[0] + DIRS[chosenMove][0], nc = own[1] + DIRS[chosenMove][1];
+          if (nr >= 0 && nr < H && nc >= 0 && nc < W) {
+            const ni = nr * W + nc;
+            if (lethal[ni] === 0 && !sim.wall[ni] && !sim.brick[ni]) {
+              moveIsSafe = true;
+            }
+          }
+        }
+
+        if (!moveIsSafe) {
+          let bestD = MOVE_IDLE;
+          for (let d = 0; d < 4; d++) {
+            if (mm[pid][d] === 1) {
+              const nr = own[0] + DIRS[d][0], nc = own[1] + DIRS[d][1];
+              if (nr >= 0 && nr < H && nc >= 0 && nc < W) {
+                const ni = nr * W + nc;
+                if (lethal[ni] === 0 && !sim.wall[ni] && !sim.brick[ni]) {
+                  bestD = d;
+                  break;
+                }
+              }
+            }
+          }
+          chosenMove = bestD;
+        }
+        finalBomb = 0;
+      } else if (chosenMove !== MOVE_IDLE) {
+        const nr = own[0] + DIRS[chosenMove][0], nc = own[1] + DIRS[chosenMove][1];
+        if (nr >= 0 && nr < H && nc >= 0 && nc < W) {
+          const ni = nr * W + nc;
+          if (lethal[ni] === 1) {
+            chosenMove = MOVE_IDLE;
+          }
+        }
+      }
+
       return [chosenMove, finalBomb];
     }
   }
