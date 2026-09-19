@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const QQT = require('../web/sim.js');
 const TimeAStarAI = require('../web/time_astar_ai.js');
-const JevAI = require('../web/jev_ai.js');
+const JevGridAI = require('../web/jev_grid_ai.js');
 
 const { Sim, CFG } = QQT;
 const H = QQT.H, W = QQT.W, N = QQT.N;
@@ -47,8 +47,8 @@ async function runMatch(levelSource, maxTicks = 120) {
   const sim = new Sim(seed);
   sim.reset(level);
 
-  // P0: TypeSafe Jev, P1: 规则 Hunter
-  const jev = new JevAI({
+  // P0: TypeSafe Jev (高维坐标全图版), P1: 规则 Hunter
+  const jev = new JevGridAI({
     apiUrl: 'https://api.typesafe.ai/v1/systemone',
     inferIntervalTicks: 10 // 每 1s 一次 Jev 深度研判
   });
