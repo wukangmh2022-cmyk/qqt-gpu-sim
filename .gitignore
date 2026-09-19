@@ -68,3 +68,5 @@ params_surgery*.pkl
 !web/models/params_it00000223*
 # !web/models/params_hunt_*
 eval_local/
+*.log
+web/jev_decisions.log
