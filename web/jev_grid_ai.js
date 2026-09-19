@@ -343,6 +343,14 @@
         }
       }
 
+      const ownCap = sim.bombsCap ? sim.bombsCap[pid] : 2;
+      const ownLive = sim.liveBombs ? sim.liveBombs(pid) : 0;
+      const ownAvail = Math.max(0, ownCap - ownLive);
+
+      const oppCap = sim.bombsCap ? sim.bombsCap[opp] : 2;
+      const oppLive = sim.liveBombs ? sim.liveBombs(opp) : 0;
+      const oppAvail = Math.max(0, oppCap - oppLive);
+
       // 3. 构造时序历史动作上下文（包含时间间隔）
       const historyContext = this.temporalHistory.slice(-5).map(h => ({
         tick: h.tick,
@@ -359,7 +367,8 @@
         combat_tactics: {
           opponent_in_direct_blast_line: opponentInBlastLine,
           opponent_adjacent: Math.abs(own[0] - oppCell[0]) + Math.abs(own[1] - oppCell[1]) <= 1,
-          can_place_bomb_now: sim.liveBombs(pid) < (sim.bombsCap ? sim.bombsCap[pid] : 2) && sim.fuse[ownIdx] <= 0
+          available_bombs: ownAvail,
+          can_place_bomb_now: ownAvail > 0 && sim.fuse[ownIdx] <= 0
         },
         map_legend: {
           "P": `player_position (${own[0]}, ${own[1]})`,
@@ -388,6 +397,7 @@
         match_rules: {
           damage_rule: "Touching any flame (0) or exploding bomb blast (1-2) deducts 1 HP.",
           flame_linger_rule: "LATENT RUNTIME RULE: When countdown reaches 0, the explosion flame persists and LINGERS for 0.3s~0.5s (250~300ms / 2~3 ticks). A cell marked '0' is in active combustion; touching it during this 0.3s window still causes 1 HP damage! Never step onto '0' until it turns back to safe path '.'.",
+          bomb_inventory_rule: `BOMB INVENTORY RULE: Player bomb capacity is ${ownCap}. Currently active on map: ${ownLive}, available in hand: ${ownAvail}. Placing a bomb deploys 1 bomb at current tile and consumes 1 slot; once it detonates and flame clears, the slot returns to inventory.`,
           victory_condition: "Reducing enemy HP to 0 achieves immediate VICTORY.",
           defeat_condition: "When player HP reaches 0, player is ELIMINATED (instant DEFEAT / GAME OVER).",
           current_player_hp: sim.hp ? sim.hp[pid] : 5,
@@ -420,15 +430,20 @@
         },
         player_stats: {
           hp: sim.hp ? sim.hp[pid] : 5,
-          bombs_cap: sim.bombsCap ? sim.bombsCap[pid] : 2,
+          bombs_cap: ownCap,
+          active_bombs: ownLive,
+          available_bombs: ownAvail,
           blast_cap: sim.blastCap ? sim.blastCap[pid] : 2,
           speed: sim.spdG ? Number(sim.spdG[pid].toFixed(2)) : 1.3,
-          can_place_bomb: sim.liveBombs(pid) < sim.bombsCap[pid] && sim.fuse[ownIdx] <= 0,
+          can_place_bomb: ownAvail > 0 && sim.fuse[ownIdx] <= 0,
           continuous_pos: [Number(ownRawR.toFixed(2)), Number(ownRawC.toFixed(2))],
           in_tile_diff: [ownDiffR, ownDiffC]
         },
         enemy_stats: {
           hp: sim.hp ? sim.hp[opp] : 5,
+          bombs_cap: oppCap,
+          active_bombs: oppLive,
+          available_bombs: oppAvail,
           distance: Math.abs(own[0] - oppCell[0]) + Math.abs(own[1] - oppCell[1]),
           continuous_distance: Number(Math.hypot(ownRawR - oppRawR, ownRawC - oppRawC).toFixed(2)),
           alive: sim.alive ? Boolean(sim.alive[opp]) : true,
@@ -549,9 +564,11 @@
           },
           bomb_decision: {
             type: 'choice',
-            instructions: 'Should player place a bomb at current location right now? (SAFETY RULE: Bombs are solid obstacles. NEVER place a bomb if you are in a tight enclosed corner or dead end without an exit corridor, as it will trap you inside to death!).',
+            instructions: `Should player place a bomb at current location right now? (Available bombs in hand: ${state.player_stats.available_bombs}/${state.player_stats.bombs_cap}, active on field: ${state.player_stats.active_bombs}). (SAFETY RULE: Bombs are solid obstacles. NEVER place a bomb if you are in a tight enclosed corner or dead end without an exit corridor, as it will trap you inside to death!).`,
             criteria: {
-              plant_bomb_now: 'Place bomb right now (only if you have an open escape route to step back into, AND an opponent is nearby or a blocking brick is directly ahead).',
+              plant_bomb_now: state.player_stats.available_bombs > 0
+                ? 'Place a bomb at current location right now (only if you have an open escape route to step back into, AND an opponent is nearby or a blocking brick is directly ahead).'
+                : 'No bombs available to place right now (all bombs active on field).',
               hold_bomb: 'Do not place bomb; keep corridor open, or player is actively moving towards target without dropping a bomb.'
             }
           }
