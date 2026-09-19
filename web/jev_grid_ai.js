@@ -395,6 +395,8 @@
         row_danger_counts: rowDangerCounts,
         col_danger_counts: colDangerCounts,
         match_rules: {
+          core_gameplay_loop: "CORE GAMEPLAY LOOP: 1) Plant bombs near destructible bricks (B) to blast them open and reveal upgrade crates (C). 2) Collect crates (C) to increase bomb capacity (bombs_cap), blast flame reach (blast_cap), and movement speed. 3) Corner enemy (E) using bombs as solid blocks or corridor traps. 4) Hit enemy with bomb flames or chain reaction explosions to reduce their HP to 0 for VICTORY.",
+          chain_reaction_rule: "CHAIN REACTION MECHANIC (CRITICAL TACTIC): When any bomb explodes, its cross-line flame INSTANTLY detonates ALL other bombs within its blast reach immediately without waiting for their timer! TACTICAL OFFENSE: Placing bombs in a line or grid triggers a simultaneous multi-bomb chain blast covering long corridors and giving enemies 0 reaction time. DEFENSIVE WARNING: If you plant a bomb in the blast line of an older ticking bomb (countdown 1-3), your new bomb will explode early together with it! Never place a bomb near a ticking bomb unless you have an immediate escape route!",
           damage_rule: "Touching any flame (0) or exploding bomb blast (1-2) deducts 1 HP.",
           flame_linger_rule: "LATENT RUNTIME RULE: When countdown reaches 0, the explosion flame persists and LINGERS for 0.3s~0.5s (250~300ms / 2~3 ticks). A cell marked '0' is in active combustion; touching it during this 0.3s window still causes 1 HP damage! Never step onto '0' until it turns back to safe path '.'.",
           bomb_inventory_rule: `BOMB INVENTORY RULE: Player bomb capacity is ${ownCap}. Currently active on map: ${ownLive}, available in hand: ${ownAvail}. Placing a bomb deploys 1 bomb at current tile and consumes 1 slot; once it detonates and flame clears, the slot returns to inventory.`,
@@ -444,6 +446,7 @@
           bombs_cap: oppCap,
           active_bombs: oppLive,
           available_bombs: oppAvail,
+          blast_cap: sim.blastCap ? sim.blastCap[opp] : 2,
           distance: Math.abs(own[0] - oppCell[0]) + Math.abs(own[1] - oppCell[1]),
           continuous_distance: Number(Math.hypot(ownRawR - oppRawR, ownRawC - oppRawC).toFixed(2)),
           alive: sim.alive ? Boolean(sim.alive[opp]) : true,
@@ -564,10 +567,10 @@
           },
           bomb_decision: {
             type: 'choice',
-            instructions: `Should player place a bomb at current location right now? (Available bombs in hand: ${state.player_stats.available_bombs}/${state.player_stats.bombs_cap}, active on field: ${state.player_stats.active_bombs}). (SAFETY RULE: Bombs are solid obstacles. NEVER place a bomb if you are in a tight enclosed corner or dead end without an exit corridor, as it will trap you inside to death!).`,
+            instructions: `Should player place a bomb at current location right now? (Available in hand: ${state.player_stats.available_bombs}/${state.player_stats.bombs_cap}, active on map: ${state.player_stats.active_bombs}, blast reach: ${state.player_stats.blast_cap} tiles). (CHAIN REACTION: Bombs touching any blast line detonate immediately! SAFETY RULE: Bombs are solid obstacles. NEVER place if you are in an enclosed corner with no exit corridor!).`,
             criteria: {
               plant_bomb_now: state.player_stats.available_bombs > 0
-                ? 'Place a bomb at current location right now (only if you have an open escape route to step back into, AND an opponent is nearby or a blocking brick is directly ahead).'
+                ? 'Place a bomb at current location right now (only if you have an open escape route to step back into, AND an opponent is nearby, blocking brick is directly ahead, or creating a chain reaction).'
                 : 'No bombs available to place right now (all bombs active on field).',
               hold_bomb: 'Do not place bomb; keep corridor open, or player is actively moving towards target without dropping a bomb.'
             }
