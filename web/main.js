@@ -329,15 +329,28 @@
   const JEV_AI_VAL = '__jev_ai__';         // TypeSafe Jev (System One 战术引导版)
   const JEV_AUTONOMOUS_VAL = '__jev_autonomous_ai__'; // TypeSafe Jev (完全自主版 GPT-5.6 设想)
   const JEV_GRID_VAL = '__jev_grid_ai__';   // TypeSafe Jev (高维坐标全图版 · 15x13网格+时序上下文)
+  const JEV_PURE_VAL = '__jev_pure_ai__';   // TypeSafe Jev (纯净直出版 · Doom 范式零规则)
   const jevAi = typeof JevAI !== 'undefined' ? new JevAI() : null;
   const jevAutoAi = typeof JevAutonomousAI !== 'undefined' ? new JevAutonomousAI() : null;
   const jevGridAi = typeof JevGridAI !== 'undefined' ? new JevGridAI() : null;
+  const jevPureAi = typeof JevPureAI !== 'undefined' ? new JevPureAI() : null;
 
   function updateJevUi() {
-    const curSel = (elSpectate.checked && (p0Sel === JEV_AI_VAL || p0Sel === JEV_AUTONOMOUS_VAL || p0Sel === JEV_GRID_VAL))
-      ? p0Sel : enemySel;
-    const activeJev = curSel === JEV_GRID_VAL ? jevGridAi : (curSel === JEV_AUTONOMOUS_VAL ? jevAutoAi : jevAi);
+    const isJevVal = (v) => v === JEV_AI_VAL || v === JEV_AUTONOMOUS_VAL || v === JEV_GRID_VAL || v === JEV_PURE_VAL;
+    const curSel = (elSpectate.checked && isJevVal(p0Sel)) ? p0Sel : enemySel;
+    const activeJev = curSel === JEV_PURE_VAL ? jevPureAi : (curSel === JEV_GRID_VAL ? jevGridAi : (curSel === JEV_AUTONOMOUS_VAL ? jevAutoAi : jevAi));
     if (!activeJev || !elJevStatus || !elJevLogs) return;
+
+    if (curSel === JEV_PURE_VAL) {
+      const dec = activeJev.lastDecision;
+      if (dec) {
+        const dirEmoji = { 'up': '⬆️ 上', 'down': '⬇️ 下', 'left': '⬅️ 左', 'right': '➡️ 右', 'idle': '⏹️ 驻留' }[dec.moveDir] || dec.moveDir;
+        const bStr = dec.bombAct === 'plant_bomb' ? '<b style="color:#ff5252">💣 下子放泡</b>' : '停火';
+        const spdStr = dec.isSlower ? '<b style="color:#00e676">⚡ 速度落后(吃道具优先)</b>' : '⚔️ 速度持平/领先';
+        elJevStatus.innerHTML = `<b>[Doom纯净版] 移动: ${dirEmoji}</b> | 放泡: ${bStr} | 状态: ${spdStr} | 耗时: ${activeJev.stats.lastLatencyMs}ms`;
+      }
+      return;
+    }
 
     if (curSel === JEV_GRID_VAL) {
       const dec = activeJev.lastDecision;
@@ -397,7 +410,7 @@
     sel === HUNTER_VAL || sel === TIME_ASTAR_VAL || sel === TIME_ASTAR_HUNT_VAL ||
     sel === TIME_ASTAR_ROAM_VAL || sel === NUKEMAN_VAL || sel === IDLE_VAL ||
     sel === STATIONARY_VAL || sel === FLEE_BOT_VAL || sel === ROAM_BOT_VAL ||
-    sel === JEV_AI_VAL || sel === JEV_AUTONOMOUS_VAL || sel === JEV_GRID_VAL;
+    sel === JEV_AI_VAL || sel === JEV_AUTONOMOUS_VAL || sel === JEV_GRID_VAL || sel === JEV_PURE_VAL;
   const LATEST_VIT = 'ViTModel2_31.9B';       // 最新 ViT 模型
 
   // 敌/我方 AI 选择：'__time_astar_hunt__'（高级时空 A* 竞技追猎版，默认敌人秒开）、'__hunter__'（规则）或模型名。
@@ -545,6 +558,7 @@
     if (sel === JEV_AI_VAL && jevAi) return jevAi.act(sim, pid, rng);
     if (sel === JEV_AUTONOMOUS_VAL && jevAutoAi) return jevAutoAi.act(sim, pid, rng);
     if (sel === JEV_GRID_VAL && jevGridAi) return jevGridAi.act(sim, pid, rng);
+    if (sel === JEV_PURE_VAL && jevPureAi) return jevPureAi.act(sim, pid, rng);
     return [MOVE_IDLE, 0];
   }
 
@@ -1557,6 +1571,11 @@
       jevGridOpt.value = JEV_GRID_VAL;
       jevGridOpt.textContent = '🧠 TypeSafe Jev（高维坐标全图版 · 15x13网格+时序上下文）';
       sel.appendChild(jevGridOpt);
+
+      const jevPureOpt = document.createElement('option');
+      jevPureOpt.value = JEV_PURE_VAL;
+      jevPureOpt.textContent = '🧠 TypeSafe Jev（纯净直出版 · Doom 范式零规则）';
+      sel.appendChild(jevPureOpt);
     }
     for (const m of modelList) {
       const opt = document.createElement('option');
@@ -3154,11 +3173,11 @@
     }
 
     // 🎯 TypeSafe Jev 决策目标位与航线高亮（录屏清晰展示用）
-    const isJevActive = (elSpectate.checked && (p0Sel === JEV_AI_VAL || p0Sel === JEV_AUTONOMOUS_VAL || p0Sel === JEV_GRID_VAL)) ||
-                        (enemySel === JEV_AI_VAL || enemySel === JEV_AUTONOMOUS_VAL || enemySel === JEV_GRID_VAL);
-    const activeSel = (elSpectate.checked && (p0Sel === JEV_AI_VAL || p0Sel === JEV_AUTONOMOUS_VAL || p0Sel === JEV_GRID_VAL))
+    const isJevActive = (elSpectate.checked && (p0Sel === JEV_AI_VAL || p0Sel === JEV_AUTONOMOUS_VAL || p0Sel === JEV_GRID_VAL || p0Sel === JEV_PURE_VAL)) ||
+                        (enemySel === JEV_AI_VAL || enemySel === JEV_AUTONOMOUS_VAL || enemySel === JEV_GRID_VAL || enemySel === JEV_PURE_VAL);
+    const activeSel = (elSpectate.checked && (p0Sel === JEV_AI_VAL || p0Sel === JEV_AUTONOMOUS_VAL || p0Sel === JEV_GRID_VAL || p0Sel === JEV_PURE_VAL))
                         ? p0Sel : enemySel;
-    const activeJev = activeSel === JEV_GRID_VAL ? jevGridAi : (activeSel === JEV_AUTONOMOUS_VAL ? jevAutoAi : jevAi);
+    const activeJev = activeSel === JEV_PURE_VAL ? jevPureAi : (activeSel === JEV_GRID_VAL ? jevGridAi : (activeSel === JEV_AUTONOMOUS_VAL ? jevAutoAi : jevAi));
     const isGrid = activeSel === JEV_GRID_VAL;
     const isAuto = activeSel === JEV_AUTONOMOUS_VAL;
 
