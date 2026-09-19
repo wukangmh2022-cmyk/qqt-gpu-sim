@@ -295,7 +295,7 @@
             surroundings[name] = 'destructible_brick';
             if (!adjacentBrickDir) adjacentBrickDir = name;
           }
-          else if (sim.blastLinger && sim.blastLinger[ti] > 0) surroundings[name] = 'burning_flame_countdown_0';
+          else if (sim.blastLinger && sim.blastLinger[ti] > 0) surroundings[name] = 'active_flame_countdown_0_(lingering_for_0.3s)';
           else if (sim.fuse[ti] > 0) {
             const bDt = Math.max(0, sim.fuse[ti] - 1) * 100;
             const bDigit = Math.min(9, Math.max(1, Math.ceil(bDt / 300)));
@@ -368,7 +368,7 @@
           "B": "destructible_brick",
           "X": "pushable_box",
           "#": "indestructible_wall",
-          "0": "active_lethal_flame (burning right now, 0ms, HP loss on touch)",
+          "0": "active_lethal_flame (active explosion & residual flame lingering for 0.3s~0.5s. NEVER touch, deals 1 HP damage!)",
           "1-9": "danger_countdown (1=100-300ms imminent blast, 2=400-600ms, 3=700-900ms <=1s window, 4-6=1-1.8s medium, 7-9=1.9-3.0s safe delay). Represents bomb center or blast line. See key_coordinates.active_bombs for bomb centers.",
           ".": "open_safe_path (no explosion scheduled, completely safe)",
           "?": "isolated_unreachable_tile"
@@ -387,6 +387,7 @@
         col_danger_counts: colDangerCounts,
         match_rules: {
           damage_rule: "Touching any flame (0) or exploding bomb blast (1-2) deducts 1 HP.",
+          flame_linger_rule: "LATENT RUNTIME RULE: When countdown reaches 0, the explosion flame persists and LINGERS for 0.3s~0.5s (250~300ms / 2~3 ticks). A cell marked '0' is in active combustion; touching it during this 0.3s window still causes 1 HP damage! Never step onto '0' until it turns back to safe path '.'.",
           victory_condition: "Reducing enemy HP to 0 achieves immediate VICTORY.",
           defeat_condition: "When player HP reaches 0, player is ELIMINATED (instant DEFEAT / GAME OVER).",
           current_player_hp: sim.hp ? sim.hp[pid] : 5,
