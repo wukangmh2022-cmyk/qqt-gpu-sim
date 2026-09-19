@@ -325,6 +325,7 @@
   const TIME_ASTAR_HUNT_VAL = '__time_astar_hunt__'; // 高级时空 A*（竞技追猎版）
   const TIME_ASTAR_ROAM_VAL = '__time_astar_roam__'; // 高级时空 A*（经典漫游连炮版）
   const NUKEMAN_VAL = '__nukeman__';       // 兼容别名
+  const IDLE_VAL = '__idle__';             // 静态死靶(不动不炸)哨兵
   const JEV_AI_VAL = '__jev_ai__';         // TypeSafe Jev (System One 战术引导版)
   const JEV_AUTONOMOUS_VAL = '__jev_autonomous_ai__'; // TypeSafe Jev (完全自主版 GPT-5.6 设想)
   const JEV_GRID_VAL = '__jev_grid_ai__';   // TypeSafe Jev (高维坐标全图版 · 15x13网格+时序上下文)
