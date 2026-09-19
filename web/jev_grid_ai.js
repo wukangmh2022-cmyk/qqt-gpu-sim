@@ -152,11 +152,38 @@
         }
       }
 
-      // 1. 构建 15×13 二维字符矩阵
+      // 提取在场所有炸弹的结构化信息（引线倒计时与威力半径）
+      const activeBombs = [];
+      for (let i = 0; i < N; i++) {
+        if (sim.fuse[i] > 0) {
+          const br = (i / W) | 0, bc = i % W;
+          const fuseTicks = sim.fuse[i];
+          const fuseMs = Math.max(0, fuseTicks - 1) * 100;
+          const digit = Math.min(9, Math.max(1, Math.ceil(fuseMs / 300)));
+          activeBombs.push({
+            pos: [br, bc],
+            countdown: digit,
+            fuse_ticks: fuseTicks,
+            fuse_ms: fuseMs,
+            blast_radius: sim.bombBlast ? (sim.bombBlast[i] || 2) : 2
+          });
+        }
+      }
+
+      // 1. 构建 15×13 二维字符矩阵（0~9 量化危险倒计时热力图）
+      // 0: 当前正在燃烧 (Lethal)
+      // 1~3: 100~900ms 临界引爆（当前 1000ms 决策周期内即将爆炸）
+      // 4~6: 1000~1800ms 中期倒计时
+      // 7~9: 1900~3000ms 安全充裕倒计时（可快速借道通过）
+      // .: 绝对安全道路（无任何爆炸预定）
       const gridRows = [];
       const cratesDetail = [];
       const bricksList = [];
       const dangerTiles = [];
+      const minRowCountdown = new Array(H).fill(null);
+      const minColCountdown = new Array(W).fill(null);
+      const rowDangerCounts = new Array(H).fill(0);
+      const colDangerCounts = new Array(W).fill(0);
 
       for (let r = 0; r < H; r++) {
         let rowStr = '';
@@ -164,13 +191,39 @@
           const idx = r * W + c;
           const isReachable = reachableMask[idx] === 1;
 
+          // 计算当前格的危险倒计时
+          let cellCountdown = null;
+          let cellThreatMs = null;
+          const isBurningNow = (sim.blastLinger && sim.blastLinger[idx] > 0) || danger.hitTest(idx, nowMs, 0);
+
+          if (isBurningNow) {
+            cellCountdown = 0;
+            cellThreatMs = 0;
+          } else {
+            const nextBlast = danger.nextDangerStart(idx, nowMs);
+            if (sim.fuse[idx] > 0) {
+              const bMs = Math.max(0, sim.fuse[idx] - 1) * 100;
+              cellThreatMs = (nextBlast !== null && nextBlast - nowMs < bMs) ? (nextBlast - nowMs) : bMs;
+              cellCountdown = Math.min(9, Math.max(1, Math.ceil(cellThreatMs / 300)));
+            } else if (nextBlast !== null && nextBlast - nowMs <= 3000) {
+              cellThreatMs = nextBlast - nowMs;
+              cellCountdown = Math.min(9, Math.max(1, Math.ceil(cellThreatMs / 300)));
+            }
+          }
+
+          if (isReachable && cellCountdown !== null) {
+            if (minRowCountdown[r] === null || cellCountdown < minRowCountdown[r]) minRowCountdown[r] = cellCountdown;
+            if (minColCountdown[c] === null || cellCountdown < minColCountdown[c]) minColCountdown[c] = cellCountdown;
+            if (cellCountdown <= 3) {
+              rowDangerCounts[r]++;
+              colDangerCounts[c]++;
+            }
+          }
+
           if (r === own[0] && c === own[1]) {
             rowStr += 'P'; // 我方玩家
           } else if (r === oppCell[0] && c === oppCell[1]) {
             rowStr += isReachable ? 'E' : 'e'; // E=连通可达对手, e=非连通隔断对手
-          } else if (sim.fuse[idx] > 0 || danger.hitTest(idx, nowMs, 0)) {
-            rowStr += '!'; // 炸弹或烈焰
-            if (isReachable) dangerTiles.push([r, c]);
           } else if (sim.wall[idx] === 1) {
             rowStr += '#'; // 不可炸实心墙
           } else if (sim.brick[idx] === 1) {
@@ -191,7 +244,19 @@
                 pos: [r, c],
                 type: typeStr,
                 directly_walkable: walkableMask[idx] === 1,
-                dist: Math.abs(r - own[0]) + Math.abs(c - own[1])
+                dist: Math.abs(r - own[0]) + Math.abs(c - own[1]),
+                threat_countdown: cellCountdown,
+                threat_ms: cellThreatMs
+              });
+            }
+          } else if (cellCountdown !== null) {
+            rowStr += String(cellCountdown); // 0~9 量化倒计时热力图
+            if (isReachable) {
+              dangerTiles.push({
+                pos: [r, c],
+                countdown: cellCountdown,
+                threat_ms: cellThreatMs,
+                is_bomb: (sim.fuse[idx] > 0)
               });
             }
           } else {
@@ -203,7 +268,7 @@
 
       cratesDetail.sort((a, b) => a.dist - b.dist);
 
-      // 2. 四邻状态与路径障碍
+      // 2. 四邻状态与路径障碍（精确到起火毫秒与倒计时）
       const surroundings = {};
       const dirNames = ['up', 'down', 'left', 'right'];
       let adjacentBrickDir = null;
@@ -219,9 +284,22 @@
             surroundings[name] = 'destructible_brick';
             if (!adjacentBrickDir) adjacentBrickDir = name;
           }
-          else if (sim.fuse[ti] > 0) surroundings[name] = 'ticking_bomb';
-          else if (danger.hitTest(ti, nowMs, 300)) surroundings[name] = 'danger_flame';
-          else surroundings[name] = 'open_path';
+          else if (sim.blastLinger && sim.blastLinger[ti] > 0) surroundings[name] = 'burning_flame_countdown_0';
+          else if (sim.fuse[ti] > 0) {
+            const bDt = Math.max(0, sim.fuse[ti] - 1) * 100;
+            const bDigit = Math.min(9, Math.max(1, Math.ceil(bDt / 300)));
+            surroundings[name] = `bomb_center_countdown_${bDigit}_(${bDt}ms)`;
+          }
+          else {
+            const nextFire = danger.nextDangerStart(ti, nowMs);
+            if (nextFire !== null && nextFire - nowMs <= 3000) {
+              const dt = nextFire - nowMs;
+              const digit = Math.min(9, Math.max(1, Math.ceil(dt / 300)));
+              surroundings[name] = `blast_corridor_countdown_${digit}_(${dt}ms)`;
+            } else {
+              surroundings[name] = 'safe_open_path';
+            }
+          }
         }
       }
 
@@ -252,8 +330,9 @@
           "B": "destructible_brick",
           "X": "pushable_box",
           "#": "indestructible_wall",
-          "!": "bomb_or_lethal_flame",
-          ".": "open_walkable_path",
+          "0": "active_lethal_flame (burning right now, 0ms, HP loss on touch)",
+          "1-9": "danger_countdown (1=100-300ms imminent blast, 2=400-600ms, 3=700-900ms <=1s window, 4-6=1-1.8s medium, 7-9=1.9-3.0s safe delay). Represents bomb center or blast line. See key_coordinates.active_bombs for bomb centers.",
+          ".": "open_safe_path (no explosion scheduled, completely safe)",
           "?": "isolated_unreachable_tile"
         },
         map_grid_15x13: gridRows,
@@ -264,12 +343,17 @@
         },
         reachable_rows: Array.from(reachableRows).sort((a, b) => a - b),
         reachable_cols: Array.from(reachableCols).sort((a, b) => a - b),
+        row_threats: minRowCountdown,
+        col_threats: minColCountdown,
+        row_danger_counts: rowDangerCounts,
+        col_danger_counts: colDangerCounts,
         key_coordinates: {
           player: [own[0], own[1]],
           enemy: [oppCell[0], oppCell[1]],
           crates: cratesDetail.slice(0, 5),
           nearby_bricks: bricksList.filter(b => Math.abs(b[0] - own[0]) + Math.abs(b[1] - own[1]) <= 6).slice(0, 5),
-          danger_zones: dangerTiles
+          active_bombs: activeBombs,
+          danger_zones: dangerTiles.slice(0, 15)
         },
         player_stats: {
           hp: sim.hp ? sim.hp[pid] : 5,
@@ -304,7 +388,7 @@
         const enemyR = state.key_coordinates.enemy[0];
         const enemyC = state.key_coordinates.enemy[1];
 
-        // 构造 13 个行选项 (r0 .. r12)，明确标注连通性与目标引导
+        // 构造 13 个行选项 (r0 .. r12)，明确标注连通性、危险倒计时与目标引导
         const rowCriteria = {};
         for (let r = 0; r < 13; r++) {
           const isReachable = state.reachable_rows.includes(r);
@@ -318,11 +402,26 @@
             const bricksInRow = state.key_coordinates.nearby_bricks.filter(b => b[0] === r).map(b => `brick at col ${b[1]}`);
             if (bricksInRow.length) tags.push('bricks: ' + bricksInRow.slice(0, 2).join(', '));
             if (r === ownR) tags.push('CURRENT PLAYER ROW (select ONLY if intentionally holding position)');
-            rowCriteria[`r${r}`] = `Row ${r} [REACHABLE: ${tags.join(' | ') || 'open corridor'}]`;
+
+            const rThreat = state.row_threats ? state.row_threats[r] : null;
+            const rDangerCount = state.row_danger_counts ? state.row_danger_counts[r] : 0;
+            if (rThreat !== null && rThreat !== undefined) {
+              if (rThreat === 0) tags.push('⚠️ FLAME BURNING (countdown 0)');
+              else if (rThreat <= 3) {
+                if (rDangerCount >= 3) tags.push(`🚨 CRITICAL DANGER: Heavy blast line along row (countdown ${rThreat})`);
+                else tags.push(`⚠️ Crossed by blast at ${rDangerCount} cell(s) (countdown ${rThreat})`);
+              }
+              else if (rThreat <= 6) tags.push(`medium danger (countdown ${rThreat})`);
+              else tags.push(`safe delay (countdown ${rThreat})`);
+            } else {
+              tags.push('SAFE corridor');
+            }
+
+            rowCriteria[`r${r}`] = `Row ${r} [REACHABLE: ${tags.join(' | ')}]`;
           }
         }
 
-        // 构造 15 个列选项 (c0 .. c14)，明确标注连通性与目标引导
+        // 构造 15 个列选项 (c0 .. c14)，明确标注连通性、危险倒计时与目标引导
         const colCriteria = {};
         for (let c = 0; c < 15; c++) {
           const isReachable = state.reachable_cols.includes(c);
@@ -334,29 +433,44 @@
             const cratesInCol = state.key_coordinates.crates.filter(cObj => cObj.pos[1] === c).map(cObj => `${cObj.type} at row ${cObj.pos[0]}`);
             if (cratesInCol.length) tags.push('crates: ' + cratesInCol.join(', '));
             if (c === ownC) tags.push('CURRENT PLAYER COL (select ONLY if intentionally holding position)');
-            colCriteria[`c${c}`] = `Col ${c} [REACHABLE: ${tags.join(' | ') || 'open corridor'}]`;
+
+            const cThreat = state.col_threats ? state.col_threats[c] : null;
+            const cDangerCount = state.col_danger_counts ? state.col_danger_counts[c] : 0;
+            if (cThreat !== null && cThreat !== undefined) {
+              if (cThreat === 0) tags.push('⚠️ FLAME BURNING (countdown 0)');
+              else if (cThreat <= 3) {
+                if (cDangerCount >= 3) tags.push(`🚨 CRITICAL DANGER: Heavy blast line along col (countdown ${cThreat})`);
+                else tags.push(`⚠️ Crossed by blast at ${cDangerCount} cell(s) (countdown ${cThreat})`);
+              }
+              else if (cThreat <= 6) tags.push(`medium danger (countdown ${cThreat})`);
+              else tags.push(`safe delay (countdown ${cThreat})`);
+            } else {
+              tags.push('SAFE corridor');
+            }
+
+            colCriteria[`c${c}`] = `Col ${c} [REACHABLE: ${tags.join(' | ')}]`;
           }
         }
 
         const questions = {
           strategic_intent: {
             type: 'choice',
-            instructions: 'Based on map_grid_15x13, player/enemy stats, and recent_temporal_history, what is the primary strategic objective?',
+            instructions: 'Based on map_grid_15x13 (where 0-9 represent danger countdown: 0=burning flame now, 1-3=critical imminent blast <=900ms, 4-6=medium countdown, 7-9=delayed safe countdown, .=safe path), player/enemy stats, and recent_temporal_history, what is the primary strategic objective?',
             criteria: {
-              hunt_opponent: `Aggressively advance towards opponent E (at row ${enemyR}, col ${enemyC}) to corner, trap, or blast them.`,
-              gather_powerup: 'Navigate towards a high-value crate C on the map to collect it for attribute upgrades.',
+              hunt_opponent: `Aggressively advance towards opponent E (at row ${enemyR}, col ${enemyC}) along SAFE corridors (. or countdown >= 5). AVOID corridors with imminent countdown 0-3!`,
+              gather_powerup: 'Navigate towards a safe crate C on the map to collect it for attribute upgrades.',
               breach_obstacle: 'Navigate towards a blocking brick B to place a bomb and open corridors.',
-              evade_danger: 'Navigate away from bombs/flames ! to a secure shelter tile.'
+              evade_danger: 'Navigate away from danger corridors (countdown 0-3) to a secure shelter tile (.).'
             }
           },
           target_row: {
             type: 'choice',
-            instructions: `Select the target destination row index (0 to 12) for player P to navigate TOWARD. To make progress, choose a row matching your strategic_intent (e.g. enemy row ${enemyR} for hunt_opponent, or a crate/brick row). DO NOT select current player row (${ownR}) unless intentionally holding position.`,
+            instructions: `Select target destination row index (0 to 12). CRITICAL: Prefer rows tagged [SAFE] or paths with '.' or countdown >= 5. DO NOT route into rows with imminent danger (countdown 0-3) unless intentionally evading.`,
             criteria: rowCriteria
           },
           target_col: {
             type: 'choice',
-            instructions: `Select the target destination column index (0 to 14) for player P to navigate TOWARD. To make progress, choose a column matching your strategic_intent (e.g. enemy col ${enemyC} for hunt_opponent, or a crate col). DO NOT select current player col (${ownC}) unless intentionally holding position.`,
+            instructions: `Select target destination column index (0 to 14). CRITICAL: Prefer columns tagged [SAFE] or paths with '.' or countdown >= 5. DO NOT route into columns with imminent danger (countdown 0-3) unless intentionally evading.`,
             criteria: colCriteria
           },
           bomb_decision: {
