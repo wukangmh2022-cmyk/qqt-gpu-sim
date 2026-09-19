@@ -36,7 +36,7 @@ async function testGridAI(levelSource = 'contest01_8.map', maxTicks = 80) {
   sim.hp[1] = 1;
 
   const jev = new JevGridAI({
-    apiUrl: 'https://api.typesafe.ai/v1/systemone',
+    apiUrl: 'http://localhost:8080/api/typesafe',
     inferIntervalTicks: 8
   });
 

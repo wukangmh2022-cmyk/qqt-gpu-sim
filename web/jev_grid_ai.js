@@ -299,42 +299,42 @@
 
       try {
         const state = this.extractGridState(sim, pid);
+        const ownR = state.key_coordinates.player[0];
+        const ownC = state.key_coordinates.player[1];
+        const enemyR = state.key_coordinates.enemy[0];
+        const enemyC = state.key_coordinates.enemy[1];
 
-        // 构造 13 个行选项 (r0 .. r12)，明确标注连通性与内容
+        // 构造 13 个行选项 (r0 .. r12)，明确标注连通性与目标引导
         const rowCriteria = {};
         for (let r = 0; r < 13; r++) {
           const isReachable = state.reachable_rows.includes(r);
           if (!isReachable) {
             rowCriteria[`r${r}`] = `Row ${r} [UNREACHABLE / CUT OFF BY WALLS - DO NOT SELECT]`;
           } else {
-            const cratesInRow = state.key_coordinates.crates.filter(c => c.pos[0] === r).map(c => `${c.type} at (${c.pos[0]},${c.pos[1]})`);
-            const bricksInRow = state.key_coordinates.nearby_bricks.filter(b => b[0] === r).map(b => `brick at (${b[0]},${b[1]})`);
-            const items = [...cratesInRow, ...bricksInRow];
-            const isPlayerRow = state.key_coordinates.player[0] === r;
-            const isEnemyRow = state.key_coordinates.enemy[0] === r;
-            let note = '';
-            if (isPlayerRow) note += 'player P here; ';
-            if (isEnemyRow) note += 'enemy E here; ';
-            if (items.length) note += items.join(', ');
-            rowCriteria[`r${r}`] = `Row ${r} [REACHABLE${note ? ': ' + note : ''}]`;
+            const tags = [];
+            if (r === enemyR) tags.push('ENEMY E DESTINATION (primary target for hunt_opponent)');
+            const cratesInRow = state.key_coordinates.crates.filter(c => c.pos[0] === r).map(c => `${c.type} at col ${c.pos[1]}`);
+            if (cratesInRow.length) tags.push('crates: ' + cratesInRow.join(', '));
+            const bricksInRow = state.key_coordinates.nearby_bricks.filter(b => b[0] === r).map(b => `brick at col ${b[1]}`);
+            if (bricksInRow.length) tags.push('bricks: ' + bricksInRow.slice(0, 2).join(', '));
+            if (r === ownR) tags.push('CURRENT PLAYER ROW (select ONLY if intentionally holding position)');
+            rowCriteria[`r${r}`] = `Row ${r} [REACHABLE: ${tags.join(' | ') || 'open corridor'}]`;
           }
         }
 
-        // 构造 15 个列选项 (c0 .. c14)，明确标注连通性与内容
+        // 构造 15 个列选项 (c0 .. c14)，明确标注连通性与目标引导
         const colCriteria = {};
         for (let c = 0; c < 15; c++) {
           const isReachable = state.reachable_cols.includes(c);
           if (!isReachable) {
             colCriteria[`c${c}`] = `Col ${c} [UNREACHABLE / CUT OFF BY WALLS - DO NOT SELECT]`;
           } else {
-            const cratesInCol = state.key_coordinates.crates.filter(cObj => cObj.pos[1] === c).map(cObj => `${cObj.type} at (${cObj.pos[0]},${cObj.pos[1]})`);
-            const isPlayerCol = state.key_coordinates.player[1] === c;
-            const isEnemyCol = state.key_coordinates.enemy[1] === c;
-            let note = '';
-            if (isPlayerCol) note += 'player P here; ';
-            if (isEnemyCol) note += 'enemy E here; ';
-            if (cratesInCol.length) note += cratesInCol.join(', ');
-            colCriteria[`c${c}`] = `Col ${c} [REACHABLE${note ? ': ' + note : ''}]`;
+            const tags = [];
+            if (c === enemyC) tags.push('ENEMY E DESTINATION (primary target for hunt_opponent)');
+            const cratesInCol = state.key_coordinates.crates.filter(cObj => cObj.pos[1] === c).map(cObj => `${cObj.type} at row ${cObj.pos[0]}`);
+            if (cratesInCol.length) tags.push('crates: ' + cratesInCol.join(', '));
+            if (c === ownC) tags.push('CURRENT PLAYER COL (select ONLY if intentionally holding position)');
+            colCriteria[`c${c}`] = `Col ${c} [REACHABLE: ${tags.join(' | ') || 'open corridor'}]`;
           }
         }
 
@@ -343,20 +343,20 @@
             type: 'choice',
             instructions: 'Based on map_grid_15x13, player/enemy stats, and recent_temporal_history, what is the primary strategic objective?',
             criteria: {
-              hunt_opponent: 'Aggressively navigate towards opponent E to corner, trap, or blast them.',
+              hunt_opponent: `Aggressively advance towards opponent E (at row ${enemyR}, col ${enemyC}) to corner, trap, or blast them.`,
               gather_powerup: 'Navigate towards a high-value crate C on the map to collect it for attribute upgrades.',
-              breach_obstacle: 'Navigate towards a blocking brick B that cuts off corridors or blocks access to enemy/crates.',
+              breach_obstacle: 'Navigate towards a blocking brick B to place a bomb and open corridors.',
               evade_danger: 'Navigate away from bombs/flames ! to a secure shelter tile.'
             }
           },
           target_row: {
             type: 'choice',
-            instructions: 'Select the target destination row index (0 to 12) for the player on the 15x13 map grid. CRITICAL: ONLY select a row marked [REACHABLE]. NEVER select an [UNREACHABLE] row.',
+            instructions: `Select the target destination row index (0 to 12) for player P to navigate TOWARD. To make progress, choose a row matching your strategic_intent (e.g. enemy row ${enemyR} for hunt_opponent, or a crate/brick row). DO NOT select current player row (${ownR}) unless intentionally holding position.`,
             criteria: rowCriteria
           },
           target_col: {
             type: 'choice',
-            instructions: 'Select the target destination column index (0 to 14) for the player on the 15x13 map grid. CRITICAL: ONLY select a column marked [REACHABLE]. NEVER select an [UNREACHABLE] column.',
+            instructions: `Select the target destination column index (0 to 14) for player P to navigate TOWARD. To make progress, choose a column matching your strategic_intent (e.g. enemy col ${enemyC} for hunt_opponent, or a crate col). DO NOT select current player col (${ownC}) unless intentionally holding position.`,
             criteria: colCriteria
           },
           bomb_decision: {
@@ -487,6 +487,62 @@
         targetCol = targetCell % W;
       }
 
+      // 关键防卡死：若模型输出的目标就是当前所在格，或角色已经到达目标格：
+      // 严禁原地原地发呆！根据 strategic_intent 自主向下一个目标推进
+      if (targetCell === ownIdx) {
+        if (this.targetIntent === 'hunt_opponent' && oppIdx !== -1 && reachableMask[oppIdx]) {
+          targetCell = oppIdx;
+          targetRow = oppCell[0];
+          targetCol = oppCell[1];
+        } else if (this.targetIntent === 'gather_powerup') {
+          let nearestCrate = -1, nearestDist = Infinity;
+          for (let i = 0; i < N; i++) {
+            if (sim.crate[i] === 1 && reachableMask[i] && i !== ownIdx) {
+              const d = Math.abs(((i / W) | 0) - own[0]) + Math.abs((i % W) - own[1]);
+              if (d < nearestDist) {
+                nearestDist = d;
+                nearestCrate = i;
+              }
+            }
+          }
+          if (nearestCrate !== -1) {
+            targetCell = nearestCrate;
+            targetRow = (targetCell / W) | 0;
+            targetCol = targetCell % W;
+          } else if (oppIdx !== -1 && reachableMask[oppIdx]) {
+            targetCell = oppIdx;
+            targetRow = oppCell[0];
+            targetCol = oppCell[1];
+          }
+        } else if (this.targetIntent === 'breach_obstacle') {
+          let nearestBrick = -1, nearestDist = Infinity;
+          for (let i = 0; i < N; i++) {
+            if (sim.brick[i] === 1 && reachableMask[i]) {
+              const d = Math.abs(((i / W) | 0) - own[0]) + Math.abs((i % W) - own[1]);
+              if (d < nearestDist) {
+                nearestDist = d;
+                nearestBrick = i;
+              }
+            }
+          }
+          if (nearestBrick !== -1) {
+            targetCell = nearestBrick;
+            targetRow = (targetCell / W) | 0;
+            targetCol = targetCell % W;
+          } else if (oppIdx !== -1 && reachableMask[oppIdx]) {
+            targetCell = oppIdx;
+            targetRow = oppCell[0];
+            targetCol = oppCell[1];
+          }
+        } else {
+          if (oppIdx !== -1 && reachableMask[oppIdx]) {
+            targetCell = oppIdx;
+            targetRow = oppCell[0];
+            targetCol = oppCell[1];
+          }
+        }
+      }
+
       // 3. A* 寻路前往目标（ignoreDanger: true，火是可以踩的，完全由大模型基于危险观测做决策！）
       let searchRes = this.helperAi.search(sim, danger, ownIdx, targetCell, spd, nowMs, {
         allowBreakBrick: true,
@@ -542,6 +598,23 @@
           nextStepIsBrick = true; // 路径前方受阻于砖块，需放泡破障
         } else {
           chosenMove = this.helperAi._cellToMove(ownIdx, nextCell, W);
+        }
+      }
+
+      // 若前方受阻于砖块或者当前格有正在倒计时的炸弹，但此时 chosenMove 停滞在 MOVE_IDLE：
+      // 必须立刻从当前格向周边合法开放格（非墙非砖无雷）机动撤退，避免原地等死！
+      if ((nextStepIsBrick || sim.fuse[ownIdx] > 0) && chosenMove === MOVE_IDLE) {
+        for (let d = 0; d < 4; d++) {
+          if (mm[pid][d] === 1) {
+            const nr = own[0] + DIRS[d][0], nc = own[1] + DIRS[d][1];
+            if (nr >= 0 && nr < H && nc >= 0 && nc < W) {
+              const ni = nr * W + nc;
+              if (!sim.wall[ni] && !sim.brick[ni] && sim.fuse[ni] === 0) {
+                chosenMove = d;
+                break;
+              }
+            }
+          }
         }
       }
 

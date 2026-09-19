@@ -97,26 +97,33 @@ class GameProxyHandler(SimpleHTTPRequestHandler):
                         res_json = json.loads(resp_data.decode("utf-8"))
                         st = req_json.get("state", {})
                         answers = res_json.get("answers", {})
-                        
-                        prio = answers.get("tactical_priority", {}).get("choice", "N/A")
-                        target = answers.get("target_selection", {}).get("choice", "N/A")
+
+                        # 适配各种 Jev 版本的问卷输出
+                        intent = answers.get("strategic_intent", {}).get("choice") or answers.get("tactical_priority", {}).get("choice") or "N/A"
+                        target_row = answers.get("target_row", {}).get("choice")
+                        target_col = answers.get("target_col", {}).get("choice")
+                        move_dir = answers.get("move_direction", {}).get("choice")
+                        target_sel = answers.get("target_selection", {}).get("choice")
+                        bomb_act = answers.get("bomb_action", {}).get("choice") or answers.get("bomb_decision", {}).get("choice")
                         bomb_noul = answers.get("place_bomb_now", {}).get("noul", None)
-                        
-                        log_entry = {
-                            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "tick": st.get("step", 0),
-                            "priority": prio,
-                            "target": target,
-                            "place_bomb": bomb_noul,
-                            "player_pos": st.get("player", {}).get("pos"),
-                            "opp_pos": st.get("opponent", {}).get("pos"),
-                            "opp_dist": st.get("opponent", {}).get("distance"),
-                            "in_line_of_fire": st.get("tactical_context", {}).get("in_line_of_fire", False),
-                            "latency_ms": latency_ms
-                        }
-                        recent_logs.append(log_entry)
-                        
-                        log_line = f"[{log_entry['time']}] [Tick {log_entry['tick']}] 优先级: {prio} | 目标: {target} | 放泡置信: {bomb_noul} | 自身: {log_entry['player_pos']} | 对手: {log_entry['opp_pos']} (距 {log_entry['opp_dist']}) | 直瞄火线: {log_entry['in_line_of_fire']} | 耗时: {latency_ms}ms\n"
+
+                        summary_parts = [f"意图/战术: {intent}"]
+                        if target_row or target_col:
+                            summary_parts.append(f"目标: ({target_row},{target_col})")
+                        elif target_sel:
+                            summary_parts.append(f"目标: {target_sel}")
+                        elif move_dir:
+                            summary_parts.append(f"移动方向: {move_dir}")
+
+                        if bomb_act:
+                            summary_parts.append(f"放炮: {bomb_act}")
+                        elif bomb_noul is not None:
+                            summary_parts.append(f"放炮置信: {bomb_noul}")
+
+                        p_pos = st.get("player", {}).get("pos") or st.get("key_coordinates", {}).get("player") or st.get("player_stats", {}).get("position")
+                        o_pos = st.get("opponent", {}).get("pos") or st.get("key_coordinates", {}).get("enemy")
+
+                        log_line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [Tick {st.get('step', 0)}] {' | '.join(summary_parts)} | 自身: {p_pos} | 对手: {o_pos} | 耗时: {latency_ms}ms\n"
                         with open(LOG_FILE, "a", encoding="utf-8") as lf:
                             lf.write(log_line)
                         print(log_line.strip())
