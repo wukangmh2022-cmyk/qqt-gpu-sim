@@ -66,6 +66,54 @@
       this.currentSearchPath = [];
     }
 
+    computeConnectedComponent(sim, startCell) {
+      const W = sim.W || 15, H = sim.H || 13, N = W * H;
+      const reachable = new Uint8Array(N);
+      if (!Number.isFinite(startCell) || startCell < 0 || startCell >= N || sim.wall[startCell]) return reachable;
+      reachable[startCell] = 1;
+      const q = [startCell];
+      let head = 0;
+      while (head < q.length) {
+        const cur = q[head++];
+        const cr = (cur / W) | 0, cc = cur % W;
+        for (let d = 0; d < 4; d++) {
+          const nr = cr + DIRS[d][0], nc = cc + DIRS[d][1];
+          if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+          const ni = nr * W + nc;
+          if (sim.wall[ni] === 1) continue; // 实心墙阻断连通
+          if (!reachable[ni]) {
+            reachable[ni] = 1;
+            q.push(ni);
+          }
+        }
+      }
+      return reachable;
+    }
+
+    computeWalkableComponent(sim, startCell) {
+      const W = sim.W || 15, H = sim.H || 13, N = W * H;
+      const walkable = new Uint8Array(N);
+      if (!Number.isFinite(startCell) || startCell < 0 || startCell >= N || sim.wall[startCell] || sim.brick[startCell]) return walkable;
+      walkable[startCell] = 1;
+      const q = [startCell];
+      let head = 0;
+      while (head < q.length) {
+        const cur = q[head++];
+        const cr = (cur / W) | 0, cc = cur % W;
+        for (let d = 0; d < 4; d++) {
+          const nr = cr + DIRS[d][0], nc = cc + DIRS[d][1];
+          if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+          const ni = nr * W + nc;
+          if (sim.wall[ni] === 1 || sim.brick[ni] === 1 || (sim.pushable && sim.pushable[ni] === 1)) continue;
+          if (!walkable[ni]) {
+            walkable[ni] = 1;
+            q.push(ni);
+          }
+        }
+      }
+      return walkable;
+    }
+
     // ------------------------------------------------------------ 提取全局空间态势
     extractAutonomousState(sim, pid) {
       const W = sim.W || 15, H = sim.H || 13, N = W * H;
@@ -74,6 +122,10 @@
       const oppCell = sim.centerCell(opp);
       const ownIdx = own[0] * W + own[1];
       const oppIdx = oppCell[0] * W + oppCell[1];
+
+      // 计算连通分量 (Reachable Component) 与即时直达分量 (Walkable Component)
+      const reachableMask = this.computeConnectedComponent(sim, ownIdx);
+      const walkableMask = this.computeWalkableComponent(sim, ownIdx);
 
       // 1. 属性与上限
       const bCap = sim.bombsCap ? sim.bombsCap[pid] : 2;
@@ -85,10 +137,10 @@
 
       const oppDist = Math.abs(own[0] - oppCell[0]) + Math.abs(own[1] - oppCell[1]);
 
-      // 2. 扫描道具（按价值与距离加权排序）
+      // 2. 扫描道具（仅纳入物理连通可达的道具，按价值与距离加权排序）
       const crates = [];
       for (let i = 0; i < N; i++) {
-        if (sim.crate[i] === 1) {
+        if (sim.crate[i] === 1 && reachableMask[i] === 1) {
           const cr = (i / W) | 0, cc = i % W;
           const dist = Math.abs(cr - own[0]) + Math.abs(cc - own[1]);
           const ct = sim.crateType[i];
@@ -103,6 +155,7 @@
             pos: [cr, cc],
             type: typeStr,
             is_super: isSuper,
+            directly_walkable: walkableMask[i] === 1,
             dist: dist
           });
         }
@@ -110,10 +163,10 @@
       // 优先超级道具，其次最近道具
       crates.sort((a, b) => (b.is_super ? 5 : 0) - (a.is_super ? 5 : 0) || (a.dist - b.dist));
 
-      // 3. 扫描战略阻断砖块（离自身近、且处在通往对手主通道上的砖）
+      // 3. 扫描战略阻断砖块（仅纳入物理连通可达的砖）
       const bricks = [];
       for (let i = 0; i < N; i++) {
-        if (sim.brick[i] === 1 && (!sim.pushable || !sim.pushable[i])) {
+        if (sim.brick[i] === 1 && (!sim.pushable || !sim.pushable[i]) && reachableMask[i] === 1) {
           const br = (i / W) | 0, bc = i % W;
           const distToOwn = Math.abs(br - own[0]) + Math.abs(bc - own[1]);
           const distToOpp = Math.abs(br - oppCell[0]) + Math.abs(bc - oppCell[1]);
@@ -484,15 +537,16 @@
         }
       }
 
-      // 4. 执行 Jev 完全自主选择的目标位
+      // 4. 执行 Jev 完全自主选择的目标位并做连通性校验与投影
       let targetCell = -1;
       const dec = this.lastDecision;
+      const reachableMask = this.computeConnectedComponent(sim, ownIdx);
 
       if (dec && dec.targetObj) {
         const tObj = dec.targetObj;
-        if (tObj.type === 'crate' && sim.crate[tObj.cell] === 1) {
+        if (tObj.type === 'crate' && sim.crate[tObj.cell] === 1 && reachableMask[tObj.cell]) {
           targetCell = tObj.cell;
-        } else if (tObj.type === 'brick' && sim.brick[tObj.cell] === 1) {
+        } else if (tObj.type === 'brick' && sim.brick[tObj.cell] === 1 && reachableMask[tObj.cell]) {
           targetCell = tObj.cell;
         } else if (tObj.type === 'enemy' || tObj.type === 'intercept') {
           if (tObj.cell !== undefined && tObj.cell >= 0) {
@@ -510,11 +564,52 @@
         targetCell = oppC[0] * W + oppC[1];
       }
 
+      // 强连通性校验与就近投影：确保目标决不落在非联通格或实心墙上
+      if (targetCell < 0 || targetCell >= N || !reachableMask[targetCell] || sim.wall[targetCell] === 1) {
+        let bestDist = Infinity;
+        let bestC = ownIdx;
+        for (let i = 0; i < N; i++) {
+          if (reachableMask[i] && sim.wall[i] === 0) {
+            const ir = (i / W) | 0, ic = i % W;
+            const tr = (targetCell / W) | 0, tc = targetCell % W;
+            const d = Math.abs(ir - tr) + Math.abs(ic - tc);
+            if (d < bestDist) {
+              bestDist = d;
+              bestC = i;
+            }
+          }
+        }
+        targetCell = bestC;
+      }
+
       // 5. 寻路前往目标
-      const searchRes = this.helperAi.search(sim, danger, ownIdx, targetCell, spd, nowMs, {
+      let searchRes = this.helperAi.search(sim, danger, ownIdx, targetCell, spd, nowMs, {
         allowBreakBrick: true,
         lastMove: this.lastMove
       });
+
+      // 寻路兜底：如果直达目标受阻
+      if (!searchRes || searchRes.path.length <= 1) {
+        const candidates = [];
+        for (let i = 0; i < N; i++) {
+          if (reachableMask[i] && (sim.crate[i] === 1 || sim.brick[i] === 1)) {
+            const dist = Math.abs(((i / W) | 0) - own[0]) + Math.abs((i % W) - own[1]);
+            candidates.push({ cell: i, dist });
+          }
+        }
+        candidates.sort((a, b) => a.dist - b.dist);
+        for (let c = 0; c < Math.min(candidates.length, 5); c++) {
+          const altRes = this.helperAi.search(sim, danger, ownIdx, candidates[c].cell, spd, nowMs, {
+            allowBreakBrick: true,
+            lastMove: this.lastMove
+          });
+          if (altRes && altRes.path.length > 1) {
+            searchRes = altRes;
+            targetCell = candidates[c].cell;
+            break;
+          }
+        }
+      }
 
       // 暴露给前端与录屏的可视化参数
       this.targetCell = targetCell;
@@ -523,22 +618,24 @@
 
       let chosenMove = MOVE_IDLE;
       let finalBomb = 0;
+      let nextStepIsBrick = false;
 
       if (searchRes && searchRes.path.length > 1) {
         const nextCell = searchRes.path[1];
-        if (!sim.brick[nextCell]) {
+        if (sim.brick[nextCell]) {
+          nextStepIsBrick = true; // 路径前方受阻于障碍砖
+        } else {
           chosenMove = this.helperAi._cellToMove(ownIdx, nextCell, W);
         }
       }
 
-      // 6. 核心放权点：放泡完全听从 Jev 的 bomb_action 与 plant_bomb_confidence
-      // 没有任何本地 directLineAttack / shouldDropForBrick 覆盖！
+      // 6. 核心放权点：放泡由 Jev 的 bomb_action 决定，若路径正被砖阻挡亦允许破障
       const canDrop = bm[pid][1] === 1 && sim.fuse[ownIdx] === 0 && sim.liveBombs(pid) < sim.bombsCap[pid];
       if (canDrop && !inImminentDanger && dec) {
         const jevWantsBomb = (dec.bombAction === 'plant_lethal_strike' ||
                               dec.bombAction === 'plant_breach_charge' ||
                               dec.bombAction === 'plant_zoning_barrier') ||
-                             (dec.bombConf >= 0.55);
+                             (dec.bombConf >= 0.55) || nextStepIsBrick;
 
         if (jevWantsBomb) {
           // 本地仅做绝对物理防自杀底线检查（检查是否存在至少一条合法生还路径）

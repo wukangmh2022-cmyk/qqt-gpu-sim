@@ -80,6 +80,54 @@
       };
     }
 
+    computeConnectedComponent(sim, startCell) {
+      const W = sim.W || 15, H = sim.H || 13, N = W * H;
+      const reachable = new Uint8Array(N);
+      if (!Number.isFinite(startCell) || startCell < 0 || startCell >= N || sim.wall[startCell]) return reachable;
+      reachable[startCell] = 1;
+      const q = [startCell];
+      let head = 0;
+      while (head < q.length) {
+        const cur = q[head++];
+        const cr = (cur / W) | 0, cc = cur % W;
+        for (let d = 0; d < 4; d++) {
+          const nr = cr + DIRS[d][0], nc = cc + DIRS[d][1];
+          if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+          const ni = nr * W + nc;
+          if (sim.wall[ni] === 1) continue; // 实心墙阻断连通
+          if (!reachable[ni]) {
+            reachable[ni] = 1;
+            q.push(ni);
+          }
+        }
+      }
+      return reachable;
+    }
+
+    computeWalkableComponent(sim, startCell) {
+      const W = sim.W || 15, H = sim.H || 13, N = W * H;
+      const walkable = new Uint8Array(N);
+      if (!Number.isFinite(startCell) || startCell < 0 || startCell >= N || sim.wall[startCell] || sim.brick[startCell]) return walkable;
+      walkable[startCell] = 1;
+      const q = [startCell];
+      let head = 0;
+      while (head < q.length) {
+        const cur = q[head++];
+        const cr = (cur / W) | 0, cc = cur % W;
+        for (let d = 0; d < 4; d++) {
+          const nr = cr + DIRS[d][0], nc = cc + DIRS[d][1];
+          if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+          const ni = nr * W + nc;
+          if (sim.wall[ni] === 1 || sim.brick[ni] === 1 || (sim.pushable && sim.pushable[ni] === 1)) continue;
+          if (!walkable[ni]) {
+            walkable[ni] = 1;
+            q.push(ni);
+          }
+        }
+      }
+      return walkable;
+    }
+
     // ------------------------------------------------------------ 编码 15×13 二维空间矩阵与完整全局上下文
     extractGridState(sim, pid) {
       const W = sim.W || 15, H = sim.H || 13, N = W * H;
@@ -91,6 +139,18 @@
       const nowMs = (sim.t || 0) * 100;
       const danger = this.helperAi.buildDangerMap(sim, nowMs);
 
+      // 计算玩家当前所在连通分量 (Reachable Connected Component)
+      const reachableMask = this.computeConnectedComponent(sim, ownIdx);
+      const walkableMask = this.computeWalkableComponent(sim, ownIdx);
+      const reachableRows = new Set();
+      const reachableCols = new Set();
+      for (let i = 0; i < N; i++) {
+        if (reachableMask[i] && sim.wall[i] === 0) {
+          reachableRows.add((i / W) | 0);
+          reachableCols.add(i % W);
+        }
+      }
+
       // 1. 构建 15×13 二维字符矩阵
       const gridRows = [];
       const cratesDetail = [];
@@ -101,31 +161,40 @@
         let rowStr = '';
         for (let c = 0; c < W; c++) {
           const idx = r * W + c;
+          const isReachable = reachableMask[idx] === 1;
+
           if (r === own[0] && c === own[1]) {
             rowStr += 'P'; // 我方玩家
           } else if (r === oppCell[0] && c === oppCell[1]) {
-            rowStr += 'E'; // 敌方对手
+            rowStr += isReachable ? 'E' : 'e'; // E=连通可达对手, e=非连通隔断对手
           } else if (sim.fuse[idx] > 0 || danger.hitTest(idx, nowMs, 0)) {
             rowStr += '!'; // 炸弹或烈焰
-            dangerTiles.push([r, c]);
+            if (isReachable) dangerTiles.push([r, c]);
           } else if (sim.wall[idx] === 1) {
             rowStr += '#'; // 不可炸实心墙
           } else if (sim.brick[idx] === 1) {
-            rowStr += 'B'; // 可炸砖块
-            bricksList.push([r, c]);
+            rowStr += isReachable ? 'B' : '?'; // 仅连通砖标为B，非连通孤立格标为?
+            if (isReachable) bricksList.push([r, c]);
           } else if (sim.pushable && sim.pushable[idx] === 1) {
-            rowStr += 'X'; // 可推箱
+            rowStr += isReachable ? 'X' : '?';
           } else if (sim.crate[idx] === 1) {
-            rowStr += 'C'; // 道具宝箱
-            const ct = sim.crateType[idx];
-            const isSuper = sim.superCrate && sim.superCrate[idx] === 1;
-            let typeStr = 'bomb';
-            if (ct === 1) typeStr = 'blast';
-            else if (ct === 2) typeStr = 'speed';
-            if (isSuper) typeStr = 'super_' + typeStr;
-            cratesDetail.push({ pos: [r, c], type: typeStr, dist: Math.abs(r - own[0]) + Math.abs(c - own[1]) });
+            rowStr += isReachable ? 'C' : '?';
+            if (isReachable) {
+              const ct = sim.crateType[idx];
+              const isSuper = sim.superCrate && sim.superCrate[idx] === 1;
+              let typeStr = 'bomb';
+              if (ct === 1) typeStr = 'blast';
+              else if (ct === 2) typeStr = 'speed';
+              if (isSuper) typeStr = 'super_' + typeStr;
+              cratesDetail.push({
+                pos: [r, c],
+                type: typeStr,
+                directly_walkable: walkableMask[idx] === 1,
+                dist: Math.abs(r - own[0]) + Math.abs(c - own[1])
+              });
+            }
           } else {
-            rowStr += '.'; // 畅通道路
+            rowStr += isReachable ? '.' : '?'; // 畅通道路 vs 孤岛盲区
           }
         }
         gridRows.push(rowStr);
@@ -183,7 +252,8 @@
           "X": "pushable_box",
           "#": "indestructible_wall",
           "!": "bomb_or_lethal_flame",
-          ".": "open_walkable_path"
+          ".": "open_walkable_path",
+          "?": "isolated_unreachable_tile"
         },
         map_grid_15x13: gridRows,
         immediate_surroundings: surroundings,
@@ -191,6 +261,8 @@
           next_step_blocked_by_brick: nextStepIsBrick,
           adjacent_brick_direction: adjacentBrickDir
         },
+        reachable_rows: Array.from(reachableRows).sort((a, b) => a - b),
+        reachable_cols: Array.from(reachableCols).sort((a, b) => a - b),
         key_coordinates: {
           player: [own[0], own[1]],
           enemy: [oppCell[0], oppCell[1]],
@@ -227,16 +299,42 @@
       try {
         const state = this.extractGridState(sim, pid);
 
-        // 构造 13 个行选项 (r0 .. r12)
+        // 构造 13 个行选项 (r0 .. r12)，明确标注连通性与内容
         const rowCriteria = {};
         for (let r = 0; r < 13; r++) {
-          rowCriteria[`r${r}`] = `Row ${r} (${r === 0 ? 'top boundary' : (r === 12 ? 'bottom boundary' : `interior row ${r}`)})`;
+          const isReachable = state.reachable_rows.includes(r);
+          if (!isReachable) {
+            rowCriteria[`r${r}`] = `Row ${r} [UNREACHABLE / CUT OFF BY WALLS - DO NOT SELECT]`;
+          } else {
+            const cratesInRow = state.key_coordinates.crates.filter(c => c.pos[0] === r).map(c => `${c.type} at (${c.pos[0]},${c.pos[1]})`);
+            const bricksInRow = state.key_coordinates.nearby_bricks.filter(b => b[0] === r).map(b => `brick at (${b[0]},${b[1]})`);
+            const items = [...cratesInRow, ...bricksInRow];
+            const isPlayerRow = state.key_coordinates.player[0] === r;
+            const isEnemyRow = state.key_coordinates.enemy[0] === r;
+            let note = '';
+            if (isPlayerRow) note += 'player P here; ';
+            if (isEnemyRow) note += 'enemy E here; ';
+            if (items.length) note += items.join(', ');
+            rowCriteria[`r${r}`] = `Row ${r} [REACHABLE${note ? ': ' + note : ''}]`;
+          }
         }
 
-        // 构造 15 个列选项 (c0 .. c14)
+        // 构造 15 个列选项 (c0 .. c14)，明确标注连通性与内容
         const colCriteria = {};
         for (let c = 0; c < 15; c++) {
-          colCriteria[`c${c}`] = `Col ${c} (${c === 0 ? 'left boundary' : (c === 14 ? 'right boundary' : `interior col ${c}`)})`;
+          const isReachable = state.reachable_cols.includes(c);
+          if (!isReachable) {
+            colCriteria[`c${c}`] = `Col ${c} [UNREACHABLE / CUT OFF BY WALLS - DO NOT SELECT]`;
+          } else {
+            const cratesInCol = state.key_coordinates.crates.filter(cObj => cObj.pos[1] === c).map(cObj => `${cObj.type} at (${cObj.pos[0]},${cObj.pos[1]})`);
+            const isPlayerCol = state.key_coordinates.player[1] === c;
+            const isEnemyCol = state.key_coordinates.enemy[1] === c;
+            let note = '';
+            if (isPlayerCol) note += 'player P here; ';
+            if (isEnemyCol) note += 'enemy E here; ';
+            if (cratesInCol.length) note += cratesInCol.join(', ');
+            colCriteria[`c${c}`] = `Col ${c} [REACHABLE${note ? ': ' + note : ''}]`;
+          }
         }
 
         const questions = {
@@ -252,12 +350,12 @@
           },
           target_row: {
             type: 'choice',
-            instructions: 'Select the exact target destination row index (0 to 12) for the player to navigate towards on the 15x13 map grid.',
+            instructions: 'Select the target destination row index (0 to 12) for the player on the 15x13 map grid. CRITICAL: ONLY select a row marked [REACHABLE]. NEVER select an [UNREACHABLE] row.',
             criteria: rowCriteria
           },
           target_col: {
             type: 'choice',
-            instructions: 'Select the exact target destination column index (0 to 14) for the player to navigate towards on the 15x13 map grid.',
+            instructions: 'Select the target destination column index (0 to 14) for the player on the 15x13 map grid. CRITICAL: ONLY select a column marked [REACHABLE]. NEVER select an [UNREACHABLE] column.',
             criteria: colCriteria
           },
           bomb_decision: {
@@ -417,25 +515,23 @@
         }
       }
 
-      // 4. 解析 Jev 直出的目标坐标 (Row, Col)
+      // 4. 解析 Jev 直出的目标坐标 (Row, Col) 并执行连通性校验与就近投影
+      const reachableMask = this.computeConnectedComponent(sim, ownIdx);
       let targetRow = this.targetRow >= 0 ? this.targetRow : own[0];
       let targetCol = this.targetCol >= 0 ? this.targetCol : own[1];
       let targetCell = targetRow * W + targetCol;
 
-      // 坐标松弛：如果 Jev 选中的是一个不可炸的实心外墙或柱子，自动松弛到周围最近的连通地格
-      if (sim.wall[targetCell] === 1) {
-        let bestDist = 999;
-        let bestC = targetCell;
-        for (let d = 0; d < 4; d++) {
-          const nr = targetRow + DIRS[d][0], nc = targetCol + DIRS[d][1];
-          if (nr >= 0 && nr < H && nc >= 0 && nc < W) {
-            const ni = nr * W + nc;
-            if (sim.wall[ni] === 0) {
-              const dToOwn = Math.abs(nr - own[0]) + Math.abs(nc - own[1]);
-              if (dToOwn < bestDist) {
-                bestDist = dToOwn;
-                bestC = ni;
-              }
+      // 强校验：如果选中的目标不在连通分量中（孤岛/非联通格）或者自身为不可炸实心墙
+      if (targetCell < 0 || targetCell >= N || !reachableMask[targetCell] || sim.wall[targetCell] === 1) {
+        let bestDist = Infinity;
+        let bestC = ownIdx;
+        for (let i = 0; i < N; i++) {
+          if (reachableMask[i] && sim.wall[i] === 0) {
+            const ir = (i / W) | 0, ic = i % W;
+            const d = Math.abs(ir - targetRow) + Math.abs(ic - targetCol);
+            if (d < bestDist) {
+              bestDist = d;
+              bestC = i;
             }
           }
         }
@@ -444,11 +540,37 @@
         targetCol = targetCell % W;
       }
 
-      // 5. A* 寻路前往目标
-      const searchRes = this.helperAi.search(sim, danger, ownIdx, targetCell, spd, nowMs, {
+      // 5. A* 寻路前往目标（带兜底保护）
+      let searchRes = this.helperAi.search(sim, danger, ownIdx, targetCell, spd, nowMs, {
         allowBreakBrick: true,
         lastMove: this.lastMove
       });
+
+      // 寻路兜底：如果直达目标路径受阻（例如被临时炸弹或烈焰切断）
+      if (!searchRes || searchRes.path.length <= 1) {
+        // 尝试寻找连通分量内的最近道具或最近障碍砖
+        const candidates = [];
+        for (let i = 0; i < N; i++) {
+          if (reachableMask[i] && (sim.crate[i] === 1 || sim.brick[i] === 1)) {
+            const dist = Math.abs(((i / W) | 0) - own[0]) + Math.abs((i % W) - own[1]);
+            candidates.push({ cell: i, dist });
+          }
+        }
+        candidates.sort((a, b) => a.dist - b.dist);
+        for (let c = 0; c < Math.min(candidates.length, 5); c++) {
+          const altRes = this.helperAi.search(sim, danger, ownIdx, candidates[c].cell, spd, nowMs, {
+            allowBreakBrick: true,
+            lastMove: this.lastMove
+          });
+          if (altRes && altRes.path.length > 1) {
+            searchRes = altRes;
+            targetCell = candidates[c].cell;
+            targetRow = (targetCell / W) | 0;
+            targetCol = targetCell % W;
+            break;
+          }
+        }
+      }
 
       this.targetPos = [targetRow, targetCol];
       this.targetCell = targetCell;
@@ -456,18 +578,23 @@
 
       let chosenMove = MOVE_IDLE;
       let finalBomb = 0;
+      let nextStepIsBrick = false;
 
       if (searchRes && searchRes.path.length > 1) {
         const nextCell = searchRes.path[1];
-        if (!sim.brick[nextCell]) {
+        if (sim.brick[nextCell]) {
+          nextStepIsBrick = true; // 路径前方受阻于砖块，需放泡破障
+        } else {
           chosenMove = this.helperAi._cellToMove(ownIdx, nextCell, W);
         }
       }
 
-      // 6. 放泡执行：完全由 Jev 的 bomb_decision 决定
+      // 6. 放泡执行：Jev 决策放泡，或路径前方正被砖块阻挡需就地破障
       const canDrop = bm[pid][1] === 1 && sim.fuse[ownIdx] === 0 && sim.liveBombs(pid) < sim.bombsCap[pid];
-      if (canDrop && !inImminentDanger && this.lastDecision) {
-        if (this.lastDecision.bombChoice === 'plant_bomb_now') {
+      if (canDrop && !inImminentDanger) {
+        const shouldDropForBrick = nextStepIsBrick;
+        const shouldDropForJev = this.lastDecision && this.lastDecision.bombChoice === 'plant_bomb_now';
+        if (shouldDropForBrick || shouldDropForJev) {
           // 物理防自杀底线检查
           const safeToDrop = this.helperAi.canSafelyPlaceBomb(sim, ownIdx, sim.blastCap[pid], spd, nowMs);
           if (safeToDrop) {
