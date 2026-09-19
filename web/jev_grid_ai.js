@@ -321,6 +321,28 @@
         if (sim.brick[nextCell]) nextStepIsBrick = true;
       }
 
+      // 检查对手是否在直接水柱火线上（无障碍隔挡）
+      let opponentInBlastLine = false;
+      if (oppIdx !== -1 && sim.alive && sim.alive[opp]) {
+        const dr = Math.abs(own[0] - oppCell[0]), dc = Math.abs(own[1] - oppCell[1]);
+        const zCap = sim.blastCap ? sim.blastCap[pid] : 2;
+        if (dr === 0 && dc <= zCap && dc > 0) {
+          let blocked = false;
+          const minC = Math.min(own[1], oppCell[1]), maxC = Math.max(own[1], oppCell[1]);
+          for (let c = minC + 1; c < maxC; c++) {
+            if (sim.wall[own[0] * W + c] || sim.brick[own[0] * W + c]) { blocked = true; break; }
+          }
+          if (!blocked) opponentInBlastLine = true;
+        } else if (dc === 0 && dr <= zCap && dr > 0) {
+          let blocked = false;
+          const minR = Math.min(own[0], oppCell[0]), maxR = Math.max(own[0], oppCell[0]);
+          for (let r = minR + 1; r < maxR; r++) {
+            if (sim.wall[r * W + own[1]] || sim.brick[r * W + own[1]]) { blocked = true; break; }
+          }
+          if (!blocked) opponentInBlastLine = true;
+        }
+      }
+
       // 3. 构造时序历史动作上下文（包含时间间隔）
       const historyContext = this.temporalHistory.slice(-5).map(h => ({
         tick: h.tick,
@@ -334,6 +356,11 @@
       return {
         step: sim.t || 0,
         map_dimensions: { width: 15, height: 13 },
+        combat_tactics: {
+          opponent_in_direct_blast_line: opponentInBlastLine,
+          opponent_adjacent: Math.abs(own[0] - oppCell[0]) + Math.abs(own[1] - oppCell[1]) <= 1,
+          can_place_bomb_now: sim.liveBombs(pid) < (sim.bombsCap ? sim.bombsCap[pid] : 2) && sim.fuse[ownIdx] <= 0
+        },
         map_legend: {
           "P": `player_position (${own[0]}, ${own[1]})`,
           "E": `enemy_position (${oppCell[0]}, ${oppCell[1]})`,
@@ -358,6 +385,19 @@
         col_threats: minColCountdown,
         row_danger_counts: rowDangerCounts,
         col_danger_counts: colDangerCounts,
+        match_rules: {
+          damage_rule: "Touching any flame (0) or exploding bomb blast (1-2) deducts 1 HP.",
+          victory_condition: "Reducing enemy HP to 0 achieves immediate VICTORY.",
+          defeat_condition: "When player HP reaches 0, player is ELIMINATED (instant DEFEAT / GAME OVER).",
+          current_player_hp: sim.hp ? sim.hp[pid] : 5,
+          current_enemy_hp: sim.hp ? sim.hp[opp] : 5,
+          survival_alert: (sim.hp && sim.hp[pid] <= 1)
+            ? "🚨 CRITICAL SURVIVAL ALERT: Your HP is 1! Any damage immediately terminates the match with DEFEAT. You MUST avoid all flames (0) and blast lines (1-3)!"
+            : `Healthy: Current HP is ${sim.hp ? sim.hp[pid] : 5}.`,
+          kill_opportunity: (sim.hp && sim.hp[opp] <= 1)
+            ? "🎯 LETHAL OPPORTUNITY: Enemy HP is 1! Hitting enemy with a single bomb blast secures immediate VICTORY!"
+            : `Enemy HP is ${sim.hp ? sim.hp[opp] : 5}.`
+        },
         continuous_positions: {
           player_desc: `Player P exact continuous position is (${ownRawR.toFixed(2)}, ${ownRawC.toFixed(2)}), in grid [${own[0]}, ${own[1]}] with in-tile float offset (+${ownDiffR.toFixed(2)} row, +${ownDiffC.toFixed(2)} col).`,
           enemy_desc: `Enemy E exact continuous position is (${oppRawR.toFixed(2)}, ${oppRawC.toFixed(2)}), in grid [${oppCell[0]}, ${oppCell[1]}] with in-tile float offset (+${oppDiffR.toFixed(2)} row, +${oppDiffC.toFixed(2)} col).`,
@@ -479,33 +519,39 @@
           }
         }
 
+        const curHp = state.player_stats.hp;
+        const oppHp = state.enemy_stats.hp;
+        const hpRulesSummary = `WIN/LOSS RULES: Touching any flame/blast loses 1 HP; HP=0 is instant GAME OVER (Defeat). Reducing enemy HP to 0 is immediate VICTORY. Your HP: ${curHp}, Enemy HP: ${oppHp}.${curHp <= 1 ? ' [WARNING: ONE-HIT DEATH MODE - ANY DAMAGE IS FATAL!]' : ''}`;
+
         const questions = {
           strategic_intent: {
             type: 'choice',
-            instructions: 'Based on map_grid_15x13 (where 0-9 represent danger countdown: 0=burning flame now, 1-3=critical imminent blast <=900ms, 4-6=medium countdown, 7-9=delayed safe countdown, .=safe path), continuous_positions (sub-tile floating positions and in-tile offsets), player/enemy stats, and recent_temporal_history, what is the primary strategic objective?',
+            instructions: `${hpRulesSummary} Based on map_grid_15x13 (where 0-9 represent danger countdown: 0=burning flame now, 1-3=critical imminent blast <=900ms, 4-6=medium countdown, 7-9=delayed safe countdown, .=safe path), match_rules, continuous_positions, and history, what is the primary strategic objective?`,
             criteria: {
               hunt_opponent: `Aggressively advance towards opponent E (at row ${enemyR}, col ${enemyC}) along SAFE corridors (. or countdown >= 5). AVOID corridors with imminent countdown 0-3!`,
               gather_powerup: 'Navigate towards a safe crate C on the map to collect it for attribute upgrades.',
               breach_obstacle: 'Navigate towards a blocking brick B to place a bomb and open corridors.',
-              evade_danger: 'Navigate away from danger corridors (countdown 0-3) to a secure shelter tile (.).'
+              evade_danger: curHp <= 1
+                ? '🚨 URGENT EVASION: Navigate away from danger corridors (countdown 0-3) to a secure shelter tile (.). HP IS 1 (ONE-HIT DEATH), SURVIVAL IS ABSOLUTE TOP PRIORITY!'
+                : 'Navigate away from danger corridors (countdown 0-3) to a secure shelter tile (.).'
             }
           },
           target_row: {
             type: 'choice',
-            instructions: `Select target destination row index (0 to 12). CRITICAL: Prefer rows tagged [SAFE] or paths with '.' or countdown >= 5. DO NOT route into rows with imminent danger (countdown 0-3) unless intentionally evading.`,
+            instructions: `Select target destination row index (0 to 12). CRITICAL: Your HP is ${curHp}. Prefer rows tagged [SAFE] or paths with '.' or countdown >= 5. DO NOT route into rows with imminent danger (countdown 0-3) unless intentionally evading.`,
             criteria: rowCriteria
           },
           target_col: {
             type: 'choice',
-            instructions: `Select target destination column index (0 to 14). CRITICAL: Prefer columns tagged [SAFE] or paths with '.' or countdown >= 5. DO NOT route into columns with imminent danger (countdown 0-3) unless intentionally evading.`,
+            instructions: `Select target destination column index (0 to 14). CRITICAL: Your HP is ${curHp}. Prefer columns tagged [SAFE] or paths with '.' or countdown >= 5. DO NOT route into columns with imminent danger (countdown 0-3) unless intentionally evading.`,
             criteria: colCriteria
           },
           bomb_decision: {
             type: 'choice',
-            instructions: 'Should player place a bomb at current location right now?',
+            instructions: 'Should player place a bomb at current location right now? (SAFETY RULE: Bombs are solid obstacles. NEVER place a bomb if you are in a tight enclosed corner or dead end without an exit corridor, as it will trap you inside to death!).',
             criteria: {
-              plant_bomb_now: 'Place bomb right now (path_status.next_step_blocked_by_brick is true, or opponent is within blast line / adjacent).',
-              hold_bomb: 'Do not place bomb; path is open, no blocking obstacle directly ahead on path, and player is actively cruising towards target.'
+              plant_bomb_now: 'Place bomb right now (only if you have an open escape route to step back into, AND an opponent is nearby or a blocking brick is directly ahead).',
+              hold_bomb: 'Do not place bomb; keep corridor open, or player is actively moving towards target without dropping a bomb.'
             }
           }
         };
@@ -794,12 +840,11 @@
       }
       const adjacentToOpp = (oppDist <= 1) || (ownIdx === targetCell && targetCell === oppIdx);
 
+      // 4. 放泡执行：完全交由大模型决策 bomb_decision，底层严禁越权放泡
       const canDrop = bm[pid][1] === 1 && sim.fuse[ownIdx] === 0 && sim.liveBombs(pid) < sim.bombsCap[pid];
       if (canDrop) {
-        const shouldDropForBrick = nextStepIsBrick;
-        const shouldDropForKill = (adjacentToOpp || directLineAttack) && (this.targetIntent === 'hunt_opponent' || sim.initialHp === 1);
         const shouldDropForJev = this.lastDecision && this.lastDecision.bombChoice === 'plant_bomb_now';
-        if (shouldDropForBrick || shouldDropForKill || shouldDropForJev) {
+        if (shouldDropForJev) {
           finalBomb = 1;
           this.stats.bombsPlaced++;
           this.lastPlacedBombCell = ownIdx;
