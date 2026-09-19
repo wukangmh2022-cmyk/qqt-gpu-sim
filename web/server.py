@@ -86,7 +86,7 @@ class GameProxyHandler(SimpleHTTPRequestHandler):
                     },
                     method="POST"
                 )
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                with urllib.request.urlopen(req, timeout=30) as resp:
                     resp_data = resp.read()
                     status_code = resp.status
                     latency_ms = int((time.time() - t0) * 1000)
@@ -130,12 +130,14 @@ class GameProxyHandler(SimpleHTTPRequestHandler):
                     self.wfile.write(resp_data)
             except urllib.error.HTTPError as e:
                 err_data = e.read()
+                print(f"[server] ❌ TypeSafe HTTPError {e.code}: {err_data.decode('utf-8', errors='ignore')}")
                 self.send_response(e.code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(err_data)
             except Exception as e:
+                print(f"[server] ❌ 代理异常: {type(e).__name__}: {e}")
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
