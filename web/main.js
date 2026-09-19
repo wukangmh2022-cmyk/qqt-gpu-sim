@@ -1420,6 +1420,9 @@
     if (timeAStarHunt) timeAStarHunt.reset();
     if (timeAStarRoam) timeAStarRoam.reset();
     if (jevAi) jevAi.reset();
+    if (jevGridAi) jevGridAi.reset();
+    if (jevAutoAi) jevAutoAi.reset();
+    if (jevPureAi) jevPureAi.reset();
     sim = new Sim(gameSeed);
     sim._manualBird = true;                    // 前端接管飞鸟与空投抛物线动画
     birdDropFx = [];

@@ -449,10 +449,11 @@
       const danger = this.helperAi.buildDangerMap(sim, nowMs);
       const { mm, bm } = sim.legalMask();
 
-      // 1. 定期或路径被砖块阻断时发起研判
+      // 1. 定期、到达目标格、或路径被砖块阻断时发起研判
       const blockedByBrick = (this.currentSearchPath && this.currentSearchPath.length > 1 && sim.brick[this.currentSearchPath[1]]);
+      const arrivedAtTarget = (this.targetCell >= 0 && this.targetCell === ownIdx);
 
-      if (!this.isInferring && (curTick - this.lastInferTick >= this.inferIntervalTicks || (blockedByBrick && curTick - this.lastInferTick >= 3))) {
+      if (!this.isInferring && (curTick - this.lastInferTick >= this.inferIntervalTicks || (blockedByBrick && curTick - this.lastInferTick >= 3) || (arrivedAtTarget && curTick - this.lastInferTick >= 4))) {
         this.lastInferTick = curTick;
         this.callJevAsync(sim, pid);
       }
@@ -541,6 +542,11 @@
             targetCol = oppCell[1];
           }
         }
+
+        // 核心持久化：必须将推进的新目标同步持久保存至 this.targetRow 和 this.targetCol！
+        // 绝对禁止留在旧格，否则角色迈出一步后下一 tick 就会把旧格误当成目的地往回走，导致远处/当前格高频切换、人体抽搐抖动！
+        this.targetRow = targetRow;
+        this.targetCol = targetCol;
       }
 
       // 3. A* 寻路前往目标（ignoreDanger: true，火是可以踩的，完全由大模型基于危险观测做决策！）
@@ -571,6 +577,8 @@
             targetCell = candidates[c].cell;
             targetRow = (targetCell / W) | 0;
             targetCol = targetCell % W;
+            this.targetRow = targetRow;
+            this.targetCol = targetCol;
             break;
           }
         }
@@ -584,6 +592,8 @@
         }
       }
 
+      this.targetRow = targetRow;
+      this.targetCol = targetCol;
       this.targetPos = [targetRow, targetCol];
       this.targetCell = targetCell;
       this.currentSearchPath = searchRes ? searchRes.path : [];
