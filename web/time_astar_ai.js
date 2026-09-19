@@ -245,6 +245,7 @@
       const allowBreakBrick = !!options.allowBreakBrick;
       const extraBlocked = options.extraBlocked !== undefined ? options.extraBlocked : -1;
       const lastMove = options.lastMove !== undefined ? options.lastMove : MOVE_IDLE;
+      const ignoreDanger = !!options.ignoreDanger;
 
       const heap = new MinHeap();
       const bestArrival = new Float64Array(N).fill(Infinity);
@@ -294,14 +295,14 @@
           const physicalStep = sim.brick[np] ? stepMs * 5 : stepMs;
           const arrive = curT + physicalStep;
 
-          // 严格物理时间剪枝：到达该格时处于危险起火窗中（前置安全余量 SAFETY_MARGIN_MS）
-          if (danger.hitTest(np, arrive, SAFETY_MARGIN_MS)) {
+          // 严格物理时间剪枝：到达该格时处于危险起火窗中（若 ignoreDanger 则不剪枝，火可以踩！）
+          if (!ignoreDanger && danger && danger.hitTest(np, arrive, SAFETY_MARGIN_MS)) {
             continue;
           }
 
           // 虚拟启发代价：只参与小顶堆排序，绝不污染真实的 arrive
           let heuristicCost = arrive + hMs(np);
-          if (danger.hasFutureDanger(np, nowMs)) {
+          if (!ignoreDanger && danger && danger.hasFutureDanger(np, nowMs)) {
             heuristicCost += 1500; // 偏好绕开有雷的通路，但不锁死物理通行
           }
           if (sim.brick[np]) {
