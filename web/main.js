@@ -1680,6 +1680,15 @@
       if (sim) startGame();
       return;
     }
+    if (sel === JEV_PURE_VAL) {
+      enemySel = JEV_PURE_VAL;
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
+      elCurModel.textContent = 'TypeSafe Jev（纯净直出版 · Doom 范式零规则）';
+      elStatus.innerHTML = '敌人：<b>TypeSafe Jev</b>（纯净直出版 · Doom 范式零规则直接驱动）';
+      if (sim) startGame();
+      return;
+    }
     if (sel === IDLE_VAL) {
       enemySel = IDLE_VAL;
       modelLoaded = true;
