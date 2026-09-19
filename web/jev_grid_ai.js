@@ -243,16 +243,20 @@
           } else if (sim.pushable && sim.pushable[idx] === 1) {
             rowStr += isReachable ? 'X' : '?';
           } else if (sim.crate[idx] === 1) {
-            rowStr += isReachable ? 'C' : '?';
+            const ct = sim.crateType ? sim.crateType[idx] : -1;
+            const isSuper = sim.superCrate && sim.superCrate[idx] === 1;
+            let crateChar = 'c';
+            let typeStr = 'mystery';
+            if (ct === 0) { crateChar = 'b'; typeStr = 'bomb_cap'; }
+            else if (ct === 1) { crateChar = 'f'; typeStr = 'blast_power'; }
+            else if (ct === 2) { crateChar = 's'; typeStr = 'speed_potion'; }
+            if (isSuper) typeStr = 'super_' + typeStr;
+
+            rowStr += isReachable ? crateChar : '?';
             if (isReachable) {
-              const ct = sim.crateType[idx];
-              const isSuper = sim.superCrate && sim.superCrate[idx] === 1;
-              let typeStr = 'bomb';
-              if (ct === 1) typeStr = 'blast';
-              else if (ct === 2) typeStr = 'speed';
-              if (isSuper) typeStr = 'super_' + typeStr;
               cratesDetail.push({
                 pos: [r, c],
+                symbol: crateChar,
                 type: typeStr,
                 directly_walkable: walkableMask[idx] === 1,
                 dist: Math.abs(r - own[0]) + Math.abs(c - own[1]),
@@ -373,7 +377,10 @@
         map_legend: {
           "P": `player_position (${own[0]}, ${own[1]})`,
           "E": `enemy_position (${oppCell[0]}, ${oppCell[1]})`,
-          "C": "powerup_crate (collectible)",
+          "s": "powerup_crate_speed (+0.2 speed potion, HIGHEST PRIORITY when slower than enemy to avoid being outrun/cornered)",
+          "f": "powerup_crate_flame (+1 fire blast range)",
+          "b": "powerup_crate_bomb (+1 max bomb capacity)",
+          "c": "powerup_crate_mystery (random upgrade: speed, flame, or bomb)",
           "B": "destructible_brick",
           "X": "pushable_box",
           "#": "indestructible_wall",
@@ -395,7 +402,8 @@
         row_danger_counts: rowDangerCounts,
         col_danger_counts: colDangerCounts,
         match_rules: {
-          core_gameplay_loop: "CORE GAMEPLAY LOOP: 1) Plant bombs near destructible bricks (B) to blast them open and reveal upgrade crates (C). 2) Collect crates (C) to increase bomb capacity (bombs_cap), blast flame reach (blast_cap), and movement speed. 3) Corner enemy (E) using bombs as solid blocks or corridor traps. 4) Hit enemy with bomb flames or chain reaction explosions to reduce their HP to 0 for VICTORY.",
+          core_gameplay_loop: "CORE GAMEPLAY LOOP: 1) Plant bombs near destructible bricks (B) to blast them open and reveal upgrade crates (s, f, b, c). 2) Collect crates to increase attributes (speed, blast_cap, bombs_cap). 3) Corner enemy (E) using bombs as solid blocks or corridor traps. 4) Hit enemy with bomb flames or chain reaction explosions to reduce their HP to 0 for VICTORY.",
+          powerup_upgrade_rules: "POWERUP UPGRADE RULES (DEVELOPMENT ADVANTAGE): 1) 's' Speed potion: boosts movement speed (+0.2). If enemy speed is higher than yours, collecting 's' is TOP TACTICAL PRIORITY to prevent being chased down or cornered! 2) 'f' Flame blast: increases bomb cross fire reach by 1 tile. 3) 'b' Bomb capacity: allows holding +1 more bomb on the field. 4) 'c' Mystery crate: awards a random upgrade.",
           chain_reaction_rule: "CHAIN REACTION MECHANIC (CRITICAL TACTIC): When any bomb explodes, its cross-line flame INSTANTLY detonates ALL other bombs within its blast reach immediately without waiting for their timer! TACTICAL OFFENSE: Placing bombs in a line or grid triggers a simultaneous multi-bomb chain blast covering long corridors and giving enemies 0 reaction time. DEFENSIVE WARNING: If you plant a bomb in the blast line of an older ticking bomb (countdown 1-3), your new bomb will explode early together with it! Never place a bomb near a ticking bomb unless you have an immediate escape route!",
           damage_rule: "Touching any flame (0) or exploding bomb blast (1-2) deducts 1 HP.",
           flame_linger_rule: "LATENT RUNTIME RULE: When countdown reaches 0, the explosion flame persists and LINGERS for 0.3s~0.5s (250~300ms / 2~3 ticks). A cell marked '0' is in active combustion; touching it during this 0.3s window still causes 1 HP damage! Never step onto '0' until it turns back to safe path '.'.",
@@ -542,13 +550,16 @@
         const oppHp = state.enemy_stats.hp;
         const hpRulesSummary = `WIN/LOSS RULES: Touching any flame/blast loses 1 HP; HP=0 is instant GAME OVER (Defeat). Reducing enemy HP to 0 is immediate VICTORY. Your HP: ${curHp}, Enemy HP: ${oppHp}.${curHp <= 1 ? ' [WARNING: ONE-HIT DEATH MODE - ANY DAMAGE IS FATAL!]' : ''}`;
 
+        const cratesList = state.key_coordinates.crates || [];
         const questions = {
           strategic_intent: {
             type: 'choice',
-            instructions: `${hpRulesSummary} Based on map_grid_15x13 (where 0-9 represent danger countdown: 0=burning flame now, 1-3=critical imminent blast <=900ms, 4-6=medium countdown, 7-9=delayed safe countdown, .=safe path), match_rules, continuous_positions, and history, what is the primary strategic objective?`,
+            instructions: `${hpRulesSummary} Based on map_grid_15x13 (where s=speed, f=flame, b=bomb, c=mystery crates, and 0-9=danger countdowns), match_rules, continuous_positions, and history, what is the primary strategic objective?`,
             criteria: {
               hunt_opponent: `Aggressively advance towards opponent E (at row ${enemyR}, col ${enemyC}) along SAFE corridors (. or countdown >= 5). AVOID corridors with imminent countdown 0-3!`,
-              gather_powerup: 'Navigate towards a safe crate C on the map to collect it for attribute upgrades.',
+              gather_powerup: cratesList.length > 0
+                ? `PRIORITIZE POWERUPS FIRST (发育优先 / 先吃道具): Navigate towards nearest safe powerup (${cratesList.slice(0, 3).map(cr => `${cr.type}('${cr.symbol}') at [${cr.pos[0]},${cr.pos[1]}] dist ${cr.dist}`).join(', ')}). TOP PRIORITY when speed (${state.player_stats.speed}) or bombs (${state.player_stats.bombs_cap}) are behind enemy (${state.enemy_stats.speed} speed, ${state.enemy_stats.bombs_cap} bombs), or to establish early-game attribute dominance before fighting!`
+                : 'Navigate towards a safe powerup crate on the map to collect it for attribute upgrades.',
               breach_obstacle: 'Navigate towards a blocking brick B to place a bomb and open corridors.',
               evade_danger: curHp <= 1
                 ? '🚨 URGENT EVASION: Navigate away from danger corridors (countdown 0-3) to a secure shelter tile (.). HP IS 1 (ONE-HIT DEATH), SURVIVAL IS ABSOLUTE TOP PRIORITY!'
