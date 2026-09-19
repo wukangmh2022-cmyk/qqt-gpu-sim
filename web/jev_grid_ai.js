@@ -140,6 +140,17 @@
       const nowMs = (sim.t || 0) * 100;
       const danger = this.helperAi.buildDangerMap(sim, nowMs);
 
+      // 计算角色在物理引擎中的精确连续浮点坐标与格子内 [0, 1) 的 diff 偏移量
+      const ownRawR = sim.pos ? sim.pos[pid * 2] : own[0] + 0.5;
+      const ownRawC = sim.pos ? sim.pos[pid * 2 + 1] : own[1] + 0.5;
+      const ownDiffR = Number((ownRawR - own[0]).toFixed(3));
+      const ownDiffC = Number((ownRawC - own[1]).toFixed(3));
+
+      const oppRawR = sim.pos ? sim.pos[opp * 2] : oppCell[0] + 0.5;
+      const oppRawC = sim.pos ? sim.pos[opp * 2 + 1] : oppCell[1] + 0.5;
+      const oppDiffR = Number((oppRawR - oppCell[0]).toFixed(3));
+      const oppDiffC = Number((oppRawC - oppCell[1]).toFixed(3));
+
       // 计算玩家当前所在连通分量 (Reachable Connected Component)
       const reachableMask = this.computeConnectedComponent(sim, ownIdx);
       const walkableMask = this.computeWalkableComponent(sim, ownIdx);
@@ -347,9 +358,20 @@
         col_threats: minColCountdown,
         row_danger_counts: rowDangerCounts,
         col_danger_counts: colDangerCounts,
+        continuous_positions: {
+          player_desc: `Player P exact continuous position is (${ownRawR.toFixed(2)}, ${ownRawC.toFixed(2)}), in grid [${own[0]}, ${own[1]}] with in-tile float offset (+${ownDiffR.toFixed(2)} row, +${ownDiffC.toFixed(2)} col).`,
+          enemy_desc: `Enemy E exact continuous position is (${oppRawR.toFixed(2)}, ${oppRawC.toFixed(2)}), in grid [${oppCell[0]}, ${oppCell[1]}] with in-tile float offset (+${oppDiffR.toFixed(2)} row, +${oppDiffC.toFixed(2)} col).`,
+          player_continuous: [Number(ownRawR.toFixed(2)), Number(ownRawC.toFixed(2))],
+          enemy_continuous: [Number(oppRawR.toFixed(2)), Number(oppRawC.toFixed(2))],
+          player_in_tile_diff: [ownDiffR, ownDiffC],
+          enemy_in_tile_diff: [oppDiffR, oppDiffC],
+          continuous_euclidean_distance: Number(Math.hypot(ownRawR - oppRawR, ownRawC - oppRawC).toFixed(2))
+        },
         key_coordinates: {
           player: [own[0], own[1]],
+          player_exact: [Number(ownRawR.toFixed(2)), Number(ownRawC.toFixed(2))],
           enemy: [oppCell[0], oppCell[1]],
+          enemy_exact: [Number(oppRawR.toFixed(2)), Number(oppRawC.toFixed(2))],
           crates: cratesDetail.slice(0, 5),
           nearby_bricks: bricksList.filter(b => Math.abs(b[0] - own[0]) + Math.abs(b[1] - own[1]) <= 6).slice(0, 5),
           active_bombs: activeBombs,
@@ -360,12 +382,17 @@
           bombs_cap: sim.bombsCap ? sim.bombsCap[pid] : 2,
           blast_cap: sim.blastCap ? sim.blastCap[pid] : 2,
           speed: sim.spdG ? Number(sim.spdG[pid].toFixed(2)) : 1.3,
-          can_place_bomb: sim.liveBombs(pid) < sim.bombsCap[pid] && sim.fuse[ownIdx] <= 0
+          can_place_bomb: sim.liveBombs(pid) < sim.bombsCap[pid] && sim.fuse[ownIdx] <= 0,
+          continuous_pos: [Number(ownRawR.toFixed(2)), Number(ownRawC.toFixed(2))],
+          in_tile_diff: [ownDiffR, ownDiffC]
         },
         enemy_stats: {
           hp: sim.hp ? sim.hp[opp] : 5,
           distance: Math.abs(own[0] - oppCell[0]) + Math.abs(own[1] - oppCell[1]),
-          alive: sim.alive ? Boolean(sim.alive[opp]) : true
+          continuous_distance: Number(Math.hypot(ownRawR - oppRawR, ownRawC - oppRawC).toFixed(2)),
+          alive: sim.alive ? Boolean(sim.alive[opp]) : true,
+          continuous_pos: [Number(oppRawR.toFixed(2)), Number(oppRawC.toFixed(2))],
+          in_tile_diff: [oppDiffR, oppDiffC]
         },
         recent_temporal_history: historyContext
       };
@@ -455,7 +482,7 @@
         const questions = {
           strategic_intent: {
             type: 'choice',
-            instructions: 'Based on map_grid_15x13 (where 0-9 represent danger countdown: 0=burning flame now, 1-3=critical imminent blast <=900ms, 4-6=medium countdown, 7-9=delayed safe countdown, .=safe path), player/enemy stats, and recent_temporal_history, what is the primary strategic objective?',
+            instructions: 'Based on map_grid_15x13 (where 0-9 represent danger countdown: 0=burning flame now, 1-3=critical imminent blast <=900ms, 4-6=medium countdown, 7-9=delayed safe countdown, .=safe path), continuous_positions (sub-tile floating positions and in-tile offsets), player/enemy stats, and recent_temporal_history, what is the primary strategic objective?',
             criteria: {
               hunt_opponent: `Aggressively advance towards opponent E (at row ${enemyR}, col ${enemyC}) along SAFE corridors (. or countdown >= 5). AVOID corridors with imminent countdown 0-3!`,
               gather_powerup: 'Navigate towards a safe crate C on the map to collect it for attribute upgrades.',
