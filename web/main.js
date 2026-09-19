@@ -1366,10 +1366,7 @@
     gameSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
     if (timeAStarHunt) timeAStarHunt.reset();
     if (timeAStarRoam) timeAStarRoam.reset();
-    if (jevAi) jevAi.reset();
     if (jevGridAi) jevGridAi.reset();
-    if (jevAutoAi) jevAutoAi.reset();
-    if (jevPureAi) jevPureAi.reset();
     sim = new Sim(gameSeed);
     sim._manualBird = true;                    // 前端接管飞鸟与空投抛物线动画
     birdDropFx = [];
@@ -3194,31 +3191,18 @@
     // 🎯 Jev 顶部大字状态条（录视频时全局清晰展示）
     if (isJevActive && activeJev && activeJev.targetPos && sim && running) {
       const [tr, tc] = activeJev.targetPos;
-      const prioKey = activeJev.targetIntent || activeJev.targetPosture || activeJev.targetPriority;
+      const prioKey = activeJev.targetIntent;
       const prioName = {
         'hunt_opponent': '⚔️ 追猎对手',
         'gather_powerup': '📦 抢夺道具',
         'breach_obstacle': '💣 炸砖开路',
-        'evade_danger': '🛡️ 避险撤离',
-        'offensive_siege': '⚔️ 围剿进攻',
-        'tactical_ambush': '🎯 走廊伏击',
-        'resource_dominance': '💎 资源压制',
-        'kiting_counter': '🛡️ 防守反击',
-        'attack_opponent': '⚔️ 进攻对手',
-        'dodge_danger': '🛡️ 避险撤离',
-        'bomb_brick': '💣 炸砖开路',
-        'collect_crate': '📦 收集道具'
+        'evade_danger': '🛡️ 避险撤离'
       }[prioKey] || prioKey;
 
-      const intentText = isGrid
-        ? (activeJev.bombDecision === 'plant_bomb_now' ? '💣 下子放泡' : '🚶 巡航走位')
-        : (isAuto
-          ? (activeJev.bombAction !== 'hold_fire' ? `💣 下子 (${activeJev.bombAction})` : '🚶 巡航走位')
-          : (activeJev.targetShouldBomb ? '💣 下子放泡' : '🚶 巡航走位'));
-
-      const titleTag = isGrid ? 'Jev坐标全图版' : (isAuto ? 'Jev完全自主版' : 'Jev战术引导版');
-      const bannerColor = isGrid ? '#fbbf24' : (isAuto ? '#c084fc' : '#38bdf8');
-      const bannerBorder = isGrid ? 'rgba(251, 191, 36, 0.85)' : (isAuto ? 'rgba(168, 85, 247, 0.85)' : 'rgba(56, 189, 248, 0.85)');
+      const intentText = activeJev.bombDecision === 'plant_bomb_now' ? '💣 下子放泡' : '🚶 巡航走位';
+      const titleTag = 'TypeSafe Jev';
+      const bannerColor = '#fbbf24';
+      const bannerBorder = 'rgba(251, 191, 36, 0.85)';
 
       const bannerTxt = `🎯 [${titleTag}] 目标位: (行 ${tr}, 列 ${tc}) | 战术: ${prioName} | 意图: ${intentText} | 耗时: ${activeJev.stats.lastLatencyMs}ms`;
       ctx.font = 'bold 12px sans-serif';
@@ -3873,7 +3857,7 @@
     get explosionTrig() { return activeExplosions.length ? activeExplosions[activeExplosions.length - 1].triggered : null; },
     get aiMotorQueues() { return aiMotorQueues; },
     get applyAiMotorDelay() { return applyAiMotorDelay; },
-    get resetAiMotorQueues() { return resetAiMotorQueues; },
-    get jevAi() { return jevAi; },
+    get jevAi() { return jevGridAi; },
+    get jevGridAi() { return jevGridAi; },
   };
 })();
