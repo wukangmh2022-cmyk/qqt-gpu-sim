@@ -59,6 +59,7 @@
         bricksDestroyed: 0,
         lastLatencyMs: 0
       };
+      this.lastPlacedBombCell = -1;
     }
 
     computeConnectedComponent(sim, startCell) {
@@ -410,11 +411,17 @@
         this.callJevAsync(sim, pid);
       }
 
-      // 2. 承诺逃生路径（放泡后单向撤离到安全掩体，绝不折返踏入雷区）
+      // 2. 承诺逃生路径（放泡后单向撤出）
       if (this.helperAi.escapePath && this.helperAi.escapePath.length > 0) {
-        if (ownIdx === this.helperAi.escapeTarget || !danger.hasFutureDanger(ownIdx, nowMs)) {
-          this.helperAi.escapePath = [];
-          this.helperAi.escapeTarget = -1;
+        if (ownIdx === this.helperAi.escapeTarget) {
+          if (this.lastPlacedBombCell >= 0 && sim.fuse[this.lastPlacedBombCell] > 0) {
+            this.lastMove = MOVE_IDLE;
+            return [MOVE_IDLE, 0];
+          } else {
+            this.lastPlacedBombCell = -1;
+            this.helperAi.escapePath = [];
+            this.helperAi.escapeTarget = -1;
+          }
         } else {
           const currIdxInPath = this.helperAi.escapePath.indexOf(ownIdx);
           if (currIdxInPath > 0) {
@@ -517,8 +524,8 @@
         lastMove: this.lastMove
       });
 
-      // 寻路兜底：如果直达目标受阻
-      if (!searchRes || searchRes.path.length <= 1) {
+      // 寻路兜底：仅在寻路真正受阻且未到达目标时触发
+      if (!searchRes && ownIdx !== targetCell) {
         const candidates = [];
         for (let i = 0; i < N; i++) {
           if (reachableMask[i] && (sim.crate[i] === 1 || sim.brick[i] === 1)) {
@@ -540,6 +547,14 @@
         }
       }
 
+      // 确保路径起点严格与当前 ownIdx 对齐（若错位则自动截断）
+      if (searchRes && searchRes.path.length > 0) {
+        const ownPosInPath = searchRes.path.indexOf(ownIdx);
+        if (ownPosInPath > 0) {
+          searchRes.path = searchRes.path.slice(ownPosInPath);
+        }
+      }
+
       // 暴露给外部与前端录屏高亮的目标属性
       this.targetCell = targetCell;
       this.targetPos = targetCell >= 0 ? [(targetCell / W) | 0, targetCell % W] : null;
@@ -551,12 +566,12 @@
 
       let chosenMove = MOVE_IDLE;
       let finalBomb = 0;
-      let nextCellIsBrick = false;
+      let nextStepIsBrick = false;
 
-      if (searchRes && searchRes.path.length > 1) {
+      if (searchRes && searchRes.path.length > 1 && searchRes.path[0] === ownIdx) {
         const nextCell = searchRes.path[1];
         if (sim.brick[nextCell]) {
-          nextCellIsBrick = true; // 下一步是障碍砖，需要放泡破障！
+          nextStepIsBrick = true; // 下一步是障碍砖，需要放泡破障！
         } else {
           chosenMove = this.helperAi._cellToMove(ownIdx, nextCell, W);
         }
@@ -588,29 +603,33 @@
         }
       }
       const oppDist = Math.abs(own[0] - oppCell[0]) + Math.abs(own[1] - oppCell[1]);
-      const nearOpp = oppDist <= (zCap + 1);
 
       // 6. 放泡执行：
       // 条件 A: 路径前方为障碍砖需炸开
       // 条件 B: 对手进入直瞄十字火线 (directLineAttack)，立刻放泡必杀
-      // 条件 C: 贴身压迫对手 (nearOpp) 且战术处于进攻模式
+      // 条件 C: 贴身压迫对手 (oppDist <= 1) 且战术处于进攻模式
       // 条件 D: Jev 决策 shouldBomb
       const canDrop = bm[pid][1] === 1 && sim.fuse[ownIdx] === 0 && sim.liveBombs(pid) < sim.bombsCap[pid];
       if (canDrop && !inImminentDanger) {
-        const shouldDropForBrick = nextCellIsBrick;
+        const shouldDropForBrick = nextStepIsBrick;
         const shouldDropForDirectHit = directLineAttack;
-        const shouldDropForNearOpp = nearOpp && (wantBomb || (dec && dec.priority === 'attack_opponent'));
-        const shouldDropForJev = wantBomb;
+        const shouldDropForNearOpp = (oppDist <= 1) && (wantBomb || (dec && dec.priority === 'attack_opponent'));
+        const shouldDropForJev = wantBomb && (nextStepIsBrick || oppDist <= 1 || directLineAttack);
         if (shouldDropForBrick || shouldDropForDirectHit || shouldDropForNearOpp || shouldDropForJev) {
           const safeToDrop = this.helperAi.canSafelyPlaceBomb(sim, ownIdx, sim.blastCap[pid], spd, nowMs);
           if (safeToDrop) {
             finalBomb = 1;
             this.stats.bombsPlaced++;
             this.lastDropTick = curTick;
+            this.lastPlacedBombCell = ownIdx;
+            // 立即消耗决策，防止持续多 tick 重复盲目落子
+            if (dec) dec.shouldBomb = false;
+            this.targetShouldBomb = false;
             // 锁定逃生路线：放完泡后立即沿着已验证的安全掩体路径撤离
             if (this.helperAi.lastEscapePath && this.helperAi.lastEscapePath.length > 1) {
               this.helperAi.escapePath = this.helperAi.lastEscapePath.slice();
               this.helperAi.escapeTarget = this.helperAi.lastEscapeTarget;
+              chosenMove = this.helperAi._cellToMove(ownIdx, this.helperAi.escapePath[1], W);
             }
           }
         }

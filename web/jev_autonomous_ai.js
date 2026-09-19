@@ -64,6 +64,7 @@
       this.bombAction = 'hold_fire';
       this.bombConfidence = 0.0;
       this.currentSearchPath = [];
+      this.lastPlacedBombCell = -1;
     }
 
     computeConnectedComponent(sim, startCell) {
@@ -484,9 +485,15 @@
 
       // 2. 承诺撤离路径（放泡后单向安全撤出，绝不在火线折返）
       if (this.helperAi.escapePath && this.helperAi.escapePath.length > 0) {
-        if (ownIdx === this.helperAi.escapeTarget || !danger.hasFutureDanger(ownIdx, nowMs)) {
-          this.helperAi.escapePath = [];
-          this.helperAi.escapeTarget = -1;
+        if (ownIdx === this.helperAi.escapeTarget) {
+          if (this.lastPlacedBombCell >= 0 && sim.fuse[this.lastPlacedBombCell] > 0) {
+            this.lastMove = MOVE_IDLE;
+            return [MOVE_IDLE, 0];
+          } else {
+            this.lastPlacedBombCell = -1;
+            this.helperAi.escapePath = [];
+            this.helperAi.escapeTarget = -1;
+          }
         } else {
           const currIdxInPath = this.helperAi.escapePath.indexOf(ownIdx);
           if (currIdxInPath > 0) {
@@ -541,6 +548,10 @@
       let targetCell = -1;
       const dec = this.lastDecision;
       const reachableMask = this.computeConnectedComponent(sim, ownIdx);
+      const opp = 1 - pid;
+      const oppCell = sim.centerCell(opp);
+      const oppIdx = oppCell[0] * W + oppCell[1];
+      const oppDist = Math.abs(own[0] - oppCell[0]) + Math.abs(own[1] - oppCell[1]);
 
       if (dec && dec.targetObj) {
         const tObj = dec.targetObj;
@@ -559,9 +570,7 @@
 
       // 缺省目标：敌方实时坐标
       if (targetCell < 0) {
-        const opp = 1 - pid;
-        const oppC = sim.centerCell(opp);
-        targetCell = oppC[0] * W + oppC[1];
+        targetCell = oppIdx;
       }
 
       // 强连通性校验与就近投影：确保目标决不落在非联通格或实心墙上
@@ -588,8 +597,8 @@
         lastMove: this.lastMove
       });
 
-      // 寻路兜底：如果直达目标受阻
-      if (!searchRes || searchRes.path.length <= 1) {
+      // 寻路兜底：仅在寻路真正受阻且未到达目标时触发
+      if (!searchRes && ownIdx !== targetCell) {
         const candidates = [];
         for (let i = 0; i < N; i++) {
           if (reachableMask[i] && (sim.crate[i] === 1 || sim.brick[i] === 1)) {
@@ -611,6 +620,14 @@
         }
       }
 
+      // 确保路径起点严格与当前 ownIdx 对齐（若错位则自动截断）
+      if (searchRes && searchRes.path.length > 0) {
+        const ownPosInPath = searchRes.path.indexOf(ownIdx);
+        if (ownPosInPath > 0) {
+          searchRes.path = searchRes.path.slice(ownPosInPath);
+        }
+      }
+
       // 暴露给前端与录屏的可视化参数
       this.targetCell = targetCell;
       this.targetPos = targetCell >= 0 ? [(targetCell / W) | 0, targetCell % W] : null;
@@ -620,7 +637,7 @@
       let finalBomb = 0;
       let nextStepIsBrick = false;
 
-      if (searchRes && searchRes.path.length > 1) {
+      if (searchRes && searchRes.path.length > 1 && searchRes.path[0] === ownIdx) {
         const nextCell = searchRes.path[1];
         if (sim.brick[nextCell]) {
           nextStepIsBrick = true; // 路径前方受阻于障碍砖
@@ -629,13 +646,14 @@
         }
       }
 
-      // 6. 核心放权点：放泡由 Jev 的 bomb_action 决定，若路径正被砖阻挡亦允许破障
+      // 6. 核心放权点：放泡由 Jev 的 bomb_action 决定，若路径正被砖阻挡或已贴身对手亦触发破障/绝杀
+      const adjacentToOpp = (oppDist <= 1) || (ownIdx === targetCell && targetCell === oppIdx);
       const canDrop = bm[pid][1] === 1 && sim.fuse[ownIdx] === 0 && sim.liveBombs(pid) < sim.bombsCap[pid];
       if (canDrop && !inImminentDanger && dec) {
         const jevWantsBomb = (dec.bombAction === 'plant_lethal_strike' ||
                               dec.bombAction === 'plant_breach_charge' ||
                               dec.bombAction === 'plant_zoning_barrier') ||
-                             (dec.bombConf >= 0.55) || nextStepIsBrick;
+                             (dec.bombConf >= 0.55) || nextStepIsBrick || (adjacentToOpp && sim.initialHp === 1);
 
         if (jevWantsBomb) {
           // 本地仅做绝对物理防自杀底线检查（检查是否存在至少一条合法生还路径）
@@ -644,10 +662,15 @@
             finalBomb = 1;
             this.stats.bombsPlaced++;
             this.lastDropTick = curTick;
+            this.lastPlacedBombCell = ownIdx;
+            // 立即消耗决策，防止持续多 tick 重复盲目落子
+            if (dec) dec.bombAction = 'hold_fire';
+            this.bombAction = 'hold_fire';
             // 锁定逃生路线
             if (this.helperAi.lastEscapePath && this.helperAi.lastEscapePath.length > 1) {
               this.helperAi.escapePath = this.helperAi.lastEscapePath.slice();
               this.helperAi.escapeTarget = this.helperAi.lastEscapeTarget;
+              chosenMove = this.helperAi._cellToMove(ownIdx, this.helperAi.escapePath[1], W);
             }
           }
         }

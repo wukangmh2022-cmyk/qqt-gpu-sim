@@ -72,6 +72,7 @@
       this.targetIntent = 'hunt_opponent';
       this.bombDecision = 'hold_bomb';
       this.currentSearchPath = [];
+      this.lastPlacedBombCell = -1;
 
       this.stats = {
         totalCalls: 0,
@@ -362,8 +363,8 @@
             type: 'choice',
             instructions: 'Should player place a bomb at current location right now?',
             criteria: {
-              plant_bomb_now: 'Place bomb right now (path_status.next_step_blocked_by_brick is true, a brick is directly adjacent to player, or opponent is within blast line).',
-              hold_bomb: 'Do not place bomb; path is open, no blocking obstacle adjacent, and player is actively cruising towards target.'
+              plant_bomb_now: 'Place bomb right now (path_status.next_step_blocked_by_brick is true, or opponent is within blast line / adjacent).',
+              hold_bomb: 'Do not place bomb; path is open, no blocking obstacle directly ahead on path, and player is actively cruising towards target.'
             }
           }
         };
@@ -460,9 +461,19 @@
 
       // 2. 承诺逃生路径（放泡后单向撤出）
       if (this.helperAi.escapePath && this.helperAi.escapePath.length > 0) {
-        if (ownIdx === this.helperAi.escapeTarget || !danger.hasFutureDanger(ownIdx, nowMs)) {
-          this.helperAi.escapePath = [];
-          this.helperAi.escapeTarget = -1;
+        if (ownIdx === this.helperAi.escapeTarget) {
+          // 已经到达指定安全掩体
+          if (this.lastPlacedBombCell >= 0 && sim.fuse[this.lastPlacedBombCell] > 0) {
+            // 我方放下的炸弹仍在倒计时破障，在安全掩体原地静候引爆，绝不乱动或到处乱放泡
+            this.lastMove = MOVE_IDLE;
+            this.recentMoves.push('idle');
+            return [MOVE_IDLE, 0];
+          } else {
+            // 炸弹已引爆或已无威胁，立即结束逃生状态并重新投入巡航
+            this.lastPlacedBombCell = -1;
+            this.helperAi.escapePath = [];
+            this.helperAi.escapeTarget = -1;
+          }
         } else {
           const currIdxInPath = this.helperAi.escapePath.indexOf(ownIdx);
           if (currIdxInPath > 0) {
@@ -517,9 +528,21 @@
 
       // 4. 解析 Jev 直出的目标坐标 (Row, Col) 并执行连通性校验与就近投影
       const reachableMask = this.computeConnectedComponent(sim, ownIdx);
+      const opp = 1 - pid;
+      const oppCell = sim.centerCell(opp);
+      const oppIdx = oppCell[0] * W + oppCell[1];
+      const oppDist = Math.abs(own[0] - oppCell[0]) + Math.abs(own[1] - oppCell[1]);
+
       let targetRow = this.targetRow >= 0 ? this.targetRow : own[0];
       let targetCol = this.targetCol >= 0 ? this.targetCol : own[1];
       let targetCell = targetRow * W + targetCol;
+
+      // 核心对齐：若战术意图为追猎对手 (hunt_opponent)，且对手处于连通分量中，强制将目标对齐为对手坐标！
+      if (this.targetIntent === 'hunt_opponent' && reachableMask[oppIdx]) {
+        targetRow = oppCell[0];
+        targetCol = oppCell[1];
+        targetCell = oppIdx;
+      }
 
       // 强校验：如果选中的目标不在连通分量中（孤岛/非联通格）或者自身为不可炸实心墙
       if (targetCell < 0 || targetCell >= N || !reachableMask[targetCell] || sim.wall[targetCell] === 1) {
@@ -546,8 +569,8 @@
         lastMove: this.lastMove
       });
 
-      // 寻路兜底：如果直达目标路径受阻（例如被临时炸弹或烈焰切断）
-      if (!searchRes || searchRes.path.length <= 1) {
+      // 寻路兜底：仅在寻路真正受阻且未到达目标时才触发
+      if (!searchRes && ownIdx !== targetCell) {
         // 尝试寻找连通分量内的最近道具或最近障碍砖
         const candidates = [];
         for (let i = 0; i < N; i++) {
@@ -572,6 +595,14 @@
         }
       }
 
+      // 确保路径起点严格与当前 ownIdx 对齐（若错位则自动截断）
+      if (searchRes && searchRes.path.length > 0) {
+        const ownPosInPath = searchRes.path.indexOf(ownIdx);
+        if (ownPosInPath > 0) {
+          searchRes.path = searchRes.path.slice(ownPosInPath);
+        }
+      }
+
       this.targetPos = [targetRow, targetCol];
       this.targetCell = targetCell;
       this.currentSearchPath = searchRes ? searchRes.path : [];
@@ -580,7 +611,7 @@
       let finalBomb = 0;
       let nextStepIsBrick = false;
 
-      if (searchRes && searchRes.path.length > 1) {
+      if (searchRes && searchRes.path.length > 1 && searchRes.path[0] === ownIdx) {
         const nextCell = searchRes.path[1];
         if (sim.brick[nextCell]) {
           nextStepIsBrick = true; // 路径前方受阻于砖块，需放泡破障
@@ -589,20 +620,54 @@
         }
       }
 
-      // 6. 放泡执行：Jev 决策放泡，或路径前方正被砖块阻挡需就地破障
+      // 6. 放泡执行：
+      // 条件 A: 路径前方正被砖块阻挡需就地破障
+      // 条件 B: 逼近对手 (oppDist <= 1) 且处于进攻模式，立刻落子必杀
+      // 条件 C: 对手进入直瞄十字火线
+      // 条件 D: Jev 决策 plant_bomb_now
+      const zCap = sim.blastCap ? sim.blastCap[pid] : 2;
+      let directLineAttack = false;
+      if (oppIdx !== -1 && sim.alive && sim.alive[opp]) {
+        const or = oppCell[0], oc = oppCell[1];
+        const dr = Math.abs(own[0] - or), dc = Math.abs(own[1] - oc);
+        if (dr === 0 && dc <= zCap && dc > 0) {
+          let blocked = false;
+          const minC = Math.min(own[1], oc), maxC = Math.max(own[1], oc);
+          for (let c = minC + 1; c < maxC; c++) {
+            if (sim.wall[own[0] * W + c] || sim.brick[own[0] * W + c]) { blocked = true; break; }
+          }
+          if (!blocked) directLineAttack = true;
+        } else if (dc === 0 && dr <= zCap && dr > 0) {
+          let blocked = false;
+          const minR = Math.min(own[0], or), maxR = Math.max(own[0], or);
+          for (let r = minR + 1; r < maxR; r++) {
+            if (sim.wall[r * W + own[1]] || sim.brick[r * W + own[1]]) { blocked = true; break; }
+          }
+          if (!blocked) directLineAttack = true;
+        }
+      }
+      const adjacentToOpp = (oppDist <= 1) || (ownIdx === targetCell && targetCell === oppIdx);
+
       const canDrop = bm[pid][1] === 1 && sim.fuse[ownIdx] === 0 && sim.liveBombs(pid) < sim.bombsCap[pid];
       if (canDrop && !inImminentDanger) {
         const shouldDropForBrick = nextStepIsBrick;
-        const shouldDropForJev = this.lastDecision && this.lastDecision.bombChoice === 'plant_bomb_now';
-        if (shouldDropForBrick || shouldDropForJev) {
+        const shouldDropForKill = (adjacentToOpp || directLineAttack) && (this.targetIntent === 'hunt_opponent' || sim.initialHp === 1);
+        const shouldDropForJev = this.lastDecision && this.lastDecision.bombChoice === 'plant_bomb_now' && (nextStepIsBrick || adjacentToOpp || directLineAttack);
+        if (shouldDropForBrick || shouldDropForKill || shouldDropForJev) {
           // 物理防自杀底线检查
           const safeToDrop = this.helperAi.canSafelyPlaceBomb(sim, ownIdx, sim.blastCap[pid], spd, nowMs);
           if (safeToDrop) {
             finalBomb = 1;
             this.stats.bombsPlaced++;
+            this.lastPlacedBombCell = ownIdx;
+            // 立即消耗 Jev 的下子决策，防止持续多 tick 重复盲目落子
+            if (this.lastDecision) this.lastDecision.bombChoice = 'hold_bomb';
+            this.bombDecision = 'hold_bomb';
             if (this.helperAi.lastEscapePath && this.helperAi.lastEscapePath.length > 1) {
               this.helperAi.escapePath = this.helperAi.lastEscapePath.slice();
               this.helperAi.escapeTarget = this.helperAi.lastEscapeTarget;
+              // 关键对齐：放泡当 tick 立即起步沿逃生路径撤离
+              chosenMove = this.helperAi._cellToMove(ownIdx, this.helperAi.escapePath[1], W);
             }
           }
         }
