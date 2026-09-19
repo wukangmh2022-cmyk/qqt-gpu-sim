@@ -325,29 +325,40 @@
   const TIME_ASTAR_HUNT_VAL = '__time_astar_hunt__'; // 高级时空 A*（竞技追猎版）
   const TIME_ASTAR_ROAM_VAL = '__time_astar_roam__'; // 高级时空 A*（经典漫游连炮版）
   const NUKEMAN_VAL = '__nukeman__';       // 兼容别名
-  const IDLE_VAL = '__idle__';             // 静态死靶(不动不炸)哨兵
-  const JEV_AI_VAL = '__jev_ai__';         // TypeSafe Jev (System One 大模型)
+  const JEV_AI_VAL = '__jev_ai__';         // TypeSafe Jev (System One 战术引导版)
+  const JEV_AUTONOMOUS_VAL = '__jev_autonomous_ai__'; // TypeSafe Jev (完全自主版 GPT-5.6 设想)
   const jevAi = typeof JevAI !== 'undefined' ? new JevAI() : null;
+  const jevAutoAi = typeof JevAutonomousAI !== 'undefined' ? new JevAutonomousAI() : null;
 
   function updateJevUi() {
-    if (!jevAi || !elJevStatus || !elJevLogs) return;
-    const dec = jevAi.lastTacticalDecision;
+    const activeJev = ((elSpectate.checked && p0Sel === JEV_AUTONOMOUS_VAL) || enemySel === JEV_AUTONOMOUS_VAL) ? jevAutoAi : jevAi;
+    if (!activeJev || !elJevStatus || !elJevLogs) return;
+    const isAuto = activeJev === jevAutoAi;
+    const dec = isAuto ? activeJev.lastDecision : activeJev.lastTacticalDecision;
     if (dec) {
       const pName = {
+        'offensive_siege': '⚔️ 围剿进攻',
+        'tactical_ambush': '🎯 走廊伏击',
+        'resource_dominance': '💎 资源压制',
+        'kiting_counter': '🛡️ 防守反击',
         'attack_opponent': '⚔️ 进攻对手',
         'dodge_danger': '🛡️ 避险撤离',
         'bomb_brick': '💣 炸砖开路',
         'collect_crate': '📦 收集道具'
-      }[dec.priority] || dec.priority;
-      elJevStatus.innerHTML = `<b>${pName}</b> | 目标: <code>${dec.targetKey}</code> | 放泡: ${dec.shouldBomb ? '<b style=\"color:#ff5252\">是</b>' : '否'} | 耗时: ${jevAi.stats.lastLatencyMs}ms`;
+      }[dec.posture || dec.priority] || (dec.posture || dec.priority);
+      const bombStr = isAuto ? (dec.bombAction !== 'hold_fire' ? `<b style="color:#ff5252">${dec.bombAction} (${dec.bombConf})</b>` : '停火') : (dec.shouldBomb ? '<b style="color:#ff5252">是</b>' : '否');
+      elJevStatus.innerHTML = `<b>${isAuto ? '[完全自主版] ' : ''}${pName}</b> | 目标: <code>${dec.targetKey}</code> | 放泡: ${bombStr} | 耗时: ${activeJev.stats.lastLatencyMs}ms`;
     }
-    if (jevAi.decisionHistory && jevAi.decisionHistory.length) {
-      const lines = jevAi.decisionHistory.slice(-8).reverse().map(d => {
-        const pStr = d.priority === 'attack_opponent' ? '<span style=\"color:#ff5252\">进攻</span>' :
-                     d.priority === 'dodge_danger' ? '<span style=\"color:#ffd740\">避险</span>' :
-                     d.priority === 'bomb_brick' ? '<span style=\"color:#69f0ae\">破砖</span>' :
-                     `<span style=\"color:#40c4ff\">${d.priority}</span>`;
-        return `[${d.time}] T${d.tick} ${pStr} -> ${d.targetKey} (距敌${d.oppDist}${d.inLineOfFire ? ' 直瞄' : ''}) ${d.latencyMs}ms`;
+    if (activeJev.decisionHistory && activeJev.decisionHistory.length) {
+      const lines = activeJev.decisionHistory.slice(-8).reverse().map(d => {
+        const pKey = d.posture || d.priority;
+        const pStr = pKey.includes('offensive') || pKey.includes('attack') ? '<span style="color:#ff5252">进攻</span>' :
+                     pKey.includes('kiting') || pKey.includes('dodge') ? '<span style="color:#ffd740">避险</span>' :
+                     pKey.includes('ambush') ? '<span style="color:#b388ff">伏击</span>' :
+                     pKey.includes('resource') || pKey.includes('crate') ? '<span style="color:#40c4ff">资源</span>' :
+                     `<span style="color:#69f0ae">${pKey}</span>`;
+        const bombTag = d.bombAction ? ` [${d.bombAction}]` : '';
+        return `[${d.time}] T${d.tick} ${pStr} -> ${d.targetKey}${bombTag} (距敌${d.oppDist}${d.inLineOfFire ? ' 直瞄' : ''}) ${d.latencyMs}ms`;
       });
       elJevLogs.innerHTML = lines.join('<br>');
     }
@@ -356,7 +367,8 @@
   const isRuleAi = (sel) =>
     sel === HUNTER_VAL || sel === TIME_ASTAR_VAL || sel === TIME_ASTAR_HUNT_VAL ||
     sel === TIME_ASTAR_ROAM_VAL || sel === NUKEMAN_VAL || sel === IDLE_VAL ||
-    sel === STATIONARY_VAL || sel === FLEE_BOT_VAL || sel === ROAM_BOT_VAL || sel === JEV_AI_VAL;
+    sel === STATIONARY_VAL || sel === FLEE_BOT_VAL || sel === ROAM_BOT_VAL ||
+    sel === JEV_AI_VAL || sel === JEV_AUTONOMOUS_VAL;
   const LATEST_VIT = 'ViTModel2_31.9B';       // 最新 ViT 模型
 
   // 敌/我方 AI 选择：'__time_astar_hunt__'（高级时空 A* 竞技追猎版，默认敌人秒开）、'__hunter__'（规则）或模型名。
@@ -502,6 +514,7 @@
     if (sel === TIME_ASTAR_ROAM_VAL && timeAStarRoam) return timeAStarRoam.act(sim, pid);
     if ((sel === TIME_ASTAR_HUNT_VAL || sel === TIME_ASTAR_VAL || sel === NUKEMAN_VAL) && timeAStarHunt) return timeAStarHunt.act(sim, pid);
     if (sel === JEV_AI_VAL && jevAi) return jevAi.act(sim, pid, rng);
+    if (sel === JEV_AUTONOMOUS_VAL && jevAutoAi) return jevAutoAi.act(sim, pid, rng);
     return [MOVE_IDLE, 0];
   }
 
@@ -1502,8 +1515,13 @@
 
       const jevOpt = document.createElement('option');
       jevOpt.value = JEV_AI_VAL;
-      jevOpt.textContent = 'TypeSafe Jev（System One 语义战术大模型）';
+      jevOpt.textContent = '🧠 TypeSafe Jev（战术引导版 · System One）';
       sel.appendChild(jevOpt);
+
+      const jevAutoOpt = document.createElement('option');
+      jevAutoOpt.value = JEV_AUTONOMOUS_VAL;
+      jevAutoOpt.textContent = '🧠 TypeSafe Jev（完全自主版 · GPT-5.6 设想）';
+      sel.appendChild(jevAutoOpt);
     }
     for (const m of modelList) {
       const opt = document.createElement('option');
@@ -1585,8 +1603,17 @@
       enemySel = JEV_AI_VAL;
       modelLoaded = true;
       requestAnimationFrame(updateProgress);
-      elCurModel.textContent = 'TypeSafe Jev（System One 大模型）';
-      elStatus.innerHTML = '敌人：<b>TypeSafe Jev</b>（System One 语义战术大模型 / 目标规划 / 破障发育）';
+      elCurModel.textContent = 'TypeSafe Jev（战术引导版）';
+      elStatus.innerHTML = '敌人：<b>TypeSafe Jev</b>（战术引导版 · System One 语义战术）';
+      if (sim) startGame();
+      return;
+    }
+    if (sel === JEV_AUTONOMOUS_VAL) {
+      enemySel = JEV_AUTONOMOUS_VAL;
+      modelLoaded = true;
+      requestAnimationFrame(updateProgress);
+      elCurModel.textContent = 'TypeSafe Jev（完全自主版 GPT-5.6 设想）';
+      elStatus.innerHTML = '敌人：<b>TypeSafe Jev</b>（完全自主版 · 全权战略/落点/下子决策）';
       if (sim) startGame();
       return;
     }
@@ -3083,28 +3110,36 @@
     }
 
     // 🎯 TypeSafe Jev 决策目标位与航线高亮（录屏清晰展示用）
-    const isJevActive = (elSpectate.checked && p0Sel === JEV_AI_VAL) || enemySel === JEV_AI_VAL;
-    if (isJevActive && jevAi && jevAi.targetPos && sim && running) {
-      const [tr, tc] = jevAi.targetPos;
+    const isJevActive = (elSpectate.checked && (p0Sel === JEV_AI_VAL || p0Sel === JEV_AUTONOMOUS_VAL)) ||
+                        (enemySel === JEV_AI_VAL || enemySel === JEV_AUTONOMOUS_VAL);
+    const activeJev = ((elSpectate.checked && p0Sel === JEV_AUTONOMOUS_VAL) || enemySel === JEV_AUTONOMOUS_VAL) ? jevAutoAi : jevAi;
+    const isAuto = activeJev === jevAutoAi;
+
+    if (isJevActive && activeJev && activeJev.targetPos && sim && running) {
+      const [tr, tc] = activeJev.targetPos;
       if (tr >= 0 && tr < H && tc >= 0 && tc < W) {
-        const tType = jevAi.targetType;
-        const prio = jevAi.targetPriority;
+        const tType = activeJev.targetType;
+        const prio = activeJev.targetPosture || activeJev.targetPriority;
         const now = performance.now();
         const pulse = 0.65 + 0.35 * Math.sin(now / 160);
 
-        // 颜色映射：进攻=亮红，破砖=金黄，吃道具=青绿，避险=亮蓝
+        // 颜色映射：进攻=亮红，破砖=金黄，吃道具=青绿，避险=亮蓝，伏击=亮紫
         let color = 'rgba(255, 60, 60, ';
         let strokeColor = 'rgba(255, 80, 80, ';
         let tagText = '🎯 目标: 敌方角色';
-        if (prio === 'bomb_brick' || tType === 'brick') {
+        if (prio === 'tactical_ambush' || tType === 'intercept') {
+          color = 'rgba(179, 136, 255, ';
+          strokeColor = 'rgba(209, 180, 255, ';
+          tagText = '🎯 目标: 截击卡位';
+        } else if (prio === 'bomb_brick' || tType === 'brick') {
           color = 'rgba(255, 215, 0, ';
           strokeColor = 'rgba(255, 230, 50, ';
           tagText = '💣 目标: 破砖开路';
-        } else if (prio === 'collect_crate' || tType === 'crate') {
+        } else if (prio === 'collect_crate' || prio === 'resource_dominance' || tType === 'crate') {
           color = 'rgba(0, 230, 118, ';
           strokeColor = 'rgba(50, 255, 140, ';
-          tagText = `📦 目标: ${jevAi.targetLabel || '道具'}`;
-        } else if (prio === 'dodge_danger' || tType === 'safety') {
+          tagText = `📦 目标: ${activeJev.targetLabel || '核心道具'}`;
+        } else if (prio === 'dodge_danger' || prio === 'kiting_counter' || tType === 'safety') {
           color = 'rgba(0, 176, 255, ';
           strokeColor = 'rgba(64, 196, 255, ';
           tagText = '🛡️ 目标: 安全避难';
@@ -3142,13 +3177,13 @@
         ctx.stroke();
 
         // 3. 绘制航线轨迹虚线 (Path)
-        if (jevAi.currentSearchPath && jevAi.currentSearchPath.length > 1) {
+        if (activeJev.currentSearchPath && activeJev.currentSearchPath.length > 1) {
           ctx.beginPath();
           ctx.setLineDash([5, 4]);
           ctx.strokeStyle = strokeColor + '0.75)';
           ctx.lineWidth = 2.5;
-          for (let pi = 0; pi < jevAi.currentSearchPath.length; pi++) {
-            const cell = jevAi.currentSearchPath[pi];
+          for (let pi = 0; pi < activeJev.currentSearchPath.length; pi++) {
+            const cell = activeJev.currentSearchPath[pi];
             const pr = (cell / W) | 0, pc = cell % W;
             const cx = pc * CELL + CELL / 2;
             const cy = pr * CELL + CELL / 2;
@@ -3180,24 +3215,34 @@
     ctx.restore();                 // 结束整体下移(translate), HUD 用绝对坐标
 
     // 🎯 Jev 顶部大字状态条（录视频时全局清晰展示）
-    if (isJevActive && jevAi && jevAi.targetPos && sim && running) {
-      const [tr, tc] = jevAi.targetPos;
+    if (isJevActive && activeJev && activeJev.targetPos && sim && running) {
+      const [tr, tc] = activeJev.targetPos;
+      const prioKey = activeJev.targetPosture || activeJev.targetPriority;
       const prioName = {
+        'offensive_siege': '⚔️ 围剿进攻',
+        'tactical_ambush': '🎯 走廊伏击',
+        'resource_dominance': '💎 资源压制',
+        'kiting_counter': '🛡️ 防守反击',
         'attack_opponent': '⚔️ 进攻对手',
         'dodge_danger': '🛡️ 避险撤离',
         'bomb_brick': '💣 炸砖开路',
         'collect_crate': '📦 收集道具'
-      }[jevAi.targetPriority] || jevAi.targetPriority;
-      const bannerTxt = `🎯 Jev 决策目标位: (行 ${tr}, 列 ${tc}) | 战术: ${prioName} | 意图: ${jevAi.targetShouldBomb ? '💣 下子放泡' : '🚶 巡航走位'} | 耗时: ${jevAi.stats.lastLatencyMs}ms`;
+      }[prioKey] || prioKey;
+
+      const intentText = isAuto
+        ? (activeJev.bombAction !== 'hold_fire' ? `💣 下子 (${activeJev.bombAction})` : '🚶 巡航走位')
+        : (activeJev.targetShouldBomb ? '💣 下子放泡' : '🚶 巡航走位');
+
+      const bannerTxt = `🎯 [${isAuto ? 'Jev自主版' : 'Jev引导版'}] 目标位: (行 ${tr}, 列 ${tc}) | 战术: ${prioName} | 意图: ${intentText} | 耗时: ${activeJev.stats.lastLatencyMs}ms`;
       ctx.font = 'bold 12px sans-serif';
       const bW = ctx.measureText(bannerTxt).width + 24;
       const bX = (canvas.width - bW) / 2;
       ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
       ctx.fillRect(bX, 6, bW, 22);
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+      ctx.strokeStyle = isAuto ? 'rgba(168, 85, 247, 0.85)' : 'rgba(56, 189, 248, 0.85)';
       ctx.lineWidth = 1.5;
       ctx.strokeRect(bX, 6, bW, 22);
-      ctx.fillStyle = '#38bdf8';
+      ctx.fillStyle = isAuto ? '#c084fc' : '#38bdf8';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(bannerTxt, canvas.width / 2, 17);
