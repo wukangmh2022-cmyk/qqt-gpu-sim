@@ -324,6 +324,17 @@ async function main() {
     const domTime = ((Date.now() - tDomStart) / 1000).toFixed(2);
     process.stdout.write(`\r  [${dom.id}] 进度: ${args.games}/${args.games} 完成！耗时 ${domTime}s\n`);
 
+    const nonWins = results.filter((r) => r.outcome !== 'clean_win' && r.outcome !== 'kamikaze_win');
+    if (nonWins.length > 0) {
+      console.log(`  [${dom.id}] 非胜局明细:`);
+      const allLevels = JSON.parse(fs.readFileSync(MAPS_JSON, 'utf8'));
+      const lvlArr = Array.isArray(allLevels) ? allLevels : allLevels.levels || allLevels.maps;
+      for (const r of nonWins) {
+        const lv = dom.id.startsWith('open') ? { name: '空场景道场', id: 240, theme: 'open' } : lvlArr[r.gameIdx % lvlArr.length];
+        console.log(`    - 局号 #${r.gameIdx}: 地图「${lv.name}」(id=${lv.id}, 主题=${lv.theme}) 结果=${r.outcome} 帧数=${r.ticks} 残余血量=[AI:${r.hp[0]}, 敌:${r.hp[1]}]`);
+      }
+    }
+
     // 统计聚合
     const cleanWins = results.filter((r) => r.outcome === 'clean_win').length;
     const kamikazeWins = results.filter((r) => r.outcome === 'kamikaze_win').length;
