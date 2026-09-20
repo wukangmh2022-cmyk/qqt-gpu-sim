@@ -31,12 +31,12 @@
 
 | 分类 | 实战演示 | 机制解析与博弈技术细节 |
 |---|---|---|
-| **炸墙与成长**<br>Blast & Loot | <img src="docs/gameplay/mechanic_blast_loot.gif" width="360" alt="炸墙与成长"> | **开荒爆破与属性吸收**：连环炸碎宝箱并拾取药水飞靴，底部面板实时展示火力与储泡上限连级跃升（源自夺宝战神实战）。 |
-| **半身连泡**<br>Half-Body Chain | <img src="docs/gameplay/kill_half_body_chain.gif" width="360" alt="半身连泡"> | **并排连锁破半身**：布设并排双泡诱发平行水柱覆盖缝隙，彻底封死半身安全区击杀对手（源自空场景实战前 5 秒）。 |
+| **炸墙与成长**<br>Blast & Loot | <img src="docs/gameplay/mechanic_blast_loot.gif" width="360" alt="炸墙与成长"> | **炸箱与拾取成长**：常规炸开宝箱并拾取掉落的药水与飞靴道具，提升火力与储泡属性（源自夺宝战神实战）。 |
+| **半身连泡**<br>Half-Body Chain | <img src="docs/gameplay/kill_half_body_chain.gif" width="360" alt="半身连泡"> | **并排连泡压制**：布设并排双泡诱发平行水柱覆盖缝隙，封锁半身安全区压制对手并尝试击杀（源自空场景实战前 5 秒）。 |
 | **连泡击杀**<br>Chain Kill | <img src="docs/gameplay/kill_chain.gif" width="360" alt="连泡击杀"> | **引线瞬燃击杀**：近身切入贴临爆老水泡下新泡形成引线，触发横向十字瞬爆绝杀对手（源自空场景实战）。 |
 | **包围泡击杀**<br>Surround Kill | <img src="docs/gameplay/kill_surround.gif" width="360" alt="包围泡击杀"> | **四向闭环合围**：开阔平地贴身包抄布设四向水泡牢笼，封死全部走位通道完成零封击杀（源自空场景实战）。 |
 | **推箱并击杀**<br>Push Box & Kill | <img src="docs/gameplay/kill_push_box.gif" width="360" alt="推箱击杀"> | **推开机关绝杀**：面对阻路机关砖自主前推开辟通道，顺势近身落泡封死退路绝杀（源自夺宝01实战 13:42-13:48）。 |
-| **连续截杀**<br>Continuous Kill | <img src="docs/gameplay/kill_continuous.gif" width="360" alt="连续截杀"> | **狭道穷追连环截杀**：在狭窄冰面走廊多轮贴身截击，预判退路连续落泡层层削血终结对手（源自雪地08道具场实战 32-40 秒）。 |
+| **连续截杀**<br>Continuous Kill | <img src="docs/gameplay/kill_continuous.gif" width="360" alt="连续截杀"> | **连续压制与击杀**：在窄道持续贴身跟进落泡，连续压迫走位并完成击杀（源自雪地08道具场实战 32-40 秒）。 |
 
 > 仓库 `docs/gameplay/` 目录下还收录有中国功夫、游乐场、爱的考验等关卡更多击杀动图。
 
