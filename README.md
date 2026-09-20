@@ -31,12 +31,12 @@
 
 | 分类 | 实战演示 | 机制解析与博弈技术细节 |
 |---|---|---|
-| **炸墙与成长**<br>Blast & Loot | <img src="docs/gameplay/mechanic_blast_loot.gif" width="360" alt="炸墙与吃东西"> | **精准开荒爆破与即时属性吸收**：高效炸碎场景宝箱与障碍收集药水、加速飞靴与储泡道具，底部面板实时展示火力（威）与储泡数量阶梯式跃升。源自夺宝战神地图实战（0 分 45 秒开荒爆破与成长高光）。 |
-| **连泡击杀**<br>Chain Kill | <img src="docs/gameplay/kill_chain.gif" width="360" alt="连泡击杀"> | **出其不意连结临爆老泡瞬燃击杀（核心战术）**：智能体观察到底部已存在即将倒计时结束爆炸的老水泡，出其不意近身切入并在老泡旁瞬间落下一颗新泡连成引线；老泡爆炸瞬间连带瞬间引燃新水泡，十字火线在对手完全猝不及防的情况下横向爆开完成瞬杀。源自空场景地图实战（第 5 秒连炮引燃高光）。 |
-| **包围泡击杀**<br>Surround Kill | <img src="docs/gameplay/kill_surround.gif" width="360" alt="包围泡击杀"> | **开阔场地多向合围与绝对走位封杀**：智能体在开阔平地高速贴身包抄，在对手四周快速布设四向闭环水泡牢笼，彻底切断所有逃逸路线完成零封绝杀。源自空场景地图实战（第 7 秒包围击杀高光）。 |
-| **推箱并击杀**<br>Push Box & Kill | <img src="docs/gameplay/kill_push_box.gif" width="360" alt="推箱击杀"> | **推动机关砖块破局与连环封杀**：智能体面对阻挡路线的可移动机关砖块，自主向前推开砖块开辟进攻通路，并顺势近身落泡切断对手退路完成绝杀。源自夺宝01地图实战（视频 13:42-13:48）。 |
-| **狭道截杀**<br>Chokepoint Kill | <img src="docs/gameplay/kill_chokepoint.gif" width="360" alt="狭道截杀"> | **咽喉通道卡位与前瞻预判拦截**：在单格通道密集场景中，预判敌方折返动向并在关键出口落泡切断回路，将对手卡死在火线必经之路。源自卡 BOSS 地图实战。 |
-| **半身位击杀**<br>Half-Body Kill | <img src="docs/gameplay/kill_half_body.gif" width="360" alt="半身击杀"> | **半身位网格缝隙卡位与绝杀（核心标注）**：智能体布置交叉火网，敌方在纵向折返时身位恰好卡在第 9 格与第 10 格分界线边缘（录像坐标 `[9.964, 9.500]`，距网格缝隙仅 0.036 格极限居中），处于半身位无法摆脱交叉水流判定被直接空血击杀。源自比武03地图实战。 |
+| **炸墙与成长**<br>Blast & Loot | <img src="docs/gameplay/mechanic_blast_loot.gif" width="360" alt="炸墙与成长"> | **开荒爆破与属性吸收**：连环炸碎宝箱并拾取药水飞靴，底部面板实时展示火力与储泡上限连级跃升（源自夺宝战神实战）。 |
+| **连泡击杀**<br>Chain Kill | <img src="docs/gameplay/kill_chain.gif" width="360" alt="连泡击杀"> | **引线瞬燃击杀**：近身切入贴临爆老水泡下新泡形成引线，触发横向十字瞬爆绝杀对手（源自空场景实战）。 |
+| **包围泡击杀**<br>Surround Kill | <img src="docs/gameplay/kill_surround.gif" width="360" alt="包围泡击杀"> | **四向闭环合围**：开阔平地贴身包抄布设四向水泡牢笼，封死全部走位通道完成零封击杀（源自空场景实战）。 |
+| **推箱并击杀**<br>Push Box & Kill | <img src="docs/gameplay/kill_push_box.gif" width="360" alt="推箱击杀"> | **推开机关绝杀**：面对阻路机关砖自主前推开辟通道，顺势近身落泡封死退路绝杀（源自夺宝01实战 13:42-13:48）。 |
+| **连续截杀**<br>Continuous Kill | <img src="docs/gameplay/kill_continuous.gif" width="360" alt="连续截杀"> | **狭道穷追连环截杀**：在狭窄冰面走廊多轮贴身截击，预判退路连续落泡层层削血终结对手（源自雪地08道具场实战 32-40 秒）。 |
+| **半身位击杀**<br>Half-Body Kill | <img src="docs/gameplay/kill_half_body.gif" width="360" alt="半身击杀"> | **网格缝隙卡位击杀**：敌方折返时身位卡在双格缝隙边界（坐标 `[9.964, 9.500]`，距网格中线仅 0.036 格），被交叉水流判定空血击杀（源自比武03实战）。 |
 
 > 仓库 `docs/gameplay/` 目录下还收录有中国功夫、游乐场、爱的考验等关卡更多击杀动图。
 
