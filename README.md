@@ -1,6 +1,6 @@
 # qqt-gpu-sim — 泡泡堂风格 1v1 格斗：GPU 批量模拟器 + 自博弈 PPO
 
-一句话：**写一个全张量化炸弹人模拟器（GPU 一次跑几千局），用 PPO 自博弈训出能打赢手写寻路 AI 的模型。** 方案从 torch 时代的 CNN/MLP 课程化训练起步，08 月中旬用 JAX 重写全链路并换成 7.5M 参数 ViT，**目前已全面进阶至第四阶段：破局宗师与全能泛化训练（12 机 × 2 卡 = 24 副本集群，彻底攻克对峙纳什陷阱）**。
+基于 JAX 的全张量化 GPU 炸弹人环境与分布式强化学习框架，单机/多机集群并行仿真数千环境，通过 7.5M 参数 ViT 自博弈 PPO 与多态联赛演化，攻克高水平对峙纳什陷阱，训练具备全图泛化、主动压迫与深度博弈能力的竞技智能体。方案历经 PyTorch 早期原型验证，现已全面演进至第四阶段破局宗师训练（12 机 × 2 卡 = 24 副本集群，单轮训练量超百亿步）。
 
 ---
 
@@ -194,6 +194,7 @@ web/           浏览器版（sim.js 引擎 + ViT/MLP 权重 + 原版素材）�
 sim/ train/    torch 时代遗产：批量模拟器 / CNN·MLP·LSTM 课程化 PPO / ELO 模型池
 play/          对局核心（duel CLI / 录像回放）
 deploy/        ckpt→web 导出（export_ckpt/export_jax_ckpt/export_jax_onnx）
+tools/         地图解析与素材转换管线（export_web / mapDesc / qqt_to_levels）
 scripts/       headless_test.js(无头评估) / analyze_maps.py(地图统计/课程) /
                quick_check_*(JS↔JAX 对拍) / duel_arena.py(对战矩阵)
 docs/          vit_train_log.md(ViT 三轮训练记录) / multicard_lossy_sync.md(LSGD 设计) /
@@ -217,3 +218,9 @@ RULES.md       规则唯一权威定义（torch/JAX/JS 三端以此为准）
 - **AI 拟真反应调速与抗震荡设计（阶段四）**：不可使用后置动作队列（FIFO 时延引入控制超调与相位滞后，引发左右摇摆极限环震荡），必须采用**推理即行动（0 控制滞后）+ 原生 `inferEvery` 降频**架构：推理决策帧即时下达动作，非推理冷却期顺滑维持移动惯性且放泡脉冲清零，既为人类玩家留出博弈窗口，又彻底杜绝了左右摇摆震荡。
 
 > 更完整的逐轮记录：**[docs/vit_train_log.md](docs/vit_train_log.md)**（ViT 三轮参数/坑/监控 checklist）、**[docs/multicard_lossy_sync.md](docs/multicard_lossy_sync.md)**（LSGD 与生产配置决策）、**[docs/performance.md](docs/performance.md)**（引擎/算子优化）。
+
+---
+
+## 协议
+
+本项目采用 [MIT License](LICENSE) 许可协议。
