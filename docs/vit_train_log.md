@@ -12,8 +12,8 @@
 - 环境：241 张 QQ堂标准图（13×15），`levels.json`；`--num-envs 16384 --num-steps 256 --minibatch 16384 --epochs 2`
 - 步数口径：8 卡 16384 envs → 8.39M 步/iter；全局 260B 步是总训练量（论文 Average Joe 同量级）
 - PPO：`--gamma 0.995 --lam 0.95 --clip-eps 0.2 --vf-coef 0.5 --ent-coef 0.01`
-- 奖励常量：`HIT_REWARD 1.5 / STEP_PENALTY 0.001 / WIN_BONUS 10`（jax_train.py）
-- 稠密奖励口径（jax_train.py collect_rollout）：掉血 -1.5 = 对方命中 +1.5（**守恒**），每 tick 步罚 -0.001，终局击杀 ±10，超时按血差 × EXPLORE_COEF
+- 奖励常量：`HIT_REWARD 1.5 / STEP_PENALTY 0.004 / WIN_BONUS 10`（jax_train.py）
+- 稠密奖励口径（jax_train.py collect_rollout）：掉血 -1.5 = 对方命中 +1.5（**守恒**），每 tick 步罚 -0.004，终局击杀 ±10，超时按血差 × EXPLORE_COEF
 
 ## 1. 第一轮迭代（试水，2026-08-20 ~ 21）：500 iter / 4.2B 步
 
@@ -187,5 +187,5 @@ node scripts/eval_headless_parallel.js --workers 4 --games 128
 | `scripts/analyze_maps.py` | 241 图开局形态统计与课程生成 |
 | `deploy/export_ckpt.py` | ckpt → Web JSON/ONNX 导出与验证 |
 | `scripts/quick_check_js_jax_transformer.py` | JS↔JAX 前向对拍 |
-| `deploy_10node/launch_12nodes.sh` / `launch_24node_prod.sh` | 生产多机训练集群拉起与编排 |
+| `deploy_10node/launch_12nodes.sh` / `scripts/launch_24node_prod.sh` | 生产多机训练集群拉起与编排 |
 
