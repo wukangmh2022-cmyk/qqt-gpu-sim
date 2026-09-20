@@ -21,7 +21,7 @@
 - 本仓库已启用 GitHub Pages（`main@/` 分支直发 `web/`），**push 即自动上线**；
 - 本地启动：`bash scripts/serve_web.sh [端口]`（默认 8080，自动增量导出新模型 + 开服）；
 - 手动工具链：`.venv/bin/python deploy/export_ckpt.py --verify`（ckpt→web 权重，含前向自检）→ `git add web && git push`；
-- 引擎是 `sim/torch_sim.py` 的纯 JS 标量移植，与 Python 参考实现逐元素对拍一致（60 随机状态 maxdiff < 1e-7）。
+- 引擎是 `sim/torch_sim.py` 与 `jax_bomb/jax_env.py` 的纯 JS 标量移植（物理步进源自 torch_sim，观测编码/推箱/14 通道对齐 jax_env），与 JAX 参考实现逐元素对拍一致（`quick_check_js_jax_*.py`，60 随机状态 maxdiff < 1e-7）。
 
 ---
 
