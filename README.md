@@ -65,8 +65,7 @@
 - **JAX 环境重写**（`jax_bomb/`）：与 torch/JS **逐位对拍一致**（修 5 处环境差异；PPO NaN 根因 = 熵项 0×(−inf)，p>0 门控修复）；obs 13→**14 通道**（ch13=可推箱），实现推箱玩法（JAX↔Web 等效，4 项 quick check 全过）；
 - **原版关卡**：QQ 堂原版地图/素材导入工具链接入 **241 张原版关卡**（`levels.json`，含出生点对/可推箱/宝箱率数据）；
 - **架构定稿**（2026-08-19 拍板）：transformer(ViT) `embed 392 / depth 4 / patch 4 / heads 4 / FF×4` ≈ **7.46M 参数**；单卡实测 21.8K sps（48.1s/iter）；
-- **多卡 LSGD**：Local SGD 有损同步（每 K 个 minibatch 平均一次参数，通信量 1/K），跨机可扩展；`launch_8gpu.sh`（单机 8 卡）与 `launch_10nodes.sh`（10 机×2 卡 SSH 编排）落地；
-- 教师蒸馏链（torch teacher → JAX student）打通，作为中途验证手段。
+- **多卡 LSGD**：Local SGD 有损同步（每 K 个 minibatch 平均一次参数，通信量 1/K），跨机可扩展；`launch_8gpu.sh`（单机 8 卡）与 `launch_10nodes.sh`（10 机×2 卡 SSH 编排）落地。
 
 ### 阶段三：ViT 自博弈三次大训练
 
