@@ -44,11 +44,14 @@ if (!isMainThread) {
   const ort = require('onnxruntime-node');
   global.ort = ort;
   const QQT = require(path.join(ROOT, 'web', 'sim.js'));
+  const TimeAStarAI = require(path.join(ROOT, 'web', 'time_astar_ai.js'));
   const { Sim, ORTTransformerModel, HunterAI, mulberry32, W, H } = QQT;
 
   let model0 = null;
   let model1 = null;
   let hunter = null;
+  let timeAStar = null;
+  let flee = null;
   let levels = null;
 
   function isBombExplodingNow(sim, i) {
@@ -85,6 +88,8 @@ if (!isMainThread) {
       model1 = await loadModel(oppModelName);
     }
     hunter = new HunterAI();
+    timeAStar = new TimeAStarAI({ mode: 'hunt' });
+    flee = new QQT.FleeBotAI();
     levels = JSON.parse(fs.readFileSync(MAPS_JSON, 'utf8'));
     if (!Array.isArray(levels)) levels = levels.levels || levels.maps;
   }
@@ -100,8 +105,11 @@ if (!isMainThread) {
     }
 
     const rng = mulberry32(seed ^ 0x9e3779b9);
-    const isHunter = domain.endsWith('hunter');
     const isModelOpp = oppType === 'model' && model1 !== null;
+    let oppAI = null;
+    if (oppType === 'astar' || domain.endsWith('astar')) oppAI = timeAStar;
+    else if (oppType === 'flee' || domain.endsWith('flee')) oppAI = flee;
+    else if (oppType === 'hunter' || domain.endsWith('hunter')) oppAI = hunter;
 
     let p0Bombs = 0;
     let p0Hits = 0;
@@ -131,7 +139,7 @@ if (!isMainThread) {
         }
       } else {
         a0 = await model0.act(sim, 0, rng);
-        a1 = isHunter ? hunter.act(sim, 1) : [4, 0]; // 4=IDLE, 0=NO_BOMB
+        a1 = oppAI ? oppAI.act(sim, 1) : [4, 0]; // 4=IDLE, 0=NO_BOMB
       }
 
       const model0Action = swapSide ? a1 : a0;
@@ -234,15 +242,30 @@ async function main() {
       { id: 'open_vs_opp', name: `模型对决 / 空道场 vs ${args.oppModel}`, oppType: 'model' },
       { id: 'full_vs_opp', name: `模型对决 / 241复杂图 vs ${args.oppModel}`, oppType: 'model' },
     ];
+  } else if (args.domain === 'all_opps' || args.domain === 'benchmark') {
+    domains = [
+      { id: 'full_astar',  name: '高级时空 A* / 全池241复杂地图', oppType: 'astar' },
+      { id: 'open_astar',  name: '高级时空 A* / 空场景道场', oppType: 'astar' },
+      { id: 'full_flee',   name: '逃跑拉扯 Bot / 全池241复杂地图', oppType: 'flee' },
+      { id: 'open_flee',   name: '逃跑拉扯 Bot / 空场景道场', oppType: 'flee' },
+      { id: 'full_hunter', name: '规则 BFS 猎人 / 全池241复杂地图', oppType: 'hunter' },
+      { id: 'open_hunter', name: '规则 BFS 猎人 / 空场景道场', oppType: 'hunter' },
+    ];
   } else if (args.domain === 'all') {
     domains = [
-      { id: 'open_hunter', name: 'AI Hunter / 空场景道场' },
-      { id: 'full_hunter', name: 'AI Hunter / 全池241复杂地图' },
-      { id: 'open_idle',   name: '静止木桩  / 空场景道场' },
-      { id: 'full_idle',   name: '静止木桩  / 全池241复杂地图' },
+      { id: 'open_hunter', name: 'AI Hunter / 空场景道场', oppType: 'hunter' },
+      { id: 'full_hunter', name: 'AI Hunter / 全池241复杂地图', oppType: 'hunter' },
+      { id: 'open_idle',   name: '静止木桩  / 空场景道场', oppType: 'idle' },
+      { id: 'full_idle',   name: '静止木桩  / 全池241复杂地图', oppType: 'idle' },
     ];
   } else {
-    domains = [{ id: args.domain, name: args.domain }];
+    let oppType = 'rule';
+    let name = args.domain;
+    if (args.domain.endsWith('astar')) { oppType = 'astar'; name = '高级时空 A* / ' + (args.domain.startsWith('open') ? '空场景道场' : '241复杂地图'); }
+    else if (args.domain.endsWith('flee')) { oppType = 'flee'; name = '逃跑拉扯 Bot / ' + (args.domain.startsWith('open') ? '空场景道场' : '241复杂地图'); }
+    else if (args.domain.endsWith('hunter')) { oppType = 'hunter'; name = '规则 BFS 猎人 / ' + (args.domain.startsWith('open') ? '空场景道场' : '241复杂地图'); }
+    else if (args.domain.endsWith('idle')) { oppType = 'idle'; name = '静止木桩 / ' + (args.domain.startsWith('open') ? '空场景道场' : '241复杂地图'); }
+    domains = [{ id: args.domain, name, oppType }];
   }
 
   // 1. 初始化 Worker 池
