@@ -13,7 +13,7 @@ fresh = false
 [runtime]
 action_repeat = 2
 no_mask = false
-obs_quant = true
+obs_quant = false
 checkpoint = false
 
 [model]
