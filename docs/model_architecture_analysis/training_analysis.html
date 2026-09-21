@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>QQTang 模型训练体系逆向剖析报告</title>
+  <style>
+    :root {
+      --bg-primary: #090d13;
+      --bg-secondary: #161b22;
+      --border-color: #30363d;
+      --text-main: #c9d1d9;
+      --text-bright: #f0f6fc;
+      --text-muted: #8b949e;
+      --accent-blue: #58a6ff;
+      --accent-green: #3fb950;
+      --accent-gold: #d29922;
+      --accent-purple: #bc8cff;
+      --accent-red: #f85149;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      margin: 0;
+      padding: 30px;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    h1, h2, h3 {
+      color: var(--text-bright);
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 8px;
+    }
+    h1 {
+      font-size: 28px;
+      border-bottom: 2px solid var(--accent-blue);
+      margin-bottom: 24px;
+    }
+    h2 {
+      font-size: 20px;
+      margin-top: 36px;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px 20px;
+    }
+    .card .value {
+      font-size: 22px;
+      font-weight: 700;
+      margin: 4px 0;
+    }
+    .card .desc {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-right: 6px;
+    }
+    .tag-blue { background: rgba(56, 139, 253, 0.15); color: var(--accent-blue); border: 1px solid var(--accent-blue); }
+    .tag-green { background: rgba(63, 185, 80, 0.15); color: var(--accent-green); border: 1px solid var(--accent-green); }
+    .tag-gold { background: rgba(210, 153, 34, 0.15); color: var(--accent-gold); border: 1px solid var(--accent-gold); }
+    .tag-red { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); border: 1px solid var(--accent-red); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      border: 1px solid var(--border-color);
+      padding: 12px 16px;
+      text-align: left;
+    }
+    th {
+      background-color: #21262d;
+      color: var(--text-bright);
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background-color: rgba(255, 255, 255, 0.02);
+    }
+    code {
+      background-color: rgba(110, 118, 129, 0.2);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>QQTang AI 训练体系、算法与数据源逆向溯源报告</h1>
+    <p class="desc" style="color:var(--text-muted); margin-bottom:24px;">
+      溯源依据：<code>configs/models/qqtang-rule1.onnx.json</code>、<code>internal/game/battleenv/</code>（包含 <code>batch.go</code>, <code>encoding.go</code>）、历史 Checkpoint 命名规律与引擎代码拓扑
+    </p>
+
+    <!-- 核心四问速查卡片 -->
+    <div class="summary-grid">
+      <div class="card">
+        <div class="desc">1. 训练框架与工具链</div>
+        <div class="value" style="color:var(--accent-blue);">PyTorch (Python) + Go (C-ABI)</div>
+        <div class="desc">Go 提供原生多环境物理采样，Python 消费 TensorBatch 训练导出 ONNX</div>
+      </div>
+      <div class="card">
+        <div class="desc">2. 有无用到人类数据？</div>
+        <div class="value" style="color:var(--accent-green);">纯环境生成 (0 人类数据)</div>
+        <div class="desc">无 Imitation Learning / BC，纯 Self-Play + 针对性课程环境生成</div>
+      </div>
+      <div class="card">
+        <div class="desc">3. 使用的强化学习算法？</div>
+        <div class="value" style="color:var(--accent-gold);">Asynchronous Policy Gradient</div>
+        <div class="desc">异步策略梯度类算法（类似 IMPALA / APPO，含 Critic 价值拟合）</div>
+      </div>
+      <div class="card">
+        <div class="desc">4. On-Policy 还是 Off-Policy？</div>
+        <div class="value" style="color:var(--accent-purple);">Near On-Policy (异步小延迟)</div>
+        <div class="desc">流式并发采样（<code>checkpoints-async</code>），带轻微异步 Policy Lag（V-trace/PPO Clipping 修正）</div>
+      </div>
+    </div>
+
+    <!-- 详细证据剖析 -->
+    <h2>一、 训练算法与运行环境深入证据链</h2>
+    
+    <div class="card" style="margin-bottom: 20px;">
+      <h3 style="margin-top:0; color:var(--accent-blue);">1. 训练架构与软硬件底座</h3>
+      <ul>
+        <li><strong>模型 Checkpoint 原身</strong>：在 <code>qqtang-rule1.onnx.json</code> 中明确记录来源为：<br>
+          <code>"checkpoint": "checkpoints-async/v253u128-native-team-value-outcome-v255/update-000032.pt"</code><br>
+          后缀 <code>.pt</code> 说明模型在 Python 端完全由 <strong>PyTorch</strong> 构建与训练，最终通过 <code>torch.onnx.export</code> 转出为 <code>qqtang-rule1.onnx</code>。
+        </li>
+        <li><strong>训练采集架构（Asynchronous Actor-Learner）</strong>：
+          目录名为 <code>checkpoints-async</code>，且环境暴露了 <code>ReuseTensorBuffers</code> 锁页流式接口。这表明采用了 <strong>Actor-Learner 解耦的异步强化学习框架</strong>（类似 DeepMind SEED RL 或 Ray/RLlib APPO/IMPALA 架构）：
+          <ul>
+            <li><strong>CPU 采样集群 (Actors)</strong>：利用 Go 编写的高性能多线程引擎（<code>internal/game/battleenv/batch.go</code> 中的 <code>WorkerCount</code> 与 <code>sync.Pool</code>）并发跑几百个无头环境实例，高速产出 <code>TensorBatch</code>。</li>
+            <li><strong>GPU 训练器 (Learner)</strong>：PyTorch 异步收集轨迹张量，计算梯度并定期写入 <code>update-0000XX.pt</code>，同时将最新权重广播给采样工作进程。</li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+
+    <div class="card" style="margin-bottom: 20px;">
+      <h3 style="margin-top:0; color:var(--accent-green);">2. 人类数据使用情况：确定为 0% 人类数据</h3>
+      <ul>
+        <li><strong>无模仿学习痕迹</strong>：在整个项目中没有任何 <code>imitation</code>、<code>behavioral_cloning</code>、<code>human_demonstration</code>、专家轨迹回放解析等依赖。</li>
+        <li><strong>全部依赖自博弈 (Self-Play)</strong>：
+          旧版模型路径 <code>pop-2v2-context-deployment-v8-g000-deterministic-selfplay</code> 直接写明了 <code>selfplay</code>（自博弈种群训练）。
+        </li>
+        <li><strong>环境冷启动全靠精心设计的“强化学习课程 (Curriculums)”</strong>：
+          炸弹人游戏如果直接冷启动自博弈，智能体会陷入自杀和漫无目的乱逛。作者通过在 <code>batch.go</code> 中手工构建了 6 大合成课程（微型训练关卡），让智能体在特定场景下纯通过奖励探索成长：
+          <ul>
+            <li><code>BombEscapeCurriculum</code>：起手脚下直接刷雷，强迫学习躲雷逃生。</li>
+            <li><code>DevelopmentCurriculum</code>：出生在藏有道具的软墙旁，引导破坏与吃道具。</li>
+            <li><code>BlockadeCurriculum</code>：双方出生在狭窄走廊两端，训练卡位与封路。</li>
+            <li><code>ChainFinisherCurriculum</code>：预埋连环泡阵，训练连环爆破与终结技巧。</li>
+            <li><code>DuelCurriculum</code>：直接进入清空障碍的 1v1 残局，学习残局对抗。</li>
+            <li><code>LateDuelReplay</code>：捕获普通局中打到决胜阶段的真实状态进行反复微调。</li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+
+    <div class="card" style="margin-bottom: 20px;">
+      <h3 style="margin-top:0; color:var(--accent-gold);">3. 强化学习算法本质：On-Policy 还是 Off-Policy？</h3>
+      <table style="margin-top:10px;">
+        <thead>
+          <tr>
+            <th>特性</th>
+            <th>判定结果</th>
+            <th>技术论据</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>基础算法族</strong></td>
+            <td><strong>Policy Gradient / Actor-Critic</strong></td>
+            <td>在代码多处（如 <code>batch.go:41</code>）直接注明 <em>"makes rare endgame blockade states frequent enough for policy-gradient training"</em>，且输出层为包含 Logits 与对应价值网络的典型 Actor-Critic 结构。</td>
+          </tr>
+          <tr>
+            <td><strong>数据时效性属性</strong></td>
+            <td><strong>Near On-Policy (近似同策略)</strong></td>
+            <td>
+              • 不是纯 DQN / SAC / TD3 类带巨大重放缓冲区（Replay Buffer）的典型 Off-Policy。<br>
+              • 因为模型包含 <strong>全局 Recurrent Memory (Hidden=256)</strong>，长序列循环神经网络在强 Off-Policy（大时序偏移旧数据）下极易发散，必须采用维持截断时序 BPTT 的同策略或轻微异策略算法。<br>
+              • 目录名 <code>checkpoints-async</code> 表明采样与训练是异步并发的，采样到的样本策略与训练步有 1~2 步的小幅策略延迟（Policy Lag），通常配合类似 <strong>APPO (Asynchronous PPO)</strong> 或 <strong>IMPALA (带有 V-trace 权重修正)</strong> 来解决轻微异策略问题。
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 与我们项目的训练对比 -->
+    <h2>二、 对方训练体系 vs 我们项目 (qqt-gpu-sim) 训练对比</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>对比维度</th>
+          <th style="color:var(--accent-blue);">对方 (QQTang / kuuhaku1314)</th>
+          <th style="color:var(--accent-green);">我们当前项目 (qqt-gpu-sim)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>仿真与采集环境</strong></td>
+          <td>Go 编写的 CPU 多线程原生引擎（<code>battleenv.Batch</code>，单机多核推进）</td>
+          <td>纯 Python/CUDA/Triton/JAX 打造的 <strong>GPU 原生并行环境</strong>（单卡并发生存数千个 Env）</td>
+        </tr>
+        <tr>
+          <td><strong>训练算法范式</strong></td>
+          <td><strong>Asynchronous Policy Gradient (异步策略梯度)</strong><br>CPU 采样 -> IPC / CGO / Socket 传输 -> PyTorch Learner 异步更新</td>
+          <td><strong>Synchronous PPO / High-Throughput On-Policy</strong><br>环境与训练全部驻留在显存内部，零通信开销，毫秒级跨卡同步</td>
+        </tr>
+        <tr>
+          <td><strong>时序训练开销 (BPTT)</strong></td>
+          <td><strong>必须截断 BPTT (Recurrent Hidden=256)</strong><br>每个智能体必须在时间步上顺序向前传递 Memory，增加训练复杂度</td>
+          <td><strong>无状态前馈 (Feed-Forward ViT)</strong><br>依靠 250ms 余威与引信通道实现马尔可夫化，单批次任意打乱高效并行训练</td>
+        </tr>
+        <tr>
+          <td><strong>课程学习机制</strong></td>
+          <td><strong>代码显式定制关卡课程 (Rule-based Curriculum)</strong><br>通过 6 种预设课程概率按千分比（Permille）注入特定微型对局</td>
+          <td><strong>自动自博弈模型池演进 (Self-Play Model Pool) + 地图生成</strong><br>依靠策略模型池的历史快照对抗，自适应演进胜率</td>
+        </tr>
+      </tbody>
+    </table>
+
+  </div>
+</body>
+</html>

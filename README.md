@@ -158,6 +158,14 @@
 
 ## 做法（现行 JAX 管线速览）
 
+### 🧠 模型网络架构（7.5M ViT Dual-Sequence Transformer）
+
+<p align="center">
+  <img src="docs/model_architecture_analysis/paper_architecture.svg" alt="Fig 1(a). Ours: 7.5M ViT Dual-Sequence Transformer Architecture" width="100%">
+  <br>
+  <em>图 1(a). 7.5M 参数 ViT 双序列 Transformer 架构：将 13×15 棋盘切分为 25 个 3×3 空间 Patch Token，与 1 个全局状态标量 Token 拼接输入 4 层 Pre-LN Transformer 进行全图自注意力推理，解耦输出因子化动作（5 移动 × 2 放泡）与 HL-Gauss 128 桶价值评估。</em>
+</p>
+
 - **模拟器**（`jax_bomb/jax_env.py`）：13×15 网格、10Hz、双玩家 5+2 双头动作；`lax.scan` 全张量 rollout，auto-reset 就地开新局；危险图/推箱/宝箱/引信连锁全部纯张量；与 Web JS 编码逐位对拍（`quick_check_js_jax_*.py`）。
 - **网络**（`jax_bomb/jax_net.py`）：ViT 式 patch token + 全局状态向量作 state token（双序列输入），bf16 计算 / fp32 输出；策略头（move 5 × bomb 2，非法动作 −inf 掩码）+ HL-Gauss 分类价值头。
 - **训练**（`jax_bomb/multicard_train.py`）：`pmap` 跨卡跨机（`jax.distributed.initialize` + RCCL），rollout→GAE→minibatch PPO→LSGD 周期参数同步；课程/门禁/退火在训练循环里热切换（同 shape 不重编译）。

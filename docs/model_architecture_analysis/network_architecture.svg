@@ -1,0 +1,204 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 950" width="100%" height="100%" style="background:#0d1117; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <defs>
+    <linearGradient id="grad-spatial" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1f6feb"/>
+      <stop offset="100%" stop-color="#093c8a"/>
+    </linearGradient>
+    <linearGradient id="grad-scalar" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#238636"/>
+      <stop offset="100%" stop-color="#114a1e"/>
+    </linearGradient>
+    <linearGradient id="grad-fusion" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8957e5"/>
+      <stop offset="100%" stop-color="#4c2889"/>
+    </linearGradient>
+    <linearGradient id="grad-recurrent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d29922"/>
+      <stop offset="100%" stop-color="#7a550d"/>
+    </linearGradient>
+    <linearGradient id="grad-moe" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#da3633"/>
+      <stop offset="100%" stop-color="#781816"/>
+    </linearGradient>
+    <linearGradient id="grad-output" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f0883e"/>
+      <stop offset="100%" stop-color="#91450a"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrow-gold" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#d29922"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#3fb950"/>
+    </marker>
+  </defs>
+
+  <!-- Title Header -->
+  <text x="600" y="45" fill="#f0f6fc" font-size="24" font-weight="700" text-anchor="middle" letter-spacing="0.5">QQTang ONNX Actor 架构全景图 (V255-U32 / Contract v2)</text>
+  <text x="600" y="75" fill="#8b949e" font-size="14" text-anchor="middle">变体: routed-multiplayer-context-tactical-recurrent-backbone-factorized-candidate-v4 | 总参数量: 3.201M (3,201,029)</text>
+
+  <!-- Section 1: Inputs -->
+  <g transform="translate(60, 110)">
+    <!-- Spatial Input -->
+    <rect x="0" y="0" width="220" height="95" rx="8" fill="#161b22" stroke="#1f6feb" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="110" y="28" fill="#58a6ff" font-size="16" font-weight="600" text-anchor="middle">Spatial Grid (网格空间)</text>
+    <text x="110" y="52" fill="#c9d1d9" font-size="13" text-anchor="middle">[-1, 91, 13, 15] + Coord(2)</text>
+    <text x="110" y="74" fill="#8b949e" font-size="11" text-anchor="middle">地形/实体/危险/拾取/行为</text>
+
+    <!-- Scalar Input -->
+    <rect x="250" y="0" width="220" height="95" rx="8" fill="#161b22" stroke="#238636" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="360" y="28" fill="#3fb950" font-size="16" font-weight="600" text-anchor="middle">Scalar Features (标量)</text>
+    <text x="360" y="52" fill="#c9d1d9" font-size="13" text-anchor="middle">[-1, 182]</text>
+    <text x="360" y="74" fill="#8b949e" font-size="11" text-anchor="middle">自身/队伍/BFS路径/反事实预估</text>
+
+    <!-- Legal Mask Input -->
+    <rect x="500" y="0" width="180" height="95" rx="8" fill="#161b22" stroke="#da3633" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="590" y="28" fill="#f85149" font-size="16" font-weight="600" text-anchor="middle">Legal Mask (动作掩码)</text>
+    <text x="590" y="52" fill="#c9d1d9" font-size="13" text-anchor="middle">[-1, 45] (bool)</text>
+    <text x="590" y="74" fill="#8b949e" font-size="11" text-anchor="middle">掩码过滤非法离散动作</text>
+
+    <!-- Recurrent State Input -->
+    <rect x="710" y="0" width="200" height="95" rx="8" fill="#161b22" stroke="#d29922" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="810" y="28" fill="#d29922" font-size="16" font-weight="600" text-anchor="middle">Memory (隐状态输入)</text>
+    <text x="810" y="52" fill="#c9d1d9" font-size="13" text-anchor="middle">[-1, 256] (float32)</text>
+    <text x="810" y="74" fill="#8b949e" font-size="11" text-anchor="middle">reset: [-1] (bool 对局重置)</text>
+  </g>
+
+  <!-- Section 2: Encoders -->
+  <!-- Spatial Encoder -->
+  <g transform="translate(60, 250)">
+    <rect x="0" y="0" width="220" height="180" rx="8" fill="url(#grad-spatial)" stroke="#388bfd" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="110" y="30" fill="#ffffff" font-size="15" font-weight="600" text-anchor="middle">Spatial Encoder (CNN)</text>
+    <line x1="15" y1="42" x2="205" y2="42" stroke="#58a6ff" stroke-width="1" stroke-opacity="0.4"/>
+    <text x="110" y="65" fill="#f0f6fc" font-size="12" text-anchor="middle">Conv0: 93 → 24 (3x3, P=1) + SiLU</text>
+    <text x="110" y="90" fill="#f0f6fc" font-size="12" text-anchor="middle">Conv1: 24 → 32 (3x3, P=1) + SiLU</text>
+    <text x="110" y="115" fill="#f0f6fc" font-size="12" text-anchor="middle">Conv2: 32 → 32 (3x3, P=1) + SiLU</text>
+    <text x="110" y="145" fill="#79c0ff" font-size="12" font-weight="600" text-anchor="middle">Flatten: 32 × 13 × 15 = 6,240</text>
+    <text x="110" y="165" fill="#d2a8ff" font-size="11" text-anchor="middle">保持全图网格拓扑精度</text>
+  </g>
+
+  <!-- Context / Scalar Concatenation Box -->
+  <g transform="translate(320, 290)">
+    <rect x="0" y="0" width="240" height="100" rx="8" fill="url(#grad-fusion)" stroke="#a371f7" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="120" y="32" fill="#ffffff" font-size="15" font-weight="600" text-anchor="middle">Multi-modal Concatenation</text>
+    <text x="120" y="58" fill="#e1bffa" font-size="13" text-anchor="middle">Spatial(6,240) + Scalars(182)</text>
+    <text x="120" y="82" fill="#ffffff" font-weight="700" font-size="14" text-anchor="middle">Dim = 6,422 (输入 MLP)</text>
+  </g>
+
+  <!-- Agent Dense Encoder -->
+  <g transform="translate(610, 275)">
+    <rect x="0" y="0" width="260" height="130" rx="8" fill="#161b22" stroke="#8957e5" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="130" y="28" fill="#d2a8ff" font-size="15" font-weight="600" text-anchor="middle">Agent Encoder (MLP)</text>
+    <line x1="20" y1="40" x2="240" y2="40" stroke="#8957e5" stroke-width="1" stroke-opacity="0.4"/>
+    <text x="130" y="62" fill="#c9d1d9" font-size="12" text-anchor="middle">Linear0: 6,422 → 192 (1.23M 参数)</text>
+    <text x="130" y="85" fill="#c9d1d9" font-size="12" text-anchor="middle">LayerNorm(192) + SiLU</text>
+    <text x="130" y="108" fill="#c9d1d9" font-size="12" text-anchor="middle">Linear1: 192 → 192 + SiLU</text>
+  </g>
+
+  <!-- Section 3: Recurrent Backbone (Memory Update) -->
+  <g transform="translate(350, 470)">
+    <rect x="0" y="0" width="500" height="110" rx="8" fill="url(#grad-recurrent)" stroke="#e3b341" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="250" y="32" fill="#ffffff" font-size="16" font-weight="700" text-anchor="middle">Recurrent Backbone (GRU / LSTM Block, H=256)</text>
+    <text x="250" y="58" fill="#fff8c5" font-size="13" text-anchor="middle">输入: 当前帧融合特征(192) + 上一步 Memory(256) [条件执行 Reset]</text>
+    <text x="250" y="85" fill="#ffffff" font-size="14" font-weight="600" text-anchor="middle">输出综合表征 Hidden (256) &amp; 状态回写 next_memory (256)</text>
+  </g>
+
+  <!-- Section 4: Routing & Adapter Heads (MoE Layer) -->
+  <!-- Base Actor Head -->
+  <g transform="translate(100, 640)">
+    <rect x="0" y="0" width="180" height="85" rx="8" fill="#161b22" stroke="#58a6ff" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="90" y="28" fill="#58a6ff" font-size="14" font-weight="600" text-anchor="middle">Base Actor Head</text>
+    <text x="90" y="52" fill="#c9d1d9" font-size="12" text-anchor="middle">Linear: 256 → 45</text>
+    <text x="90" y="72" fill="#8b949e" font-size="11" text-anchor="middle">基础全动作分布得分</text>
+  </g>
+
+  <!-- MoE Behavior Router -->
+  <g transform="translate(310, 630)">
+    <rect x="0" y="0" width="220" height="105" rx="8" fill="url(#grad-moe)" stroke="#f85149" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="110" y="28" fill="#ffffff" font-size="14" font-weight="600" text-anchor="middle">Behavior MoE Router</text>
+    <text x="110" y="50" fill="#ffdcd7" font-size="12" text-anchor="middle">Router: 8维行为特征 → 5 Expert</text>
+    <text x="110" y="70" fill="#ffdcd7" font-size="12" text-anchor="middle">Softmax Gating (温度 0.2)</text>
+    <text x="110" y="92" fill="#ffffff" font-size="11" font-weight="600" text-anchor="middle">叠加 5 个专家残差 (45维)</text>
+  </g>
+
+  <!-- Multiplayer Context Adapter -->
+  <g transform="translate(560, 630)">
+    <rect x="0" y="0" width="220" height="105" rx="8" fill="#161b22" stroke="#388bfd" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="110" y="28" fill="#79c0ff" font-size="14" font-weight="600" text-anchor="middle">Multiplayer &amp; Role Branch</text>
+    <text x="110" y="50" fill="#c9d1d9" font-size="12" text-anchor="middle">阵营存在门控 + 角色残差</text>
+    <text x="110" y="70" fill="#c9d1d9" font-size="12" text-anchor="middle">Team Role (0/1) 残差修正</text>
+    <text x="110" y="92" fill="#8b949e" font-size="11" text-anchor="middle">保障 2v2 协同与防误伤</text>
+  </g>
+
+  <!-- Tactical & Finisher Gate -->
+  <g transform="translate(810, 630)">
+    <rect x="0" y="0" width="230" height="105" rx="8" fill="#161b22" stroke="#d29922" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="115" y="28" fill="#e3b341" font-size="14" font-weight="600" text-anchor="middle">Tactical &amp; Finisher Gate</text>
+    <text x="115" y="50" fill="#c9d1d9" font-size="12" text-anchor="middle">Sigmoid 标量安全门控</text>
+    <text x="115" y="70" fill="#c9d1d9" font-size="12" text-anchor="middle">Gate × Residual (紧急躲避)</text>
+    <text x="115" y="92" fill="#8b949e" font-size="11" text-anchor="middle">终结击杀残差叠加</text>
+  </g>
+
+  <!-- Section 5: Logits Fusion & Final Outputs -->
+  <!-- Logits Sum & Masking -->
+  <g transform="translate(340, 780)">
+    <rect x="0" y="0" width="520" height="60" rx="8" fill="#161b22" stroke="#30363d" stroke-width="2" filter="url(#shadow)"/>
+    <text x="260" y="28" fill="#f0f6fc" font-size="14" font-weight="600" text-anchor="middle">Logits 合并与非法动作屏蔽</text>
+    <text x="260" y="48" fill="#8b949e" font-size="12" text-anchor="middle">Total_Logits = Base + Σ(MoE) + Team + Tactical | where(~legal, -1e9, Total_Logits)</text>
+  </g>
+
+  <!-- Outputs -->
+  <g transform="translate(200, 865)">
+    <!-- Logits Output -->
+    <rect x="0" y="0" width="360" height="65" rx="8" fill="url(#grad-output)" stroke="#ff7b72" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="180" y="28" fill="#ffffff" font-size="15" font-weight="700" text-anchor="middle">Action Logits [-1, 45]</text>
+    <text x="180" y="50" fill="#ffdf5d" font-size="12" text-anchor="middle">45 维复合动作 (移动/放泡/道具及组合)</text>
+  </g>
+
+  <g transform="translate(640, 865)">
+    <!-- Memory Output -->
+    <rect x="0" y="0" width="360" height="65" rx="8" fill="url(#grad-recurrent)" stroke="#d29922" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="180" y="28" fill="#ffffff" font-size="15" font-weight="700" text-anchor="middle">Next Memory [-1, 256]</text>
+    <text x="180" y="50" fill="#fff8c5" font-size="12" text-anchor="middle">传递给下个决策帧 (100ms 循环保持)</text>
+  </g>
+
+  <!-- Connectors -->
+  <!-- Spatial to Conv -->
+  <line x1="170" y1="205" x2="170" y2="250" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Spatial Conv to Concat -->
+  <path d="M 280 340 L 320 340" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Scalar to Concat -->
+  <path d="M 370 205 L 370 240 L 440 240 L 440 290" fill="none" stroke="#3fb950" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <!-- Concat to Agent Encoder -->
+  <line x1="560" y1="340" x2="610" y2="340" stroke="#a371f7" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Agent Encoder to Recurrent Backbone -->
+  <path d="M 740 405 L 740 435 L 600 435 L 600 470" fill="none" stroke="#a371f7" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Memory In to Recurrent Backbone -->
+  <path d="M 810 205 L 810 435 L 700 435 L 700 470" fill="none" stroke="#d29922" stroke-width="2" marker-end="url(#arrow-gold)"/>
+
+  <!-- Recurrent to Heads -->
+  <path d="M 600 580 L 600 605 L 190 605 L 190 640" fill="none" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M 600 580 L 600 605 L 420 605 L 420 630" fill="none" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M 600 580 L 600 605 L 670 605 L 670 630" fill="none" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M 600 580 L 600 605 L 925 605 L 925 630" fill="none" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Heads to Logits Fusion -->
+  <path d="M 190 725 L 190 755 L 430 755 L 430 780" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M 420 735 L 420 755 L 500 755 L 500 780" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M 670 735 L 670 755 L 600 755 L 600 780" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M 925 735 L 925 755 L 700 755 L 700 780" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Legal Mask to Fusion -->
+  <path d="M 590 205 L 590 245 L 895 245 L 895 765 L 780 765 L 780 780" fill="none" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#arrow)"/>
+
+  <!-- Fusion to Final Logits -->
+  <line x1="500" y1="840" x2="380" y2="865" stroke="#ff7b72" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Recurrent to Next Memory -->
+  <path d="M 750 580 L 750 605 L 1060 605 L 1060 840 L 820 840 L 820 865" fill="none" stroke="#d29922" stroke-width="2" marker-end="url(#arrow-gold)"/>
+
+</svg>

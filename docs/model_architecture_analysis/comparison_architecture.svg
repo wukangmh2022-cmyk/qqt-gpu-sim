@@ -1,0 +1,172 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 1050" width="100%" height="100%" style="background:#090d13; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <defs>
+    <!-- Gradients for Their Model -->
+    <linearGradient id="g-theirs-header" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1f6feb"/>
+      <stop offset="100%" stop-color="#093c8a"/>
+    </linearGradient>
+    <linearGradient id="g-theirs-block" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#161b22"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </linearGradient>
+
+    <!-- Gradients for Our Model -->
+    <linearGradient id="g-ours-header" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#238636"/>
+      <stop offset="100%" stop-color="#114a1e"/>
+    </linearGradient>
+    <linearGradient id="g-ours-attn" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8957e5"/>
+      <stop offset="100%" stop-color="#4c2889"/>
+    </linearGradient>
+
+    <filter id="box-shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.6"/>
+    </filter>
+
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#3fb950"/>
+    </marker>
+  </defs>
+
+  <!-- Main Title -->
+  <text x="650" y="42" fill="#f0f6fc" font-size="24" font-weight="700" text-anchor="middle" letter-spacing="0.5">QQ堂 AI 模型架构深度横向对决 (7.5M ViT Transformer vs 3.2M Hybrid Recurrent MoE)</text>
+  <text x="650" y="70" fill="#8b949e" font-size="14" text-anchor="middle">决策节奏完全同频 (10 Hz / 100 ms) | 左侧: 对方实机部署模型 | 右侧: 本项目最新 7.5M JAX Transformer</text>
+
+  <!-- Background Splitter Panels -->
+  <!-- Left Side: Theirs -->
+  <rect x="30" y="90" width="590" height="930" rx="12" fill="#0d1117" stroke="#1f6feb" stroke-width="1.5" stroke-opacity="0.4"/>
+  <rect x="30" y="90" width="590" height="50" rx="12" fill="url(#g-theirs-header)" />
+  <rect x="30" y="125" width="590" height="15" fill="url(#g-theirs-header)" />
+  <text x="325" y="122" fill="#ffffff" font-size="16" font-weight="700" text-anchor="middle">对方: 3.2M 混合循环门控网 (Hybrid Recurrent MoE)</text>
+
+  <!-- Right Side: Ours -->
+  <rect x="680" y="90" width="590" height="930" rx="12" fill="#0d1117" stroke="#238636" stroke-width="1.5" stroke-opacity="0.4"/>
+  <rect x="680" y="90" width="590" height="50" rx="12" fill="url(#g-ours-header)" />
+  <rect x="680" y="125" width="590" height="15" fill="url(#g-ours-header)" />
+  <text x="975" y="122" fill="#ffffff" font-size="16" font-weight="700" text-anchor="middle">我们: 7.52M 视觉 Transformer (ViT 双序列模型)</text>
+
+  <!-- ==================== LEFT COLUMN: THEIRS ==================== -->
+  <!-- Level 1: Input -->
+  <g transform="translate(50, 160)">
+    <rect x="0" y="0" width="550" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1" filter="url(#box-shadow)"/>
+    <text x="20" y="26" fill="#58a6ff" font-size="14" font-weight="600">多模态异构输入 (Heterogeneous Input)</text>
+    <text x="20" y="50" fill="#c9d1d9" font-size="12">1. 空间张量 Spatial: [-1, 91, 13, 15] (含微观位移/行为频率/道具)</text>
+    <text x="20" y="70" fill="#c9d1d9" font-size="12">2. 标量向量 Scalars: [-1, 182] (BFS寻路向量 + 4方向反事实危险预估)</text>
+  </g>
+
+  <!-- Level 2: Spatial CNN + Flat Concat -->
+  <g transform="translate(50, 275)">
+    <rect x="0" y="0" width="550" height="110" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1" filter="url(#box-shadow)"/>
+    <text x="20" y="26" fill="#79c0ff" font-size="14" font-weight="600">空间编码器 (Spatial CNN) 与密集拼接</text>
+    <text x="20" y="50" fill="#8b949e" font-size="12">3 层卷积 (93→24→32→32, 3x3) + SiLU 激活</text>
+    <text x="20" y="70" fill="#c9d1d9" font-size="12">空间展平: 32 × 13 × 15 = 6,240 维</text>
+    <text x="20" y="92" fill="#ff7b72" font-size="12" font-weight="600">拼接后全连接 Linear0: 6,422 → 192 (单层参数高达 1.23 M)</text>
+  </g>
+
+  <!-- Level 3: Temporal Recurrent Backbone -->
+  <g transform="translate(50, 410)">
+    <rect x="0" y="0" width="550" height="100" rx="8" fill="#161b22" stroke="#d29922" stroke-width="1.5" filter="url(#box-shadow)"/>
+    <text x="20" y="26" fill="#d29922" font-size="14" font-weight="600">循环时序记忆层 (Recurrent Backbone, GRU/LSTM)</text>
+    <text x="20" y="50" fill="#c9d1d9" font-size="12">隐层大小: Hidden = 256 (循环参数量 ≈ 34.4 万)</text>
+    <text x="20" y="72" fill="#c9d1d9" font-size="12">外部管理隐状态 Memory，跨 100ms 决策 Tick 递推传递</text>
+    <text x="20" y="92" fill="#8b949e" font-size="11">机制: 串行隐状态维护，支持随时重置 (Reset Flag)</text>
+  </g>
+
+  <!-- Level 4: MoE & Tactical Gating -->
+  <g transform="translate(50, 535)">
+    <rect x="0" y="0" width="550" height="135" rx="8" fill="#161b22" stroke="#f85149" stroke-width="1" filter="url(#box-shadow)"/>
+    <text x="20" y="26" fill="#f85149" font-size="14" font-weight="600">多专家行为路由与战术门控 (MoE &amp; Adapters)</text>
+    <text x="20" y="50" fill="#c9d1d9" font-size="12">• 行为路由: 8维行为特征 → 5个子策略专家 (Softmax 加权)</text>
+    <text x="20" y="70" fill="#c9d1d9" font-size="12">• 团队协同: 2v2 阵营角色专属残差向量叠加</text>
+    <text x="20" y="90" fill="#c9d1d9" font-size="12">• 战术门控: Sigmoid 连续门控 × 45维紧急规避/收尾残差</text>
+    <text x="20" y="112" fill="#8b949e" font-size="11">特点: 人工引导的模块化解耦分支，支持专家微调</text>
+  </g>
+
+  <!-- Level 5: Heads & Output -->
+  <g transform="translate(50, 695)">
+    <rect x="0" y="0" width="550" height="100" rx="8" fill="#161b22" stroke="#58a6ff" stroke-width="1.5" filter="url(#box-shadow)"/>
+    <text x="20" y="26" fill="#58a6ff" font-size="14" font-weight="600">统一单头动作空间 (Unified Discrete Head)</text>
+    <text x="20" y="50" fill="#c9d1d9" font-size="13">输出: 45 维离散动作 Logits (加权叠加所有 MoE/残差分支)</text>
+    <text x="20" y="72" fill="#8b949e" font-size="12">语义: 停(1) + 移(4) + 放(1) + 边走边放(4) + 7种道具使用(7) + 移动用道具(28)</text>
+    <text x="20" y="92" fill="#f85149" font-size="11">掩码: 采用外部 Legal Mask 广播过滤非法离散动作 (-1e9)</text>
+  </g>
+
+  <!-- Left Specs Summary -->
+  <g transform="translate(50, 815)">
+    <rect x="0" y="0" width="550" height="185" rx="8" fill="#11161d" stroke="#30363d" stroke-width="1"/>
+    <text x="20" y="26" fill="#58a6ff" font-size="14" font-weight="700">技术定位与指标</text>
+    <text x="20" y="52" fill="#c9d1d9" font-size="12">• 总参数量: 3,201,029 (约 3.20 M)</text>
+    <text x="20" y="74" fill="#c9d1d9" font-size="12">• 算力平台: CPU 生产服单线程部署 (ONNX Runtime)</text>
+    <text x="20" y="96" fill="#c9d1d9" font-size="12">• 核心哲学: 外部注入大量符号知识与启发式反事实预警</text>
+    <text x="20" y="118" fill="#c9d1d9" font-size="12">• 优势场景: 生产服规则完整度高、含 7 种复杂道具、极度防暴毙</text>
+    <text x="20" y="140" fill="#8b949e" font-size="12">• 瓶颈缺陷: 依赖外部繁重 BFS，难以在大规模 GPU 并行中扩展吞吐</text>
+  </g>
+
+  <!-- ==================== RIGHT COLUMN: OURS ==================== -->
+  <!-- Level 1: Input & Patchify -->
+  <g transform="translate(700, 160)">
+    <rect x="0" y="0" width="550" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1" filter="url(#box-shadow)"/>
+    <text x="20" y="26" fill="#3fb950" font-size="14" font-weight="600">Patch 化空间编码 + State Token (双序列输入)</text>
+    <text x="20" y="50" fill="#c9d1d9" font-size="12">1. 空间网格: [-1, 14, 13, 15] 经 Patch=3 切割成 25 个空间 Tokens</text>
+    <text x="20" y="70" fill="#c9d1d9" font-size="12">2. 全局状态: [-1, 24] 经独立线性投影为第 26 个 State Token</text>
+  </g>
+
+  <!-- Level 2: Embedding & Positional Encoding -->
+  <g transform="translate(700, 275)">
+    <rect x="0" y="0" width="550" height="110" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1" filter="url(#box-shadow)"/>
+    <text x="20" y="26" fill="#7ee787" font-size="14" font-weight="600">线性嵌入与高维可学习位置编码 (Embedding &amp; Pos)</text>
+    <text x="20" y="50" fill="#c9d1d9" font-size="12">Patch Token 维度: 14通道 × 3 × 3 = 126 维 → 线性投影至 Embed=392</text>
+    <text x="20" y="70" fill="#c9d1d9" font-size="12">State Token 维度: 24维状态 → 线性投影至 Embed=392</text>
+    <text x="20" y="92" fill="#3fb950" font-size="12" font-weight="600">序列长度: 26 个 Token (全域全局可微，感受野瞬间拉满)</text>
+  </g>
+
+  <!-- Level 3: Deep Transformer Blocks -->
+  <g transform="translate(700, 410)">
+    <rect x="0" y="0" width="550" height="155" rx="8" fill="#161b22" stroke="#8957e5" stroke-width="1.5" filter="url(#box-shadow)"/>
+    <text x="20" y="26" fill="#d2a8ff" font-size="14" font-weight="600">4 层标准 Transformer 编码器 (Depth = 4, Pre-LN)</text>
+    <text x="20" y="50" fill="#c9d1d9" font-size="12">• 嵌入维度: Embed = 392, 多头注意力 Heads = 4 (每头 d = 98)</text>
+    <text x="20" y="72" fill="#c9d1d9" font-size="12">• 自注意力自适应建模: 空间地块与血量/速度全局交叉关联推理</text>
+    <text x="20" y="94" fill="#c9d1d9" font-size="12">• 前馈网络: FF Factor = 4 (392 → 1568 → 392)</text>
+    <text x="20" y="116" fill="#bc8cff" font-size="12" font-weight="600">单层 Block 参数: ≈ 1.85 M × 4 层 = 7.40 M 参数</text>
+    <text x="20" y="136" fill="#8b949e" font-size="11">计算精度: 权重与前向纯 bf16，Softmax 保持 fp32</text>
+  </g>
+
+  <!-- Level 4: Pooling & Decoupled Factorized Heads -->
+  <g transform="translate(700, 590)">
+    <rect x="0" y="0" width="550" height="120" rx="8" fill="#161b22" stroke="#3fb950" stroke-width="1.5" filter="url(#box-shadow)"/>
+    <text x="20" y="26" fill="#3fb950" font-size="14" font-weight="600">Token 平均池化与因子化双策略头 + 分布式价值头</text>
+    <text x="20" y="50" fill="#c9d1d9" font-size="12">池化策略: 空间 25 个 Patch Tokens 做全局平均池化 (GAP → 392维)</text>
+    <text x="20" y="70" fill="#c9d1d9" font-size="12">• 移动头 Move Head: 392 → 5 (上下左右停独立概率分布)</text>
+    <text x="20" y="90" fill="#c9d1d9" font-size="12">• 放泡头 Bomb Head: 392 → 2 (放/不放独立概率分布，边跑边放)</text>
+    <text x="20" y="110" fill="#c9d1d9" font-size="12">• 价值头 Value Head: 392 → 128 (HL-Gauss 分布式分类价值桶)</text>
+  </g>
+
+  <!-- Level 5: Actions -->
+  <g transform="translate(700, 730)">
+    <rect x="0" y="0" width="550" height="65" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1" filter="url(#box-shadow)"/>
+    <text x="20" y="26" fill="#7ee787" font-size="14" font-weight="600">因子化动作联合概率 (Factorized Joint Actions)</text>
+    <text x="20" y="50" fill="#8b949e" font-size="12">logp_total = logp(move) + logp(bomb) | 规则解耦，消除动作冗余</text>
+  </g>
+
+  <!-- Right Specs Summary -->
+  <g transform="translate(700, 815)">
+    <rect x="0" y="0" width="550" height="185" rx="8" fill="#11161d" stroke="#30363d" stroke-width="1"/>
+    <text x="20" y="26" fill="#3fb950" font-size="14" font-weight="700">技术定位与指标</text>
+    <text x="20" y="52" fill="#c9d1d9" font-size="12">• 总参数量: 7,519,087 (精确 7.519 M，对齐 Average Joe ICML 2026)</text>
+    <text x="20" y="74" fill="#c9d1d9" font-size="12">• 算力平台: 高性能 GPU / DCU / 910B 纯 JAX/XLA 高速训练</text>
+    <text x="20" y="96" fill="#c9d1d9" font-size="12">• 核心哲学: 端到端强化学习自学全图关联，大模型表征泛化</text>
+    <text x="20" y="118" fill="#c9d1d9" font-size="12">• 优势场景: 极致的并行采样吞吐、超强空间上下文推理与泛化能力</text>
+    <text x="20" y="140" fill="#8b949e" font-size="12">• 瓶颈缺陷: Attention 二次开销在端侧 CPU 推理需要针对性算子融合</text>
+  </g>
+
+  <!-- Center Comparative Highlight Badge -->
+  <g transform="translate(565, 30)">
+    <rect x="0" y="0" width="170" height="36" rx="18" fill="#21262d" stroke="#f0883e" stroke-width="1.5"/>
+    <text x="85" y="23" fill="#f0883e" font-size="13" font-weight="700" text-anchor="middle">决策赫兹: 同为 10Hz</text>
+  </g>
+
+</svg>

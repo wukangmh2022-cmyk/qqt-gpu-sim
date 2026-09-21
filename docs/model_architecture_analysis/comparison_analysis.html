@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>QQ堂 AI 架构巅峰对比：7.5M 视觉 Transformer vs 3.2M 混合循环门控网</title>
+  <style>
+    :root {
+      --bg-primary: #090d13;
+      --bg-secondary: #161b22;
+      --border-color: #30363d;
+      --text-main: #c9d1d9;
+      --text-bright: #f0f6fc;
+      --text-muted: #8b949e;
+      --accent-blue: #58a6ff;
+      --accent-green: #3fb950;
+      --accent-gold: #d29922;
+      --accent-purple: #bc8cff;
+      --accent-red: #f85149;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      margin: 0;
+      padding: 30px;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 1300px;
+      margin: 0 auto;
+    }
+    h1, h2, h3 {
+      color: var(--text-bright);
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 8px;
+    }
+    h1 {
+      font-size: 28px;
+      border-bottom: 2px solid var(--accent-purple);
+      margin-bottom: 24px;
+    }
+    h2 {
+      font-size: 20px;
+      margin-top: 36px;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px 20px;
+    }
+    .card .value {
+      font-size: 24px;
+      font-weight: 700;
+      margin: 4px 0;
+    }
+    .card .desc {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      border: 1px solid var(--border-color);
+      padding: 12px 16px;
+      text-align: left;
+    }
+    th {
+      background-color: #21262d;
+      color: var(--text-bright);
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background-color: rgba(255, 255, 255, 0.02);
+    }
+    .hl-ours {
+      color: var(--accent-green);
+      font-weight: 600;
+    }
+    .hl-theirs {
+      color: var(--accent-blue);
+      font-weight: 600;
+    }
+    code {
+      background-color: rgba(110, 118, 129, 0.2);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+    }
+    .svg-container {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+      margin: 24px 0;
+    }
+    .svg-container object {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>QQ堂 AI 架构深度横向对决</h1>
+    <p class="desc" style="color:var(--text-muted); margin-bottom:24px;">
+      对比对象：<strong>对方实机部署模型</strong> (<code>kuuhaku1314/qqtang: qqtang-rule1.onnx</code>) vs <strong>我们最新 7.5M 视觉 Transformer 模型</strong> (<code>qqt-gpu-sim: jax_bomb_v2/jax_net.py: init_transformer</code>)
+    </p>
+
+    <!-- 关键指标速览 -->
+    <div class="summary-grid">
+      <div class="card">
+        <div class="desc">我们项目 Transformer 参数量 (Our Model)</div>
+        <div class="value" style="color:var(--accent-green);">7,519,087</div>
+        <div class="desc">精准 <strong>7.519 M</strong> (ViT patch=3, embed=392, depth=4)</div>
+      </div>
+      <div class="card">
+        <div class="desc">对方部署模型参数量 (Their Model)</div>
+        <div class="value" style="color:var(--accent-blue);">3,201,029</div>
+        <div class="desc">实测 <strong>3.201 M</strong> (ONNX 权重 12.33 MB)</div>
+      </div>
+      <div class="card">
+        <div class="desc">决策执行频率 (AI Decision Rate)</div>
+        <div class="value" style="color:var(--accent-gold);">10 Hz 同频</div>
+        <div class="desc">两家均统一为 <strong>100 ms 一步决策</strong> (10 次决策/秒)</div>
+      </div>
+      <div class="card">
+        <div class="desc">核心范式对决 (Paradigm Battle)</div>
+        <div class="value" style="color:var(--accent-purple);">ViT vs CNN+MoE+Recurrent</div>
+        <div class="desc">端到端自注意力全图推理 vs 符号先验+多专家门控修正</div>
+      </div>
+    </div>
+
+    <!-- 形象化网络结构对比图 -->
+    <h2>一、 架构横向对照全景图 (SVG 结构图)</h2>
+    <p>下图左右对称展示了两套体系从输入、表征、核心主干到动作输出的完整计算图：</p>
+    <div class="svg-container">
+      <object data="comparison_architecture.svg" type="image/svg+xml" style="width: 100%; min-height: 950px;"></object>
+      <p class="desc" style="margin-top: 10px;">如果未正常加载，请直接查看同级目录下的 <a href="comparison_architecture.svg" target="_blank" style="color:var(--accent-blue);">comparison_architecture.svg</a></p>
+    </div>
+
+    <!-- 对比分析表格 -->
+    <h2>二、 核心指标与设计理念全方位深度对比</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>对比维度</th>
+          <th class="hl-theirs">对方实机部署模型 (3.2M Hybrid MoE)</th>
+          <th class="hl-ours">我们最新主力模型 (7.5M ViT Transformer)</th>
+          <th>深度技术权衡与评价</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>决策赫兹 (Hz)</strong></td>
+          <td><strong>10 Hz (100 ms/步)</strong><br><span style="color:var(--text-muted); font-size:12px;">物理引擎 50 Hz (20ms/Tick)，AI 决策跨 5 个物理帧维持执行</span></td>
+          <td><strong>10 Hz (100 ms/步)</strong><br><span style="color:var(--text-muted); font-size:12px;"><code>tick_hz = 10</code>，纯 JAX 环境下逻辑帧率与决策帧率完全对齐</span></td>
+          <td><strong>节奏完全同频</strong>。炸弹人游戏如果赫兹过高（如 50Hz）单步位移太小、决策动作过于碎裂；10Hz（100ms）单步位移在 0.36 格左右，符合人类极限微操并具备足够的战术走位跨度。</td>
+        </tr>
+        <tr>
+          <td><strong>总参数量 (Capacity)</strong></td>
+          <td><strong>3,201,029 (约 3.20 M)</strong><br><span style="color:var(--text-muted); font-size:12px;">单层 Linear0 (6422→192) 占 1.23M，循环层约 0.34M，MoE 专家层分散占用</span></td>
+          <td><strong>7,519,087 (精确 7.519 M)</strong><br><span style="color:var(--text-muted); font-size:12px;">4 个 Transformer Block 占 7.40M（每层约 1.85M 参数），Embed=392</span></td>
+          <td><strong>我们的模型容量是对方的 2.35 倍</strong>。我们采用 7.5M 大容量 Transformer 依靠数据规模与大规模自博弈，将复杂的全域交互内化进深度注意力权重；对方模型容量相对克制，为了确保在各种低配 CPU 上轻巧运行。</td>
+        </tr>
+        <tr>
+          <td><strong>输入特征与序列化</strong></td>
+          <td><strong>多模态异构输入</strong><br>
+            • 空间: <code>[-1, 91, 13, 15]</code> (含亚像素偏移、朝向、行为频率、道具)<br>
+            • 标量: <code>[-1, 182]</code> (含 4 组 BFS 寻路向量 + 反事实安全预估)
+          </td>
+          <td><strong>Patch 空间切块 + 双序列架构</strong><br>
+            • 空间: <code>[-1, 14, 13, 15]</code> 经 Patch=3 切割为 <strong>25 个空间 Tokens</strong><br>
+            • 标量: <code>[-1, 24]</code> 经线性映射为第 <strong>26 个 State Token</strong>
+          </td>
+          <td>对方依赖海量工程特征工程（将很多本该网络学的东西——如 BFS 找路、放泡会不会炸到自己——算成先验直接喂给模型）；我们采用 <strong>ViT 双序列架构</strong>（对齐 Average Joe ICML 2026），将纯净的物理状态交给 Self-Attention 自行计算地块与状态的交叉关联。</td>
+        </tr>
+        <tr>
+          <td><strong>骨干特征提取架构</strong></td>
+          <td><strong>浅层 CNN (3层) + 巨大 Flatten MLP</strong><br>3层卷积提取空间拓扑后直接展平成 6,240 维，与 182 维标量拼接进入 192 宽度的全连接层。</td>
+          <td><strong>4 层深层 Transformer 编码器 (Pre-LN)</strong><br>全域自注意力（4 头，头维度 98，前馈倍数 4），Token 间具备全连通感受野，天然捕捉全图长程依赖。</td>
+          <td>CNN 的局部归纳偏置更适合初学，但难以捕捉“屏幕左上角的一颗引信为1的泡泡和右下角我的逃生路线”这种超长距离跨格因果；我们的 <strong>Self-Attention 在第 1 层就能实现全图任两格的信息直接交互</strong>。</td>
+        </tr>
+        <tr>
+          <td><strong>时序记忆机制 (Temporal)</strong></td>
+          <td><strong>隐式全局 Recurrent Memory (GRU/LSTM, H=256)</strong><br>由外部宿主管理每个虚拟选手的私有时序状态，跨 Tick 维护并支持 Reset。</td>
+          <td><strong>无时序 (纯前馈 Transformer)</strong><br>通过在通道中注入“当前爆炸余威（250ms）、引信倒计时、各玩家动态”构建<strong>完全马尔可夫化观测</strong>。</td>
+          <td>对方通过显式 RNN 弥补视野外的记忆；我们则通过高质量的物理通道工程消除了对时序隐状态的依赖，<strong>彻底摆脱了 RNN 无法并行、BPTT 难以跨卡扩展的训练枷锁</strong>，极大提升了分布式训练 SPS。</td>
+        </tr>
+        <tr>
+          <td><strong>策略解耦与动作空间</strong></td>
+          <td><strong>45 维单一离散动作空间 (Unified Discrete)</strong><br>停(1) + 移(4) + 放(1) + 边走边放(4) + 7种道具单发(7) + 28种边移边用道具。</td>
+          <td><strong>因子化独立双头 (Factorized Heads)</strong><br>移动头 (5类: 上下左右停) × 放泡头 (2类: 放/不放)；动作联合概率直接相加。</td>
+          <td>对方为了完全复刻原版 7 种复杂道具的任意组合，将动作扁平化为 45 维；我们专注于纯粹的格斗竞技，双头解耦不仅参数精炼，而且在动作采样时互不干扰，探索空间结构更清晰。</td>
+        </tr>
+        <tr>
+          <td><strong>价值函数建模</strong></td>
+          <td><strong>简单标量值输出 (Scalar Critic)</strong><br>单值输出，估计对局胜率/期望回报。</td>
+          <td><strong>HL-Gauss 分布式分类价值头 (128 Bins)</strong><br>在 [-20, 20] 连续区间用 128 个高斯平滑桶做离散分类，期望值加权求和。</td>
+          <td><strong>我们项目的领先技术</strong>。分类化价值分布（HL-Gauss）能够极大降低极端击杀/阵亡奖励带来的价值梯度震荡，让 7.5M 大模型的 Critic 在多智能体博弈剧烈波动中极度稳定。</td>
+        </tr>
+        <tr>
+          <td><strong>多智能体协作与安全性</strong></td>
+          <td><strong>显式 MoE (5专家) + 战术/收尾门控残差</strong><br>人工设计了专家路由与 Sigmoid 战术安全门控，关键时刻通过外部门控强行纠偏。</td>
+          <td><strong>自注意力隐式建模 + 纯自博弈演化</strong><br>将队友/对手位置在 Attention 机制中平等建模，完全依赖强化学习内在价值驱动策略演进。</td>
+          <td>对方具有极强的“工程可控性”（可针对特定专家打补丁）；我们的方案具有更高的上限与鲁棒性，不会被人工预设的门控规则束缚策略灵性。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- 总结陈词 -->
+    <h2>三、 核心结论与工程启示</h2>
+    <div class="card" style="margin-top: 16px;">
+      <h3 style="margin-top: 0; color:var(--accent-green);">1. 为什么我们选择 7.5M Transformer 而非他们这种 CNN+RNN？</h3>
+      <p>对方设计于<strong>低算力 CPU 游戏服务器运行</strong>，因此必须用人工先验（BFS、反事实避难特征、残差门控）来弥补模型表征能力的不足。而我们面向<strong>超大规模 GPU/DCU/910B 现代异构集群</strong>，端到端 Transformer 拥有更强的一般性表征能力与 Scaling Law 潜力，无需维护复杂脆弱的启发式代码即可自发学会长程封路与战术博弈。</p>
+    </div>
+
+    <div class="card" style="margin-top: 16px;">
+      <h3 style="margin-top: 0; color:var(--accent-blue);">2. 对方架构有哪些值得我们吸收的地方？</h3>
+      <ul>
+        <li><strong>道具与动作空间扩展</strong>：如果我们未来需要引入原版全套道具（解救针、飞镖、变身药水），可以参考对方将组合动作映射为扩展离散空间的做法。</li>
+        <li><strong>战术安全反事实先验 (Tactical Counterfactuals)</strong>：在训练初期，可以考虑将对方的“放泡后自身是否有安全避难所”作为辅助监督信号（Auxiliary Loss）或特征加入，能极大加速模型度过初期“自己炸死自己”的试错瓶颈。</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

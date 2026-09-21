@@ -1,0 +1,440 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 780" width="100%" height="100%" style="background:#ffffff; font-family:'Computer Modern', 'Times New Roman', 'Nimbus Roman No9 L', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, serif;">
+  <defs>
+    <!-- Paper shadows -->
+    <filter id="marl-card-shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.08"/>
+    </filter>
+    <filter id="marl-soft-shadow" x="-8%" y="-8%" width="116%" height="116%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000000" flood-opacity="0.12"/>
+    </filter>
+    <filter id="marl-glow-green" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#059669" flood-opacity="0.3"/>
+    </filter>
+    <filter id="marl-glow-blue" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#0284c7" flood-opacity="0.3"/>
+    </filter>
+
+    <!-- Markers -->
+    <marker id="marl-arr-blk" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 1 2 L 8 5 L 1 8 z" fill="#111827"/>
+    </marker>
+    <marker id="marl-arr-green" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 1 2 L 8 5 L 1 8 z" fill="#047857"/>
+    </marker>
+    <marker id="marl-arr-blue" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 1 2 L 8 5 L 1 8 z" fill="#0284c7"/>
+    </marker>
+    <marker id="marl-arr-amber" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 1 2 L 8 5 L 1 8 z" fill="#d97706"/>
+    </marker>
+  </defs>
+
+  <!-- Outer Canvas Border -->
+  <rect x="15" y="15" width="1570" height="750" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" filter="url(#marl-card-shadow)"/>
+
+  <!-- =========================================================================
+       SECTION: OURS 8-AGENT MULTI-TEAM MARL & STYLE-CONDITIONED TRANSFORMER
+       ========================================================================= -->
+  <g transform="translate(35, 30)">
+    <!-- Container Card -->
+    <rect x="0" y="0" width="1530" height="720" rx="12" fill="#fafafa" stroke="#e5e7eb" stroke-width="1.5"/>
+
+    <!-- Title and Subtitle -->
+    <text x="25" y="30" font-size="18" font-weight="bold" fill="#111827" letter-spacing="0.5">Fig 1(c). Ours: 8-Agent Multi-Team MARL Architecture (8 智能体多队伍对弈与风格化强化学习)</text>
+    <text x="25" y="48" font-size="11.5" fill="#4b5563" font-style="italic">Parameters: 7,532,416 (~7.6M) | 100% 纯前馈 (零 RNN) | 14 通道置换不变表征 | 风格向量 z ∈ ℝ⁴ | 动作采样温度 τ</text>
+
+    <!-- Visual Badges of Core Features -->
+    <g transform="translate(1005, 14)">
+      <rect x="0" y="0" width="500" height="32" rx="5" fill="#f0fdf4" stroke="#86efac" stroke-width="1.2"/>
+      <rect x="8" y="6" width="20" height="20" rx="3" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="18" y="20" font-size="10" font-weight="bold" fill="#15803d" text-anchor="middle">8P</text>
+      <text x="34" y="20" font-size="11" font-weight="bold" fill="#166534">2~8 队动态拓扑 (4v4/FFA)</text>
+      <line x1="215" y1="5" x2="215" y2="27" stroke="#bbf7d0" stroke-width="1"/>
+      <circle cx="227" cy="16" r="6" fill="#bae6fd" stroke="#0284c7" stroke-width="1"/>
+      <text x="238" y="20" font-size="11" font-weight="bold" fill="#0369a1">SOS 水泡救援/击破</text>
+      <line x1="365" y1="5" x2="365" y2="27" stroke="#bbf7d0" stroke-width="1"/>
+      <text x="375" y="20" font-size="11" font-weight="bold" fill="#b45309">风格 z ∈ ℝ⁴ + 温度 τ</text>
+    </g>
+
+    <!-- =======================================================================
+         1. Grid Patches & Global State (Vertically Centered at y=110)
+         ======================================================================= -->
+    <g transform="translate(25, 110)">
+      <text x="75" y="-8" font-size="14" font-weight="bold" fill="#1f2937" text-anchor="middle">8-Agent Grid Patches</text>
+
+      <!-- Row 0: Self (P0), Teammate (T1), Enemy (E4) -->
+      <g transform="translate(0, 0)">
+        <rect x="0" y="0" width="45" height="45" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+        <rect x="0" y="0" width="15" height="15" fill="#bfdbfe"/><text x="7" y="11" font-size="9" text-anchor="middle" font-weight="bold" fill="#1d4ed8">P0</text>
+        <rect x="15" y="15" width="15" height="15" fill="#bbf7d0"/><text x="22" y="26" font-size="9" text-anchor="middle" fill="#166534">B</text>
+        <rect x="30" y="30" width="15" height="15" fill="#fed7aa"/><text x="37" y="41" font-size="9" text-anchor="middle" fill="#9a3412">F</text>
+      </g>
+      <g transform="translate(52, 0)">
+        <rect x="0" y="0" width="45" height="45" fill="#f0fdf4" stroke="#10b981" stroke-width="1.2"/>
+        <rect x="0" y="0" width="15" height="15" fill="#bbf7d0"/><text x="7" y="11" font-size="8.5" text-anchor="middle" font-weight="bold" fill="#166534">T1</text>
+        <rect x="30" y="0" width="15" height="15" fill="#bbf7d0"/><text x="37" y="11" font-size="8.5" text-anchor="middle" font-weight="bold" fill="#166534">T2</text>
+        <rect x="15" y="15" width="15" height="15" fill="#e5e7eb"/>
+        <text x="22" y="40" font-size="8" text-anchor="middle" fill="#047857">友军</text>
+      </g>
+      <g transform="translate(104, 0)">
+        <rect x="0" y="0" width="45" height="45" fill="#fef2f2" stroke="#ef4444" stroke-width="1.2"/>
+        <rect x="15" y="0" width="15" height="15" fill="#fecaca"/><text x="22" y="11" font-size="8.5" text-anchor="middle" font-weight="bold" fill="#b91c1c">E4</text>
+        <rect x="30" y="15" width="15" height="15" fill="#fecaca"/><text x="37" y="26" font-size="8.5" text-anchor="middle" font-weight="bold" fill="#b91c1c">E5</text>
+        <text x="18" y="38" font-size="8" text-anchor="middle" fill="#991b1b">敌军</text>
+      </g>
+
+      <!-- Row 1: Crates, Danger, and SOS BUBBLE TARGETS -->
+      <g transform="translate(0, 52)">
+        <rect x="0" y="0" width="45" height="45" fill="#fef08a" stroke="#eab308" stroke-width="1"/>
+        <circle cx="22" cy="22" r="10" fill="#fde047" stroke="#ca8a04"/>
+        <text x="22" y="26" font-size="9" text-anchor="middle" fill="#854d0e">C</text>
+      </g>
+      <!-- SOS Trapped Teammate (ch12 Rescue Target) -->
+      <g transform="translate(52, 52)">
+        <rect x="0" y="0" width="45" height="45" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.8" filter="url(#marl-glow-blue)"/>
+        <circle cx="22" cy="22" r="14" fill="#bae6fd" stroke="#0284c7" stroke-width="1.5"/>
+        <text x="22" y="19" font-size="8" font-weight="bold" text-anchor="middle" fill="#0369a1">SOS</text>
+        <text x="22" y="29" font-size="7.5" font-weight="bold" text-anchor="middle" fill="#047857">T3(救)</text>
+      </g>
+      <!-- SOS Trapped Enemy (ch13 Pop Target) -->
+      <g transform="translate(104, 52)">
+        <rect x="0" y="0" width="45" height="45" fill="#fff7ed" stroke="#ea580c" stroke-width="1.8"/>
+        <circle cx="22" cy="22" r="14" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+        <text x="22" y="19" font-size="8" font-weight="bold" text-anchor="middle" fill="#c2410c">SOS</text>
+        <text x="22" y="29" font-size="7.5" font-weight="bold" text-anchor="middle" fill="#b91c1c">E6(破)</text>
+      </g>
+
+      <!-- Row 2: ... 25 Patches -->
+      <g transform="translate(0, 104)">
+        <rect x="0" y="0" width="45" height="45" fill="#e0e7ff" stroke="#818cf8" stroke-width="1"/>
+        <text x="22" y="26" font-size="9" text-anchor="middle" fill="#3730a3">...</text>
+      </g>
+      <g transform="translate(52, 104)">
+        <rect x="0" y="0" width="45" height="45" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1"/>
+        <text x="22" y="26" font-size="9" text-anchor="middle" fill="#4b5563">...</text>
+      </g>
+      <g transform="translate(104, 104)">
+        <rect x="0" y="0" width="45" height="45" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1"/>
+        <text x="22" y="26" font-size="9" text-anchor="middle" fill="#4b5563">25</text>
+      </g>
+
+      <!-- Input Dimension Text: 14 Channels -->
+      <g transform="translate(-15, 160)">
+        <rect x="0" y="0" width="180" height="76" rx="5" fill="#f0fdf4" stroke="#86efac" stroke-width="1.2"/>
+        <text x="90" y="16" font-size="11.5" font-weight="bold" fill="#166534" text-anchor="middle">Input: [-1, 14, 13, 15]</text>
+        <line x1="8" y1="22" x2="172" y2="22" stroke="#bbf7d0" stroke-width="1"/>
+        <text x="10" y="34" font-size="9" fill="#15803d">• ch0..1: 自我位置与炸弹引信</text>
+        <text x="10" y="47" font-size="9" fill="#15803d">• ch2..5: 友军 / 敌军热力图与泡</text>
+        <text x="10" y="60" font-size="9" fill="#15803d">• ch6..11: 墙砖 / 危险图 / 道具</text>
+        <text x="10" y="72" font-size="9" font-weight="bold" fill="#0369a1">• ch12..13: SOS 救援/击破目标</text>
+      </g>
+
+      <!-- Global State & Style Vector (Scalars: [-1, 28]) -->
+      <text x="75" y="254" font-size="13" font-weight="bold" fill="#1f2937" text-anchor="middle">Global State &amp; Style Vector</text>
+      <g transform="translate(-15, 262)">
+        <rect x="0" y="0" width="180" height="106" rx="5" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.5" filter="url(#marl-card-shadow)"/>
+        <text x="90" y="16" font-size="11" font-weight="bold" fill="#92400e" text-anchor="middle">Scalars: [-1, 28] (State + Style)</text>
+        <line x1="8" y1="22" x2="172" y2="22" stroke="#fde68a" stroke-width="1"/>
+        <text x="10" y="35" font-size="8.5" fill="#78350f">• g[0..10]: 自身 HP/速度/泡数/存活</text>
+        <text x="10" y="49" font-size="8.5" fill="#78350f">• g[11..17]: 本队战力 (存活比/分差)</text>
+        <text x="10" y="63" font-size="8.5" fill="#78350f">• g[18..23]: 敌队活跃数/最高威胁</text>
+        <line x1="8" y1="70" x2="172" y2="70" stroke="#fde68a" stroke-width="1"/>
+        <text x="10" y="83" font-size="8.5" font-weight="bold" fill="#b45309">★ g[24..27]: 人格风格 z ∈ ℝ⁴</text>
+        <text x="10" y="97" font-size="8" fill="#92400e">[z0 激进 | z1 抱团 | z2 贪婪 | z3 冒险]</text>
+      </g>
+    </g>
+
+    <!-- Connecting Arrows into Linear Projections -->
+    <line x1="198" y1="132" x2="238" y2="132" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+    <line x1="198" y1="167" x2="238" y2="167" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+    <line x1="198" y1="202" x2="238" y2="202" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+    <line x1="198" y1="425" x2="238" y2="425" stroke="#d97706" stroke-width="1.5" marker-end="url(#marl-arr-amber)"/>
+
+    <!-- =======================================================================
+         2. Linear Projections (Vertically Centered at y=110)
+         ======================================================================= -->
+    <g transform="translate(245, 110)">
+      <text x="80" y="-8" font-size="14" font-weight="bold" fill="#1f2937" text-anchor="middle">Linear Projections</text>
+
+      <g transform="translate(0, 15)">
+        <!-- Spatial Patch Token 0 (14*3*3 = 126 dim -> 392) -->
+        <g transform="translate(0, 0)">
+          <rect x="0" y="0" width="15" height="14" fill="#3b82f6" stroke="#1d4ed8" stroke-width="0.5"/>
+          <rect x="15" y="0" width="15" height="14" fill="#10b981" stroke="#047857" stroke-width="0.5"/>
+          <rect x="30" y="0" width="15" height="14" fill="#ef4444" stroke="#b91c1c" stroke-width="0.5"/>
+          <rect x="45" y="0" width="15" height="14" fill="#f59e0b" stroke="#b45309" stroke-width="0.5"/>
+          <rect x="60" y="0" width="15" height="14" fill="#0284c7" stroke="#0369a1" stroke-width="0.5"/>
+          <rect x="75" y="0" width="15" height="14" fill="#6b7280" stroke="#374151" stroke-width="0.5"/>
+          <rect x="90" y="0" width="15" height="14" fill="#3b82f6" stroke="#1d4ed8" stroke-width="0.5"/>
+          <rect x="105" y="0" width="30" height="14" fill="#9ca3af" stroke="#4b5563" stroke-width="0.5"/>
+          <text x="120" y="11" font-size="9" fill="#fff" text-anchor="middle">392</text>
+          <line x1="145" y1="7" x2="185" y2="7" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+        </g>
+        <g transform="translate(0, 35)">
+          <rect x="0" y="0" width="15" height="14" fill="#10b981" stroke="#047857" stroke-width="0.5"/>
+          <rect x="15" y="0" width="15" height="14" fill="#3b82f6" stroke="#1d4ed8" stroke-width="0.5"/>
+          <rect x="30" y="0" width="15" height="14" fill="#9ca3af" stroke="#4b5563" stroke-width="0.5"/>
+          <rect x="45" y="0" width="15" height="14" fill="#ef4444" stroke="#b91c1c" stroke-width="0.5"/>
+          <rect x="60" y="0" width="15" height="14" fill="#0284c7" stroke="#0369a1" stroke-width="0.5"/>
+          <rect x="75" y="0" width="15" height="14" fill="#10b981" stroke="#047857" stroke-width="0.5"/>
+          <rect x="90" y="0" width="15" height="14" fill="#f59e0b" stroke="#b45309" stroke-width="0.5"/>
+          <rect x="105" y="0" width="30" height="14" fill="#9ca3af" stroke="#4b5563" stroke-width="0.5"/>
+          <text x="120" y="11" font-size="9" fill="#fff" text-anchor="middle">392</text>
+          <line x1="145" y1="7" x2="185" y2="7" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+        </g>
+        <g transform="translate(0, 70)">
+          <rect x="0" y="0" width="15" height="14" fill="#ef4444" stroke="#b91c1c" stroke-width="0.5"/>
+          <rect x="15" y="0" width="15" height="14" fill="#10b981" stroke="#047857" stroke-width="0.5"/>
+          <rect x="30" y="0" width="15" height="14" fill="#f59e0b" stroke="#b45309" stroke-width="0.5"/>
+          <rect x="45" y="0" width="15" height="14" fill="#3b82f6" stroke="#1d4ed8" stroke-width="0.5"/>
+          <rect x="60" y="0" width="15" height="14" fill="#0284c7" stroke="#0369a1" stroke-width="0.5"/>
+          <rect x="75" y="0" width="15" height="14" fill="#6b7280" stroke="#374151" stroke-width="0.5"/>
+          <rect x="90" y="0" width="15" height="14" fill="#10b981" stroke="#047857" stroke-width="0.5"/>
+          <rect x="105" y="0" width="30" height="14" fill="#9ca3af" stroke="#4b5563" stroke-width="0.5"/>
+          <text x="120" y="11" font-size="9" fill="#fff" text-anchor="middle">392</text>
+          <line x1="145" y1="7" x2="185" y2="7" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+        </g>
+        <g transform="translate(0, 105)">
+          <rect x="0" y="0" width="15" height="14" fill="#3b82f6" stroke="#1d4ed8" stroke-width="0.5"/>
+          <rect x="15" y="0" width="15" height="14" fill="#6b7280" stroke="#374151" stroke-width="0.5"/>
+          <rect x="30" y="0" width="15" height="14" fill="#ef4444" stroke="#b91c1c" stroke-width="0.5"/>
+          <rect x="45" y="0" width="15" height="14" fill="#10b981" stroke="#047857" stroke-width="0.5"/>
+          <rect x="60" y="0" width="15" height="14" fill="#3b82f6" stroke="#1d4ed8" stroke-width="0.5"/>
+          <rect x="75" y="0" width="15" height="14" fill="#f59e0b" stroke="#b45309" stroke-width="0.5"/>
+          <rect x="90" y="0" width="15" height="14" fill="#ef4444" stroke="#b91c1c" stroke-width="0.5"/>
+          <rect x="105" y="0" width="30" height="14" fill="#9ca3af" stroke="#4b5563" stroke-width="0.5"/>
+          <text x="120" y="11" font-size="9" fill="#fff" text-anchor="middle">392</text>
+          <line x1="145" y1="7" x2="185" y2="7" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+        </g>
+        <text x="65" y="150" font-size="15" fill="#6b7280" text-anchor="middle" font-weight="bold">⋮ (25 Spatial Patch Tokens)</text>
+      </g>
+
+      <!-- State & Style Token Projection (28 -> 392) -->
+      <g transform="translate(0, 305)">
+        <rect x="0" y="0" width="15" height="18" fill="#f59e0b" stroke="#d97706" stroke-width="0.5"/>
+        <rect x="15" y="0" width="15" height="18" fill="#fbbf24" stroke="#d97706" stroke-width="0.5"/>
+        <rect x="30" y="0" width="15" height="18" fill="#059669" stroke="#047857" stroke-width="0.5"/>
+        <rect x="45" y="0" width="15" height="18" fill="#10b981" stroke="#059669" stroke-width="0.5"/>
+        <rect x="60" y="0" width="15" height="18" fill="#0284c7" stroke="#0369a1" stroke-width="0.5"/>
+        <rect x="75" y="0" width="15" height="18" fill="#38bdf8" stroke="#0284c7" stroke-width="0.5"/>
+        <rect x="90" y="0" width="15" height="18" fill="#7c3aed" stroke="#6d28d9" stroke-width="0.5"/>
+        <rect x="105" y="0" width="30" height="18" fill="#c4b5fd" stroke="#7c3aed" stroke-width="0.5"/>
+        <text x="120" y="13" font-size="9" font-weight="bold" fill="#5b21b6" text-anchor="middle">392</text>
+        <line x1="145" y1="9" x2="185" y2="9" stroke="#d97706" stroke-width="1.5" marker-end="url(#marl-arr-amber)"/>
+        <text x="70" y="33" font-size="11" fill="#b45309" text-anchor="middle" font-weight="bold">+ 1 State/Style Token (Seq = 26)</text>
+      </g>
+    </g>
+
+    <!-- =======================================================================
+         3. 4-Layer Pre-LN ViT Backbone (Embed=392, Heads=4, 7.5M Dense)
+         ======================================================================= -->
+    <g transform="translate(460, 60)">
+      <rect x="0" y="0" width="340" height="425" rx="10" fill="#ffffff" stroke="#1f2937" stroke-width="1.8" filter="url(#marl-soft-shadow)"/>
+      <text x="170" y="26" font-size="16" font-weight="bold" fill="#111827" text-anchor="middle">Transformer Block × 4 (7.5M)</text>
+      <text x="170" y="42" font-size="11" fill="#6b7280" text-anchor="middle">(Embed = 392, Heads = 4, Head Dim = 98 | 纯前馈 0 RNN)</text>
+
+      <line x1="170" y1="425" x2="170" y2="395" stroke="#222" stroke-width="1.5" marker-end="url(#marl-arr-blk)"/>
+      <rect x="60" y="360" width="220" height="32" rx="4" fill="#f9fafb" stroke="#374151" stroke-width="1.2"/>
+      <text x="170" y="381" font-size="13" font-weight="600" fill="#1f2937" text-anchor="middle">Layer Normalization 1</text>
+
+      <line x1="170" y1="360" x2="170" y2="335" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+
+      <!-- MHSA Block: Narrowed to width=240, centered, leaving 15px clearance to residual line at x=305 -->
+      <rect x="50" y="195" width="240" height="135" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.2"/>
+      <text x="170" y="214" font-size="13" font-weight="bold" fill="#1d4ed8" text-anchor="middle">Multi-Head Self-Attention (MHSA)</text>
+      <text x="170" y="228" font-size="9.5" fill="#2563eb" text-anchor="middle">25 Spatial Patches 与 1 State/Style Token 交叉自注意力推理</text>
+
+      <g transform="translate(80, 235)">
+        <rect x="0" y="0" width="40" height="6" fill="#3b82f6"/><rect x="0" y="10" width="40" height="6" fill="#10b981"/>
+        <rect x="0" y="20" width="40" height="6" fill="#ef4444"/><rect x="0" y="30" width="40" height="6" fill="#f59e0b"/>
+        <rect x="0" y="40" width="40" height="6" fill="#0284c7"/><rect x="0" y="50" width="40" height="6" fill="#7c3aed"/>
+        <rect x="0" y="60" width="40" height="6" fill="#059669"/>
+
+        <path d="M 40 3 C 90 3, 90 53, 140 53" fill="none" stroke="#60a5fa" stroke-width="1"/>
+        <path d="M 40 13 C 80 13, 100 3, 140 3" fill="none" stroke="#3b82f6" stroke-width="1.2"/>
+        <path d="M 40 23 C 90 23, 90 63, 140 63" fill="none" stroke="#2563eb" stroke-width="1.2"/>
+        <path d="M 40 33 C 80 33, 100 23, 140 23" fill="none" stroke="#93c5fd" stroke-width="0.8"/>
+        <path d="M 40 43 C 90 43, 90 13, 140 13" fill="none" stroke="#1d4ed8" stroke-width="1.2"/>
+        <path d="M 40 53 C 80 53, 100 33, 140 33" fill="none" stroke="#60a5fa" stroke-width="1"/>
+
+        <rect x="140" y="0" width="40" height="6" fill="#10b981"/><rect x="140" y="10" width="40" height="6" fill="#3b82f6"/>
+        <rect x="140" y="20" width="40" height="6" fill="#f59e0b"/><rect x="140" y="30" width="40" height="6" fill="#ef4444"/>
+        <rect x="140" y="40" width="40" height="6" fill="#7c3aed"/><rect x="140" y="50" width="40" height="6" fill="#0284c7"/>
+        <rect x="140" y="60" width="40" height="6" fill="#059669"/>
+      </g>
+      <text x="170" y="322" font-size="9" fill="#1d4ed8" font-style="italic" text-anchor="middle">q, k, v (4 heads) → Softmax(qk^T / √d) · v | 全图全局感知</text>
+
+      <circle cx="170" cy="175" r="10" fill="#ffffff" stroke="#111827" stroke-width="1.5"/>
+      <text x="170" y="179" font-size="14" font-weight="bold" fill="#111827" text-anchor="middle">+</text>
+      <path d="M 170 405 L 305 405 L 305 175 L 182 175" fill="none" stroke="#374151" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+      <line x1="170" y1="200" x2="170" y2="187" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+
+      <line x1="170" y1="165" x2="170" y2="152" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+      <rect x="60" y="125" width="220" height="26" rx="4" fill="#f9fafb" stroke="#374151" stroke-width="1.2"/>
+      <text x="170" y="142" font-size="12" font-weight="600" fill="#1f2937" text-anchor="middle">Layer Normalization 2</text>
+
+      <line x1="170" y1="125" x2="170" y2="112" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+      <rect x="50" y="65" width="240" height="46" rx="6" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.4"/>
+      <text x="170" y="82" font-size="12" font-weight="bold" fill="#15803d" text-anchor="middle">Feed-Forward Network (FFN)</text>
+      <text x="170" y="98" font-size="10.5" fill="#166534" text-anchor="middle">392 → 1568 (GeLU) → 392 (参数集中层)</text>
+
+      <circle cx="170" cy="50" r="9" fill="#ffffff" stroke="#111827" stroke-width="1.5"/>
+      <text x="170" y="54" font-size="13" font-weight="bold" fill="#111827" text-anchor="middle">+</text>
+      <path d="M 170 155 L 305 155 L 305 50 L 181 50" fill="none" stroke="#374151" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+      <line x1="170" y1="65" x2="170" y2="60" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+    </g>
+
+    <!-- Out of Transformer Block Connector -->
+    <path d="M 630 60 L 630 45 L 835 45 L 835 235 L 870 235" fill="none" stroke="#222" stroke-width="1.5" marker-end="url(#marl-arr-blk)"/>
+
+    <!-- =======================================================================
+         4. Global Average Pooling (GAP)
+         ======================================================================= -->
+    <g transform="translate(875, 195)">
+      <rect x="0" y="0" width="105" height="80" rx="6" fill="#ffffff" stroke="#4b5563" stroke-width="1.2" filter="url(#marl-card-shadow)"/>
+      <text x="52" y="25" font-size="12" font-weight="bold" fill="#111827" text-anchor="middle">Spatial GAP</text>
+      <text x="52" y="42" font-size="10" fill="#6b7280" text-anchor="middle">Pool 25 Tokens</text>
+      <line x1="15" y1="50" x2="90" y2="50" stroke="#e5e7eb" stroke-width="1"/>
+      <text x="52" y="66" font-size="11" font-weight="bold" fill="#1d4ed8" text-anchor="middle">Vector (392)</text>
+    </g>
+
+    <path d="M 980 220 L 1015 220 L 1015 120 L 1055 120" fill="none" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+    <path d="M 980 250 L 1015 250 L 1015 340 L 1055 340" fill="none" stroke="#222" stroke-width="1.2" marker-end="url(#marl-arr-blk)"/>
+
+    <!-- =======================================================================
+         5. Policy Heads with Temperature & Team-Value Critic
+         ======================================================================= -->
+    <!-- Policy Head (Dual Factorized + Temperature τ) -->
+    <g transform="translate(1055, 65)">
+      <rect x="0" y="0" width="455" height="150" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5" filter="url(#marl-card-shadow)"/>
+      <text x="18" y="24" font-size="14" font-weight="bold" fill="#15803d">Dual Factorized Policy Heads (with Temperature τ)</text>
+      <text x="18" y="40" font-size="10.5" fill="#166534">因子化动作空间：5 移动 × 2 放泡 = 10 种组合 | π(a) = Softmax(logits / τ)</text>
+
+      <!-- Move Head -->
+      <g transform="translate(18, 52)">
+        <rect x="0" y="0" width="200" height="58" rx="4" fill="#ffffff" stroke="#86efac" stroke-width="1"/>
+        <text x="10" y="18" font-size="11" font-weight="bold" fill="#166534">Move Head (5-way)</text>
+        <text x="10" y="32" font-size="9" fill="#4b5563">[0:上 1:下 2:左 3:右 4:停]</text>
+        <rect x="10" y="38" width="30" height="14" fill="#bbf7d0"/><text x="25" y="49" font-size="8" text-anchor="middle" fill="#14532d">UP</text>
+        <rect x="45" y="38" width="30" height="14" fill="#bbf7d0"/><text x="60" y="49" font-size="8" text-anchor="middle" fill="#14532d">DN</text>
+        <rect x="80" y="38" width="30" height="14" fill="#bbf7d0"/><text x="95" y="49" font-size="8" text-anchor="middle" fill="#14532d">LT</text>
+        <rect x="115" y="38" width="30" height="14" fill="#bbf7d0"/><text x="130" y="49" font-size="8" text-anchor="middle" fill="#14532d">RT</text>
+        <rect x="150" y="38" width="40" height="14" fill="#dcfce7"/><text x="170" y="49" font-size="8" text-anchor="middle" fill="#14532d">IDLE</text>
+      </g>
+
+      <!-- Bomb Head -->
+      <g transform="translate(232, 52)">
+        <rect x="0" y="0" width="205" height="58" rx="4" fill="#ffffff" stroke="#86efac" stroke-width="1"/>
+        <text x="10" y="18" font-size="11" font-weight="bold" fill="#166534">Bomb Head (2-way)</text>
+        <text x="10" y="32" font-size="9" fill="#4b5563">[0: 不放, 1: 放泡]</text>
+        <rect x="10" y="38" width="65" height="14" fill="#dcfce7"/><text x="42" y="49" font-size="8" text-anchor="middle" fill="#14532d">PASS (0)</text>
+        <rect x="85" y="38" width="65" height="14" fill="#fecaca"/><text x="117" y="49" font-size="8" text-anchor="middle" fill="#991b1b">BOMB (1)</text>
+      </g>
+
+      <!-- Temperature Regulation Slider -->
+      <g transform="translate(18, 118)">
+        <rect x="0" y="0" width="419" height="24" rx="4" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="0.8"/>
+        <text x="10" y="16" font-size="9.5" font-weight="bold" fill="#047857">温度 τ 调控:</text>
+        <text x="75" y="16" font-size="8.5" fill="#065f46">τ=0 (确定性微操) ⟷ τ=0.7 (稳健对弈) ⟷ τ=1.5 (高随机探索)</text>
+      </g>
+    </g>
+
+    <!-- Team-Value Critic Head (HL-Gauss 128 Bins) -->
+    <g transform="translate(1055, 235)">
+      <rect x="0" y="0" width="455" height="180" rx="8" fill="#ffffff" stroke="#1e40af" stroke-width="1.5" filter="url(#marl-card-shadow)"/>
+      <text x="18" y="24" font-size="14" font-weight="bold" fill="#1e40af">Team-Value Critic (HL-Gauss 128 Bins)</text>
+      <text x="18" y="40" font-size="10.5" fill="#4b5563">团队胜负价值评估：区间 [-20, +20] | 独赢全额 10.0 vs 超时平分奖池</text>
+
+      <!-- HL-Gauss Histogram representation -->
+      <g transform="translate(18, 52)">
+        <rect x="0" y="0" width="419" height="75" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+        <!-- Draw Gaussian bell curve in blue -->
+        <path d="M 10 70 Q 150 70, 209 15 Q 268 70, 409 70" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+        <line x1="209" y1="10" x2="209" y2="75" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="3,3"/>
+        <text x="214" y="24" font-size="9.5" font-weight="bold" fill="#dc2626">V_team</text>
+
+        <!-- Bins indicators -->
+        <text x="12" y="70" font-size="8" fill="#64748b">-20 (惨败)</text>
+        <text x="199" y="70" font-size="8" fill="#64748b">0 (均势/平局)</text>
+        <text x="365" y="70" font-size="8" fill="#64748b">+20 (独赢)</text>
+      </g>
+      <text x="227" y="146" font-size="10" fill="#1e40af" font-weight="bold" text-anchor="middle">HL-Gauss Categorical Cross-Entropy Loss (σ ≈ 1.5, 5 Bins Width)</text>
+      <text x="227" y="164" font-size="9" fill="#64748b" text-anchor="middle">多智能体信度分配：个人表现 (伤害/吃箱) + 团队胜负 (Win Pool)</text>
+    </g>
+
+    <!-- =======================================================================
+         6. BOTTOM PANEL: SOS BUBBLE & GAME MODES STATE MACHINE
+         ======================================================================= -->
+    <g transform="translate(25, 500)">
+      <rect x="0" y="0" width="1475" height="195" rx="8" fill="#ffffff" stroke="#0284c7" stroke-width="1.8" filter="url(#marl-card-shadow)"/>
+      <text x="20" y="24" font-size="14" font-weight="bold" fill="#0369a1">SOS 水泡困住/救援/击破状态机与双游戏模式规则体系 (SOS State Machine &amp; Game Modes)</text>
+
+      <!-- Flow 1: Hit & Enter SOS -->
+      <g transform="translate(20, 42)">
+        <rect x="0" y="0" width="220" height="135" rx="6" fill="#f0f9ff" stroke="#7dd3fc" stroke-width="1.2"/>
+        <text x="110" y="22" font-size="12" font-weight="bold" fill="#0369a1" text-anchor="middle">① 命中入泡 (Enter SOS)</text>
+        <line x1="15" y1="30" x2="205" y2="30" stroke="#bae6fd" stroke-width="1"/>
+        <text x="12" y="48" font-size="9.5" fill="#0c4a6e">• 一血模式: 爆炸命中直接入泡</text>
+        <text x="12" y="64" font-size="9.5" fill="#0c4a6e">• 多血模式: HP 扣至 0 濒死入泡</text>
+        <text x="12" y="80" font-size="9.5" fill="#0c4a6e">• 倒计时: 3.0 秒 (30 ticks)</text>
+        <text x="12" y="96" font-size="9.5" font-weight="bold" fill="#b91c1c">• 锁定状态: 移速归 0，禁放泡</text>
+        <text x="12" y="114" font-size="9" fill="#0284c7">对应素材: web/assets/sos.png</text>
+      </g>
+
+      <line x1="245" y1="105" x2="275" y2="105" stroke="#0284c7" stroke-width="2" marker-end="url(#marl-arr-blue)"/>
+
+      <!-- Flow 2: Teammate Rescue -->
+      <g transform="translate(280, 42)">
+        <rect x="0" y="0" width="230" height="135" rx="6" fill="#f0fdf4" stroke="#86efac" stroke-width="1.2"/>
+        <text x="115" y="22" font-size="12" font-weight="bold" fill="#166534" text-anchor="middle">② 队友救援 (Teammate Rescue)</text>
+        <line x1="15" y1="30" x2="215" y2="30" stroke="#bbf7d0" stroke-width="1"/>
+        <text x="12" y="48" font-size="9.5" fill="#14532d">• 触碰判定: 队友进入 2×RADIUS</text>
+        <text x="12" y="64" font-size="9.5" font-weight="bold" fill="#059669">• 瞬间脱困: 水泡破裂恢复自由</text>
+        <text x="12" y="80" font-size="9.5" font-weight="bold" fill="#b45309">• 关键规则: 出水泡【无无敌光圈】</text>
+        <text x="12" y="96" font-size="9.5" fill="#14532d">• 团队奖励: 救援者获正向奖励</text>
+        <text x="12" y="114" font-size="9" fill="#15803d">被救者不扣分，避免队伍减员</text>
+      </g>
+
+      <!-- Flow 3: Opponent Pop -->
+      <g transform="translate(530, 42)">
+        <rect x="0" y="0" width="240" height="135" rx="6" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.2"/>
+        <text x="120" y="22" font-size="12" font-weight="bold" fill="#991b1b" text-anchor="middle">③ 对手击破 (Opponent Pop)</text>
+        <line x1="15" y1="30" x2="225" y2="30" stroke="#fecaca" stroke-width="1"/>
+        <text x="12" y="48" font-size="9.5" fill="#7f1d1d">• 触碰判定: 对手触碰水泡</text>
+        <text x="12" y="64" font-size="9.5" font-weight="bold" fill="#b91c1c">• 击破得分: 对手团队 +1 分</text>
+        <text x="12" y="80" font-size="9.5" fill="#7f1d1d">• 比武模式: 进入 3 秒复活等待</text>
+        <text x="12" y="96" font-size="9.5" fill="#7f1d1d">• 一血模式: 角色彻底淘汰死亡</text>
+        <text x="12" y="114" font-size="9" fill="#dc2626">超时自爆: 3 秒未救自动破裂</text>
+      </g>
+
+      <line x1="775" y1="105" x2="805" y2="105" stroke="#222" stroke-width="2" marker-end="url(#marl-arr-blk)"/>
+
+      <!-- Flow 4: Mode 0 vs Mode 1 Rules -->
+      <g transform="translate(810, 42)">
+        <rect x="0" y="0" width="645" height="135" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+        <text x="322" y="22" font-size="12" font-weight="bold" fill="#1e293b" text-anchor="middle">④ 双赛制胜负与奖池分配规则 (Game Mode Scoring)</text>
+        <line x1="15" y1="30" x2="630" y2="30" stroke="#e2e8f0" stroke-width="1"/>
+
+        <!-- Mode 0 -->
+        <g transform="translate(15, 38)">
+          <rect x="0" y="0" width="300" height="85" rx="4" fill="#ffffff" stroke="#94a3b8" stroke-width="1"/>
+          <text x="150" y="16" font-size="11" font-weight="bold" fill="#334155" text-anchor="middle">Mode 0: 一血/生存淘汰模式 (Last Team Standing)</text>
+          <text x="10" y="32" font-size="9" fill="#475569">• 终局条件: 存活队伍数 ≤ 1 或局长达 180s</text>
+          <text x="10" y="47" font-size="9" font-weight="bold" fill="#15803d">• 独赢全额: 唯一存活队伍独占 10.0 全额奖池</text>
+          <text x="10" y="62" font-size="9" font-weight="bold" fill="#b45309">• 瓜分奖池: 超时多队存活，均分奖池 (10.0 / N_teams)</text>
+          <text x="10" y="77" font-size="8.5" fill="#64748b">博弈本质: 队伍存活大于击杀，支持 8 队混战与 4v4</text>
+        </g>
+
+        <!-- Mode 1 -->
+        <g transform="translate(325, 38)">
+          <rect x="0" y="0" width="305" height="85" rx="4" fill="#ffffff" stroke="#94a3b8" stroke-width="1"/>
+          <text x="152" y="16" font-size="11" font-weight="bold" fill="#0369a1" text-anchor="middle">Mode 1: 比武/夺宝模式 (Tournament &amp; Respawn)</text>
+          <text x="10" y="32" font-size="9" fill="#475569">• 触碰得分: 必须对手触碰水泡方可计分</text>
+          <text x="10" y="47" font-size="9" font-weight="bold" fill="#0284c7">• 随机复活: 破泡等待 3 秒在地图随机出生点复活</text>
+          <text x="10" y="62" font-size="9" font-weight="bold" fill="#047857">• 无敌保护: 复活瞬间获得 3 秒 (30 ticks) 无敌光圈</text>
+          <text x="10" y="77" font-size="8.5" fill="#64748b">终局判定: 180s 局长结束，积分最高队伍获胜</text>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>

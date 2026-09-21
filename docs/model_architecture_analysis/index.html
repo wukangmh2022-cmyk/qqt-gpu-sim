@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>QQ堂强化学习模型架构综述：7.5M Transformer vs 3.2M 混合循环门控网</title>
+  <style>
+    :root {
+      --bg: #f9fafb;
+      --paper: #ffffff;
+      --text: #111827;
+      --text-muted: #4b5563;
+      --border: #e5e7eb;
+      --accent-ours: #059669;
+      --accent-theirs: #2563eb;
+      --highlight: #d97706;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      padding: 30px;
+      margin: 0;
+    }
+    .container {
+      max-width: 1350px;
+      margin: 0 auto;
+      background: var(--paper);
+      padding: 40px 48px;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+      border: 1px solid var(--border);
+    }
+    h1 {
+      font-size: 26px;
+      font-weight: 800;
+      color: #0f172a;
+      margin-bottom: 8px;
+      letter-spacing: -0.5px;
+    }
+    .subtitle {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .one-minute-summary {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-left: 5px solid var(--accent-ours);
+      padding: 16px 20px;
+      border-radius: 6px;
+      margin-bottom: 28px;
+    }
+    .one-minute-summary h2 {
+      margin: 0 0 10px 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+    .grid-cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+    }
+    .card .label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    .card .val {
+      font-size: 20px;
+      font-weight: 800;
+      margin: 4px 0 2px 0;
+    }
+    .card .sub {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .svg-wrapper {
+      margin: 24px 0;
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+    }
+    .svg-wrapper object {
+      width: 100%;
+      height: 1260px;
+      border: none;
+      display: block;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 24px 0;
+      font-size: 13.5px;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 12px 16px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f1f5f9;
+      font-weight: 700;
+      color: #1e293b;
+    }
+    tr:nth-child(even) {
+      background: #f8fafc;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .badge-ours { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+    .badge-theirs { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+    .caption {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      margin-top: 8px;
+      text-align: center;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>QQ堂强化学习模型架构综述与学术级对比分析</h1>
+    <div class="subtitle">
+      比较对象：<strong>我们项目最新 7.5M 视觉 Transformer (ViT)</strong> vs <strong>对方实机部署 3.2M 混合循环门控网 (Hybrid MoE)</strong>
+    </div>
+
+    <!-- 一分钟速览盒 (1-Minute Summary) -->
+    <div class="one-minute-summary">
+      <h2>⏱️ 1 分钟看懂核心设计与哲学差异</h2>
+      <div style="font-size:13.5px; color:#334155; line-height:1.7;">
+        <strong>1. 决策赫兹完全一致</strong>：双方均运行在 <strong>10 Hz（每 100 ms 步进一次决策）</strong>，这与人类顶尖选手的微操与生理反应窗口完美契合。<br>
+        <strong>2. 我们：7.5M 纯视觉 Transformer（端到端 Scaling Law 路线）</strong>：
+        将地图直接切割为 25 个空间 Patch Token 并拼接 1 个全局状态 Token，送入 4 层纯 Pre-LN 自注意力块。第一层即可拉满全图感受野，配合 HL-Gauss 128 桶分类价值头，完全依靠集群海量强化学习算力端到端学会跨障碍封路与连环引爆。<br>
+        <strong>3. 对方：3.2M 浅层 CNN + 循环时序 + MoE 门控（工程启发式兜底路线）</strong>：
+        为了在单线程低配 CPU 服务器上流畅运行，模型在外部算好了 182 维复杂的先验特征（4 组 BFS 寻路向量、4 方向如果放泡是否会封死自己的反事实避难时间），再通过 5 个专家网络（MoE）与 Sigmoid 战术安全门控进行硬性干预。
+      </div>
+    </div>
+
+    <!-- 4 个核心对比卡片 -->
+    <div class="grid-cards">
+      <div class="card" style="border-top: 3px solid var(--accent-ours);">
+        <div class="label">我们模型总参数量</div>
+        <div class="val" style="color:var(--accent-ours);">7,519,087</div>
+        <div class="sub">精确 7.519 M (ViT Embed=392, Depth=4)</div>
+      </div>
+      <div class="card" style="border-top: 3px solid var(--accent-theirs);">
+        <div class="label">对方模型总参数量</div>
+        <div class="val" style="color:var(--accent-theirs);">3,201,029</div>
+        <div class="sub">精确 3.201 M (ONNX 二进制 12.33 MB)</div>
+      </div>
+      <div class="card" style="border-top: 3px solid var(--highlight);">
+        <div class="label">决策步进频率</div>
+        <div class="val" style="color:var(--highlight);">10 Hz 同频</div>
+        <div class="sub">两家均统一为 100 ms 一步决策</div>
+      </div>
+      <div class="card" style="border-top: 3px solid #6366f1;">
+        <div class="label">数据与算法属性</div>
+        <div class="val" style="color:#4f46e5;">0% 人类数据</div>
+        <div class="sub">纯 Self-Play + PPO 策略梯度体系</div>
+      </div>
+    </div>
+
+    <!-- 学术级图表展示 (嵌入 paper_architecture.svg) -->
+    <h2 style="font-size:18px; margin-top:30px;">一、 架构全景计算图 (Academic Paper Diagram)</h2>
+    <div class="svg-wrapper">
+      <object data="paper_architecture.svg" type="image/svg+xml"></object>
+    </div>
+    <div class="caption">图 1: 两种 QQTang 强化学习架构的拓扑计算图对比。(上) 我们项目的 7.5M ViT 双序列 Transformer；(下) 对方工程部署的 3.2M 混合循环 MoE 模型。</div>
+
+    <!-- 结构化对比表格 -->
+    <h2 style="font-size:18px; margin-top:36px;">二、 维度级技术特性对决</h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 18%;">对比维度</th>
+          <th style="width: 41%;"><span class="badge badge-ours">我们项目 (Ours: 7.5M ViT)</span></th>
+          <th style="width: 41%;"><span class="badge badge-theirs">对方项目 (Theirs: 3.2M Hybrid MoE)</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>表征输入方式<br>(Representation)</strong></td>
+          <td>
+            <strong>Patch 空间切块 + State Token（双序列输入）</strong><br>
+            • 空间张量 <code>[-1, 14, 13, 15]</code> 切为 25 个 <code>(3×3×14)</code> 的网格补丁<br>
+            • 标量向量 <code>[-1, 24]</code> 独立投影为第 26 个 State Token<br>
+            • 保留纯净物理原语（位置、引信、砖块、250ms 余威），无任何人为启发式注入
+          </td>
+          <td>
+            <strong>多模态异构拼接输入 (Heterogeneous Input)</strong><br>
+            • 空间张量 <code>[-1, 91, 13, 15]</code>（含亚像素偏移、动作频次等 91 通道）<br>
+            • 标量向量 <code>[-1, 182]</code>（高度依赖外部 CPU 计算的 4 组 BFS 最短寻路向量、4 方向反事实安全避难所预估）
+          </td>
+        </tr>
+        <tr>
+          <td><strong>网络骨干与感受野<br>(Backbone &amp; RF)</strong></td>
+          <td>
+            <strong>4 层纯 Pre-LN 自注意力 Transformer 编码器</strong><br>
+            • <code>Embed = 392</code>，4 头多头注意力，前馈倍数 4 倍（FFN 维度 1568）<br>
+            • <strong>第一层即可拉满全图全局感受野</strong>，全图任意两格之间的引信与逃生路线通过注意力权重直连计算
+          </td>
+          <td>
+            <strong>3 层浅卷积 + 巨大 Flatten 全连接瓶颈</strong><br>
+            • 卷积提取后直接展平为 6,240 维，全连接 <code>Linear(6422, 192)</code> 消耗了 1.23M 权重<br>
+            • 空间结构在展平中被破坏，高阶长程推理完全依赖大 MLP 硬拟合
+          </td>
+        </tr>
+        <tr>
+          <td><strong>时序记忆方案<br>(Temporal Modeling)</strong></td>
+          <td>
+            <strong>无状态前馈（完全马尔可夫化观测设计）</strong><br>
+            • 依靠显式注入的引信倒计时与 250ms 爆炸余威通道消除时序模糊<br>
+            • <strong>彻底免除 RNN/BPTT</strong>，单批次任意打乱，训练吞吐无锁扩展至数十万 SPS
+          </td>
+          <td>
+            <strong>显式循环隐状态维护 (Recurrent Memory, Hidden=256)</strong><br>
+            • 每个智能体在游戏进程中串行持有 256 维隐状态，由宿主在各 Tick 回传<br>
+            • 增加了系统工程复杂度，难以进行大规模 GPU 并行展开训练
+          </td>
+        </tr>
+        <tr>
+          <td><strong>动作空间建模<br>(Action Space)</strong></td>
+          <td>
+            <strong>因子化条件独立双头 (Factorized Dual Heads)</strong><br>
+            • 方向头 5 类（上下左右停） × 放泡头 2 类（放/不放）<br>
+            • 联合概率相加，天然支持“边跑边放”，动作空间无冗余
+          </td>
+          <td>
+            <strong>45 维单一扁平离散动作空间 (Unified Discrete)</strong><br>
+            • 停(1) + 移(4) + 放(1) + 跑放(4) + 7种道具使用(7) + 28种移动用道具<br>
+            • 必须依赖外部布尔掩码（Legal Mask）将非法动作填充为 <code>-inf</code>
+          </td>
+        </tr>
+        <tr>
+          <td><strong>价值函数设计<br>(Value / Critic)</strong></td>
+          <td>
+            <strong>HL-Gauss 分布式分类价值头 (128 Bins)</strong><br>
+            • 在 [-20, +20] 区间采用高斯平滑软标签分类，平抑高方差<br>
+            • 极度稳定多智能体博弈中的剧烈奖励震荡
+          </td>
+          <td>
+            <strong>单值回归 Critic (Team-Value Outcome)</strong><br>
+            • 输出单值期望胜率，评估整支队伍的最终胜负结果
+          </td>
+        </tr>
+        <tr>
+          <td><strong>安全与决策修正<br>(Safety &amp; Gating)</strong></td>
+          <td>
+            <strong>端到端价值驱动策略自适应演进</strong><br>
+            • 依靠大规模对战数据与高频试错，自发内化防自杀避险能力
+          </td>
+          <td>
+            <strong>5 专家 MoE 路由 + Sigmoid 战术安全门控</strong><br>
+            • 关键帧通过外部门控直接给动作 Logits 叠加紧急躲避残差
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- 最新演进：8 智能体多队伍对弈与风格化强化学习架构 -->
+    <h2 style="font-size:18px; margin-top:36px; color:#0f766e;">三、 最新演进：8 智能体多队伍对弈与风格化强化学习架构 (8-Agent Multi-Team MARL)</h2>
+    <div style="background:#f0fdfa; border:1px solid #99f6e4; border-left:5px solid #0d9488; padding:16px 20px; border-radius:6px; margin: 16px 0 20px 0;">
+      <h3 style="margin:0 0 8px 0; font-size:15px; color:#134e4a;">从 1v1 到群体对抗：置换不变性表征 + 连续风格调控 + SOS 水泡状态机</h3>
+      <p style="margin:0 0 8px 0; font-size:13px; color:#0f766e;">
+        随着代码库对微隙卡死与前期自杀率的彻底修复，系统现已全面演进至<strong>多智能体对抗阶段</strong>：支持一局 8 个智能体、2~8 支队伍自由编队（4v4 / 2v2v2v2 / FFA 混战）。在保持 ~7.6M 纯前馈 ViT 高吞吐基座的前提下，通过<strong>置换不变性分层表征</strong>、<strong>连续风格参数向量</strong>与 <strong>SOS 水泡救助/复活机制</strong>，实现平滑无级的团队战术演化。
+      </p>
+      <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 10px;">
+        <div style="background:#ffffff; padding:10px 14px; border-radius:6px; border:1px solid #ccfbf1;">
+          <div style="font-weight:700; font-size:12px; color:#0f766e;">1. 置换不变性 14 通道</div>
+          <div style="font-size:11.5px; color:#374151; margin-top:3px;">
+            抽象为自我层、友军热力图与敌军热力图；新增 <code>ch12</code>（被困队友救援引导）与 <code>ch13</code>（被困敌军击破目标），彻底杜绝编号过拟合。
+          </div>
+        </div>
+        <div style="background:#ffffff; padding:10px 14px; border-radius:6px; border:1px solid #ccfbf1;">
+          <div style="font-weight:700; font-size:12px; color:#b45309;">2. 人格风格向量 z ∈ ℝ⁴</div>
+          <div style="font-size:11.5px; color:#374151; margin-top:3px;">
+            注入 State Token：[激进压迫, 阵型抱团, 开荒贪婪, 冒险穿火]；配合动作温度 τ 控制，无需人工战术门控即可无级调谐风格。
+          </div>
+        </div>
+        <div style="background:#ffffff; padding:10px 14px; border-radius:6px; border:1px solid #ccfbf1;">
+          <div style="font-weight:700; font-size:12px; color:#0284c7;">3. SOS 水泡救援状态机</div>
+          <div style="font-size:11.5px; color:#374151; margin-top:3px;">
+            受击进 3 秒水泡（移速归 0 禁放泡）；队友触碰立即脱困且【无无敌光圈】；对手触碰击破得分；3 秒未救超时自动引爆。
+          </div>
+        </div>
+        <div style="background:#ffffff; padding:10px 14px; border-radius:6px; border:1px solid #ccfbf1;">
+          <div style="font-weight:700; font-size:12px; color:#1e40af;">4. 双赛制与瓜分奖池</div>
+          <div style="font-size:11.5px; color:#374151; margin-top:3px;">
+            一血淘汰模式最后存活队独占 10.0 分，超时平局平分奖池；比武夺宝模式破泡得分，3 秒后在随机出生点带无敌光圈复活。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MARL Architecture SVG 容器 -->
+    <div class="svg-wrapper">
+      <object data="marl_architecture.svg" type="image/svg+xml" style="min-height:780px;"></object>
+    </div>
+    <div class="caption">图 2: 8 智能体多队伍对弈与风格化强化学习架构 (8-Agent Multi-Team MARL)。完全沿袭 Fig 1(a) 的双序列 Transformer 经典视觉范式，左侧输入模块（14 通道网格 Patch 与 28 维宏观状态/风格向量）上下严格居中；中央为 4 层 Pre-LN ViT (7.5M 纯前馈)；右侧为带温度系数 τ 的因子化动作头与 HL-Gauss 团队价值 Critic；底部完整展现 SOS 水泡困住/救援/击破状态机与双赛制奖池规则。</div>
+
+    <h2 style="font-size:18px; margin-top:36px;">四、 总结：两种工程路线的高下立判</h2>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:12px;">
+      <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:16px; border-radius:8px;">
+        <strong style="color:#166534;">我们选择 7.5M ViT 的根本理由：</strong><br>
+        <span style="font-size:13px; color:#15803d;">
+          我们面向的是<strong>超大规模现代异构算力（GPU / DCU / 910B）</strong>。Transformer 具有不可替代的 Scaling Law 上限与全图关联推理能力。通过纯马尔可夫化物理通道设计，训练时不需要处理沉重的 RNN BPTT 展开，可以在极短的墙上时间内跑完数亿帧自博弈，让网络端到端形成超越人工规则的灵性走位。
+        </span>
+      </div>
+      <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:16px; border-radius:8px;">
+        <strong style="color:#1e40af;">对方选择 3.2M 混合 MoE 的现实考量：</strong><br>
+        <span style="font-size:13px; color:#1d4ed8;">
+          对方的目标是<strong>端侧轻量化生产部署（部署在 Windows/Linux 游戏服上单线程运行）</strong>。为了让低配 CPU 也能在 100ms 内出结果，不得不借助 CPU 先把 BFS、避难所反事实预测算好作为标量喂入，并用 MoE 专家网络承载 7 种复杂道具的使用逻辑。
+        </span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
