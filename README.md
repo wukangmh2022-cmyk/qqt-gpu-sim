@@ -161,7 +161,7 @@
 ### 🧠 模型网络架构（7.5M ViT Dual-Sequence Transformer）
 
 <p align="center">
-  <img src="docs/model_architecture_analysis/paper_architecture.svg" alt="Fig 1(a). Ours: 7.5M ViT Dual-Sequence Transformer Architecture" width="100%">
+  <img src="docs/model_architecture_analysis/paper_architecture_a.svg" alt="Fig 1(a). Ours: 7.5M ViT Dual-Sequence Transformer Architecture" width="100%">
   <br>
   <em>图 1(a). 7.5M 参数 ViT 双序列 Transformer 架构：将 13×15 棋盘切分为 25 个 3×3 空间 Patch Token，与 1 个全局状态标量 Token 拼接输入 4 层 Pre-LN Transformer 进行全图自注意力推理，解耦输出因子化动作（5 移动 × 2 放泡）与 HL-Gauss 128 桶价值评估。</em>
 </p>
