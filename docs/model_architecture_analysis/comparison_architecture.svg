@@ -157,7 +157,7 @@
     <rect x="0" y="0" width="550" height="185" rx="8" fill="#11161d" stroke="#30363d" stroke-width="1"/>
     <text x="20" y="26" fill="#3fb950" font-size="14" font-weight="700">技术定位与指标</text>
     <text x="20" y="52" fill="#c9d1d9" font-size="12">• 总参数量: 7,519,087 (精确 7.519 M，对齐 Average Joe ICML 2026)</text>
-    <text x="20" y="74" fill="#c9d1d9" font-size="12">• 算力平台: 高性能 GPU / DCU / 910B 纯 JAX/XLA 高速训练</text>
+    <text x="20" y="74" fill="#c9d1d9" font-size="12">• 算力平台: 高性能 DCU 集群 (纯 JAX/DTK 高速训练)</text>
     <text x="20" y="96" fill="#c9d1d9" font-size="12">• 核心哲学: 端到端强化学习自学全图关联，大模型表征泛化</text>
     <text x="20" y="118" fill="#c9d1d9" font-size="12">• 优势场景: 极致的并行采样吞吐、超强空间上下文推理与泛化能力</text>
     <text x="20" y="140" fill="#8b949e" font-size="12">• 瓶颈缺陷: Attention 二次开销在端侧 CPU 推理需要针对性算子融合</text>
