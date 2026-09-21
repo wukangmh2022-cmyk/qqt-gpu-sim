@@ -1410,7 +1410,28 @@ def legal_mask(state: BombState) -> tuple[jnp.ndarray, jnp.ndarray]:
         move = move.at[1, d].set(leg1 & alive[1])
     move = move.at[:, 4].set(True)                      # IDLE 恒合法
     move = (move & alive[:, None]) | ~alive[:, None]    # 死亡整行放开
-    # 放泡：存活 & 不在墙/砖格 & 脚下无泡 & 在场泡数 < 成长上限
+    # 封闭死胡同防自杀放泡掩码：
+    # 若在脚下放泡，当前格变为障碍 (fuse > 0)。
+    # 检验 4 个方向目标格在排除来源格后的其余 3 邻居出口数：
+    # 若所有移动方向皆为 0 出口死胡同（或全部不可通行），放泡必自爆，屏蔽 bomb=1。
+    passable = ~blocked
+    t_nbrs = targets[:, :, None, :] + jnp.array(_DIRS, jnp.int32)[None, None, :, :]  # (2, 4, 4, 2)
+    t_oob = (t_nbrs[..., 0] < 0) | (t_nbrs[..., 0] >= H) | \
+            (t_nbrs[..., 1] < 0) | (t_nbrs[..., 1] >= W)
+    t_nbrs_c = jnp.clip(t_nbrs, 0, jnp.array([H - 1, W - 1]))
+    nbr_pass = (~t_oob) & passable[t_nbrs_c[..., 0], t_nbrs_c[..., 1]]  # (2, 4, 4)
+    # 0:UP(退DOWN), 1:DOWN(退UP), 2:LEFT(退RIGHT), 3:RIGHT(退LEFT)
+    opp_mask = jnp.array([
+        [False, True, False, False],
+        [True, False, False, False],
+        [False, False, False, True],
+        [False, False, True, False],
+    ], dtype=jnp.bool_)
+    outward_exits = (nbr_pass & ~opp_mask[None, :, :]).sum(axis=-1)     # (2, 4)
+    target_pass = (~oob) & passable[targets_c[0, :, :, 0], targets_c[0, :, :, 1]]  # (2, 4)
+    safe_escape = (move[:, :4] & target_pass & (outward_exits >= 1)).any(axis=-1)  # (2,)
+
+    # 放泡：存活 & 不在墙/砖格 & 脚下无泡 & 在场泡数 < 成长上限 & 存在安全逃生出口
     cell = pos.astype(jnp.int32)
     cell = jnp.stack([jnp.clip(cell[:, 0], 0, H - 1),
                       jnp.clip(cell[:, 1], 0, W - 1)], axis=-1)
@@ -1421,7 +1442,7 @@ def legal_mask(state: BombState) -> tuple[jnp.ndarray, jnp.ndarray]:
         ((owner == 0) & (fuse > 0)).sum(),
         ((owner == 1) & (fuse > 0)).sum(),
     ])
-    can_bomb = alive & (cur_f <= 0) & ~on_solid & (live < bombs_cap)
+    can_bomb = alive & (cur_f <= 0) & ~on_solid & (live < bombs_cap) & safe_escape
     bomb = jnp.stack([jnp.ones_like(alive),        # bomb=0（不放）恒合法
                       can_bomb | ~alive], axis=-1)  # 死亡 bomb=1 放开
     return move, bomb

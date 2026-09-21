@@ -46,7 +46,7 @@ TIMEOUT_MAX_BONUS = 2.0        # 兼容旧测试/超参数别名
 TIMEOUT_TRAIL_PENALTY = 1.0    # 超时血量落后方固定惩罚
 TIMEOUT_DRAW_BONUS = 0.0       # 平血超时双方奖励
 MUTUAL_HIT_PENALTY = 0.0       # 双方同 tick 互损额外惩罚（如 1.0 表示互换血扣 1 分）
-DOUBLE_DEATH_PENALTY = 0.0     # 双方同 tick 全部阵亡（真同归双亡 0:0）惩罚（如 8.0）
+DOUBLE_DEATH_PENALTY = 5.0     # 双方同 tick 全部阵亡（真同归双亡 0:0）惩罚（对齐战败 5.0）
 WIN_HP_BONUS = 0.0             # 纯净获胜残余血量奖励（每剩 1 滴血奖励分，如 0.5）
 
 
@@ -298,7 +298,8 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
                     win_hp_bonus=WIN_HP_BONUS,
                     trade_win_bonus=TRADE_WIN_BONUS,
                     flee_bot_ratio=0.20,
-                    idle_penalty=0.015):
+                    idle_penalty=0.015,
+                    action_repeat=1):
     """自对弈：同一网络打两边，可选混入部分逃跑对手环境。states (N, ...)。返回 (new_states, batch, nov, kills)。
 
     nov：每 env/玩家的 novelty 计数（未加权，与 batch.rew 同口径窗口累计）。
@@ -408,6 +409,49 @@ def collect_rollout(params, arch, states, key, num_steps, no_mask=False,
         n_alive = info["alive"].sum(axis=-1)          # (N,)
         death_done = done & (n_alive == 1)
         kills = kills + death_done.astype(jnp.float32)   # 击杀局数（动态退火 x）
+
+        if action_repeat == 2:
+            key, kstep2, k_bot1_2, k_bot0_2 = jrandom.split(key, 4)
+            # AI 维持上一帧移动惯性，放炮指令仅首帧触发脉冲 (bomb=0)
+            a0_2 = jnp.stack([a0[:, 0], jnp.zeros_like(a0[:, 1])], axis=-1)
+            a1_2 = jnp.stack([a1[:, 0], jnp.zeros_like(a1[:, 1])], axis=-1)
+            # 规则怪 (Flee Bot) 在第 2 物理 tick 执行 100ms 敏捷避险刷新
+            if n_flee > 0:
+                mm2_all, bm2_all = both_masks(new_states)
+                if n_flee_half > 0:
+                    bot1_acts2 = flee_bot_actions(
+                        new_states.pos[:n_flee_half, 1], new_states.pos[:n_flee_half, 0],
+                        mm2_all[n:n + n_flee_half], bm2_all[n:n + n_flee_half], k_bot1_2
+                    )
+                    a1_2 = a1_2.at[:n_flee_half].set(bot1_acts2)
+                if n_flee > n_flee_half:
+                    bot0_acts2 = flee_bot_actions(
+                        new_states.pos[n_flee_half:n_flee, 0], new_states.pos[n_flee_half:n_flee, 1],
+                        mm2_all[n_flee_half:n_flee], bm2_all[n_flee_half:n_flee], k_bot0_2
+                    )
+                    a0_2 = a0_2.at[n_flee_half:n_flee].set(bot0_acts2)
+            env_acts2 = jnp.stack([a0_2, a1_2], axis=1)
+            keys2 = jrandom.split(kstep2, n)
+            st2, done2, info2 = jax.vmap(
+                lambda s, a, kk: step(s, a, kk, return_info=True))(new_states, env_acts2, keys2)
+            newly2, new_visited = novelty_transition(new_visited, info2["cell"], done2)
+            rew2 = reward_from_events(
+                info2["dmg"], new_states.alive, info2["alive"], info2["hp"], done2,
+                info2["crate"], newly2, info2["walls"], crate_coef, explore_coef,
+                brick_coef, timeout_alpha, win_bonus, lose_bonus,
+                timeout_lead_bonus, timeout_trail_penalty, timeout_draw_bonus,
+                mutual_hit_penalty, double_death_penalty, win_hp_bonus,
+                trade_win_bonus,
+                moves=env_acts2[:, :, 0], bombs=env_acts2[:, :, 1], idle_penalty=idle_penalty)
+            rew = rew + jnp.where(done[:, None], 0.0, rew2)
+            nov = nov + jnp.where(done[:, None], 0.0, newly2.astype(jnp.float32))
+            n_alive2 = info2["alive"].sum(axis=-1)
+            death_done2 = done2 & (n_alive2 == 1) & (~done)
+            kills = kills + death_done2.astype(jnp.float32)
+            new_states = jax.tree_util.tree_map(
+                lambda s1, s2: jnp.where(done.reshape((-1,) + (1,) * (s1.ndim - 1)), s1, s2),
+                new_states, st2)
+            done = done | done2
         d = jnp.concatenate([done, done])
         rew = jnp.concatenate([rew[:, 0], rew[:, 1]])
         obs_s = (jnp.round(obs * 255.0).astype(jnp.uint8)

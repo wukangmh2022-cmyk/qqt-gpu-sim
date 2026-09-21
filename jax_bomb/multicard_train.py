@@ -312,6 +312,9 @@ def main():
                          "pushable 通道），用于复刻旧 checkpoint；默认 14 通道")
     ap.add_argument("--checkpoint", action="store_true",
                     default=cfg("runtime", "checkpoint", False))
+    ap.add_argument("--action-repeat", type=int,
+                    default=int(cfg("runtime", "action_repeat", 1)),
+                    help="AI 动作重复/宏观步 tick 数 (1=100ms, 2=200ms/5Hz)")
     # ---- Local SGD（有损同步，跨机降通信）----
     ap.add_argument("--lsgd-k", type=int,
                     default=int(os.environ.get("LSGD_K", str(
@@ -725,7 +728,8 @@ def main():
             args.mutual_hit_penalty, args.double_death_penalty,
             args.win_hp_bonus, args.trade_win_bonus,
             flee_bot_ratio=args.flee_bot_ratio,
-            idle_penalty=getattr(args, "idle_penalty", 0.015))
+            idle_penalty=getattr(args, "idle_penalty", 0.015),
+            action_repeat=getattr(args, "action_repeat", 1))
         obs, state, acts, lps, vals, rew, done, masks = batch
         fobs = both_perspectives(states)
         fmasks = both_masks(states)
