@@ -1,0 +1,30 @@
+{
+  "iteration": 831,
+  "timestamp": "2026-09-17 00:52:37",
+  "global_steps": 10433617920,
+  "curriculum_stage": 0,
+  "annealed_hyperparams": {
+    "alpha": 1.0,
+    "alpha_fix": 1.0,
+    "alpha_dyn": 1.0,
+    "lose_bonus": 5.0,
+    "crate_coef": 0.25,
+    "explore_coef": 0.0,
+    "brick_coef": 0.20000000298023224,
+    "mutual_hit_penalty": 0.0,
+    "double_death_penalty": 0.0,
+    "win_hp_bonus": 0.2,
+    "trade_win_bonus": 5.0,
+    "lr": null
+  },
+  "training_telemetry": {
+    "loss": 1.5120115280151367,
+    "mean_reward": 0.018014993518590927,
+    "explore_reward": 0.0,
+    "kill_rate": 0.929679274559021,
+    "sps": 436476.03328283184,
+    "sps_avg": 434311.43315863423,
+    "ep_len": 299.4716913773948,
+    "dt": 28.800261735916138
+  }
+}

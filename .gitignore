@@ -2,7 +2,9 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
-ckpt/
+ckpt/*
+!ckpt/*.pt
+!ckpt/params_it00000831*
 ckpt_*/
 
 .DS_Store
@@ -38,6 +40,7 @@ web/models/index.all_local.json
 !web/models/params_Pre-Train_Test.*
 !web/models/params_it00000346_ema.*
 params_it*.pkl
+!ckpt/params_it00000831*.pkl
 params_surgery*.pkl
 
 # Whitelist key checkpoints for GitHub Pages
