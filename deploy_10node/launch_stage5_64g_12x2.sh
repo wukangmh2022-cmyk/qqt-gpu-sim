@@ -10,7 +10,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 NODES_FILE="$SCRIPT_DIR/nodes_current.txt"
 CONFIG_REL="configs/stage5_64g_12x2gpu_12h.toml"
 
-# 1. 读取节点
+# 1. 读取节点列表
 N_PORT=(); N_HOST=(); N_PASS=()
 PENDING_PORT=""; PENDING_HOST=""
 while IFS= read -r line || [ -n "$line" ]; do
@@ -30,7 +30,7 @@ while IFS= read -r line || [ -n "$line" ]; do
 done < "$NODES_FILE"
 
 NW=${#N_PORT[@]}
-echo "=== 已提取全部 $NW 台在线双卡节点用于 $((NW * 2)) 卡 Stage 5 (5Hz 宗师全图长训) ==="
+echo "=== 已提取全部 $NW 台在线双卡节点用于 $((NW * 2)) 卡 Stage 5 (64GB 5Hz 全图长训) ==="
 
 WORK="/tmp/stage5_64g_work"
 rm -rf "$WORK" && mkdir -p "$WORK"
@@ -47,72 +47,71 @@ EOscp
   chmod +x "$WORK/cmd_$i" "$WORK/scp_$i"
 done
 
-echo "=== [1/4] 清理全部 $NW 台节点历史训练残留进程与旧日志 ==="
+echo "=== [1/4] 清理全部 $NW 台节点历史残留进程 ==="
 for i in $(seq 0 $((NW-1))); do
-  ( "$WORK/cmd_$i" "pkill -9 -f train_real 2>/dev/null; pkill -9 -f multicard_train 2>/dev/null; rm -f /root/private_data/train_r$i.log; true" >/dev/null 2>&1 ) &
+  "$WORK/cmd_$i" "pkill -9 -f train_real 2>/dev/null; pkill -9 -f multicard_train 2>/dev/null; rm -f /root/train_r*.log; true" >/dev/null 2>&1 || true
+  sleep 0.2
 done
-wait
-"$WORK/cmd_0" "rm -f /root/private_data/train_r*.log" >/dev/null 2>&1 || true
-echo "  ✓ $NW 台节点清理完毕"
+echo "  ✓ $NW 台节点残留进程清理完毕"
 
-echo "=== [2/4] 打包并同步最新代码、配置、wheels 与 it831_ema 底模至集群共享存储 ==="
-rm -rf /tmp/jaxbomb_64g && mkdir -p /tmp/jaxbomb_64g/scripts /tmp/jaxbomb_64g/configs /tmp/jaxbomb_64g/ckpt /tmp/jaxbomb_64g/tests /tmp/jaxbomb_64g/wheels
-cp -r "$ROOT/jax_bomb" /tmp/jaxbomb_64g/
-cp -r "$ROOT/tests" /tmp/jaxbomb_64g/
-cp "$ROOT/scripts/cluster_selfcheck.py" /tmp/jaxbomb_64g/cluster_selfcheck.py 2>/dev/null || true
-cp "$ROOT/levels.json" /tmp/jaxbomb_64g/levels.json
-cp -r "$ROOT/configs"/* /tmp/jaxbomb_64g/configs/
-cp "$ROOT/ckpt/params_it00000831_ema.pkl" /tmp/jaxbomb_64g/ckpt/ 2>/dev/null || cp "$ROOT/ckpt_local/params_it00000831_ema.pkl" /tmp/jaxbomb_64g/ckpt/
-cp /tmp/dcu_wheels/*.whl /tmp/jaxbomb_64g/wheels/ 2>/dev/null || true
+echo "=== [2/4] 初始化持久化存储目录 ==="
+"$WORK/cmd_0" "mkdir -p /root/private_data/stage5_64g_runs/ckpt_local" >/dev/null 2>&1 || true
+MASTER_IP=$("$WORK/cmd_0" "hostname -I | awk '{print \$1}'" | tr -d '\r\n')
+echo "  ✓ Coordinator 节点: $MASTER_IP:29500"
 
-cat > /tmp/jaxbomb_64g/start_rank.sh <<'EOSTR'
+echo "=== [3/4] 分发各节点启动脚本 (WORLD_SIZE=$NW) ==="
+for i in $(seq 0 $((NW-1))); do
+  cat > "$WORK/start_rank_$i.sh" <<EOSTR
 #!/bin/bash
-RANK=$1
-WORLD_SIZE=$2
-MASTER=$3
-CONFIG=$4
-
-export WORLD_SIZE=$WORLD_SIZE
-export RANK=$RANK
-export MASTER_ADDR=$MASTER
+export WORLD_SIZE=$NW
+export RANK=$i
+export MASTER_ADDR=$MASTER_IP
 export MASTER_PORT=29500
 
 source /opt/dtk/env.sh 2>/dev/null
 unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
-export LD_PRELOAD=$(ls /usr/mpi/gcc/openmpi-*/lib/libmpi.so /public/software/mpi/*/lib/libmpi.so 2>/dev/null | head -1)
+export LD_LIBRARY_PATH=/opt/mpi/lib:\${LD_LIBRARY_PATH:-}
+export LD_PRELOAD=/opt/mpi/lib/libmpi.so
 export HP_DOMAIN_RAND=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 
-export PYTHONPATH="/root/private_data/qqt-gpu-sim_r$RANK:${PYTHONPATH:-}"
+export PYTHONPATH="/root/qqt-gpu-sim:\${PYTHONPATH:-}"
+export CKPT_LOCAL_DIR="/root/private_data/stage5_64g_runs/ckpt_local"
+export CKPT_LOCAL_EVERY=15
 
-cd /root/private_data/qqt-gpu-sim_r$RANK
-nohup python3 -u -m jax_bomb.train_real --config $CONFIG </dev/null > /root/private_data/train_r$RANK.log 2>&1 &
-echo "STARTED_RANK_$RANK"
+cd /root/qqt-gpu-sim
+nohup python3 -u -m jax_bomb.train_real --config $CONFIG_REL </dev/null > /root/train_r$i.log 2>&1 &
+PID=\$!
+echo "RANK_${i}_STARTED_PID_\${PID}"
 EOSTR
-chmod +x /tmp/jaxbomb_64g/start_rank.sh
+  chmod +x "$WORK/start_rank_$i.sh"
+  "$WORK/scp_$i" "$WORK/start_rank_$i.sh" "/root/start_rank.sh" >/dev/null 2>&1
+  sleep 0.2
+done
+echo "  ✓ 12 台节点 start_rank.sh 分发就绪"
 
-find /tmp/jaxbomb_64g -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
-(cd /tmp/jaxbomb_64g && tar czf /tmp/jaxbomb_64g.tgz jax_bomb tests levels.json configs ckpt start_rank.sh wheels)
-LOCAL_MD5=$(md5 -q /tmp/jaxbomb_64g.tgz 2>/dev/null || md5sum /tmp/jaxbomb_64g.tgz | awk '{print $1}')
-echo "  ✓ 本地归档构建完成 MD5: $LOCAL_MD5"
+echo "=== [4/4] 按序启动分布式训练集群 ==="
+echo "  -> 启动 Rank 0 (Coordinator)..."
+"$WORK/cmd_0" "bash /root/start_rank.sh"
+echo "  -> 等待 5 秒确保 Coordinator 绑定 29500 端口..."
+sleep 5
 
-echo "=== [3/4] 上传代码包至 Rank 0 并解压至各 Rank 工作区 ==="
-"$WORK/scp_0" /tmp/jaxbomb_64g.tgz /root/private_data/jaxbomb_stage5.tgz
-echo "  ✓ 代码包已推送至 Rank 0"
-
-for i in $(seq 0 $((NW-1))); do
-  ( "$WORK/cmd_$i" "rm -rf /root/private_data/qqt-gpu-sim_r$i && mkdir -p /root/private_data/qqt-gpu-sim_r$i && tar xzf /root/private_data/jaxbomb_stage5.tgz -C /root/private_data/qqt-gpu-sim_r$i" >/dev/null 2>&1 ) &
+echo "  -> 启动 Rank 1 ~ Rank $((NW-1))..."
+for i in $(seq 1 $((NW-1))); do
+  "$WORK/cmd_$i" "bash /root/start_rank.sh" &
+  sleep 0.3
 done
 wait
-echo "  ✓ 全集群各 Rank 工作区已就位"
 
-MASTER_IP=$("$WORK/cmd_0" "hostname -I | awk '{print \$1}'" | tr -d '\r\n')
-echo "=== [4/4] 启动分布式训练集群 (MASTER=$MASTER_IP, WORLD_SIZE=$NW) ==="
+echo "=== 全部 $NW 台双卡节点已拉起！等待 10 秒校验各节点进程状态... ==="
+sleep 10
+
 for i in $(seq 0 $((NW-1))); do
-  "$WORK/cmd_$i" "bash /root/private_data/qqt-gpu-sim_r$i/start_rank.sh $i $NW $MASTER_IP $CONFIG_REL"
+  status=$("$WORK/cmd_$i" "ps aux | grep train_real | grep -v grep | awk '{print \$2}'" 2>/dev/null | tr -d '\r\n' || echo "")
+  if [ -n "$status" ]; then
+    echo "  ✓ Rank $i 在线 (PID: $status)"
+  else
+    echo "  ✗ Rank $i 未检测到进程！"
+  fi
 done
-
-echo "=== 全部 $NW 台双卡节点已在后台拉起！==="
-echo "可使用监控脚本或查看 Rank 0 日志："
-echo "  bash deploy_10node/monitor_cluster.sh"
