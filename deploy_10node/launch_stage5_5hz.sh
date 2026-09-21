@@ -81,6 +81,8 @@ source /opt/dtk/env.sh 2>/dev/null
 unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
 export LD_PRELOAD=$(ls /usr/mpi/gcc/openmpi-*/lib/libmpi.so /public/software/mpi/*/lib/libmpi.so 2>/dev/null | head -1)
 export HP_DOMAIN_RAND=1
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 
 export PYTHONPATH="/root/private_data/qqt-gpu-sim_r$RANK:${PYTHONPATH:-}"
 

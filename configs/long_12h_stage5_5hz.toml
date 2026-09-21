@@ -25,7 +25,7 @@ fresh = false
 [runtime]
 action_repeat = 2
 no_mask = false
-obs_quant = false
+obs_quant = true
 checkpoint = false
 
 [model]
