@@ -138,7 +138,7 @@
   },
   {
    "name": "params_it00000831_ema",
-   "display_name": "params_it00000831_ema (🏆 破局宗师 · 10Hz巅峰旗舰 104.3亿步 EMA)",
+   "display_name": "params_it00000831_ema (8h长训 it831 10.43B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -535,6 +535,26 @@
    "generated_at": "2026-09-14 18:14 UTC"
   },
   {
+   "name": "params_it00000683_ema",
+   "display_name": "params_it00000683_ema (200ms反应者【训练中】)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 683,
+   "global_step": 5729419264,
+   "source": "params_it00000683_ema.pkl",
+   "generated_at": "2026-09-22 02:53 UTC",
+   "hz": 5,
+   "stage": 5
+  },
+  {
    "name": "params_it00000448_ema",
    "display_name": "params_it00000448_ema (8h长训 it448 5.62B步 EMA)",
    "arch": "transformer",
@@ -607,6 +627,24 @@
    "generated_at": "2026-09-14 04:06 UTC"
   },
   {
+   "name": "params_it00000615_ema",
+   "display_name": "params_it00000615_ema (8h长训 it615 5.16B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 615,
+   "global_step": 5158993920,
+   "source": "params_it00000615_ema.pkl",
+   "generated_at": "2026-09-22 02:30 UTC"
+  },
+  {
    "name": "params_it00000408_ema",
    "display_name": "params_it00000408_ema (8h长训 it408 5.12B步 EMA)",
    "arch": "transformer",
@@ -677,6 +715,24 @@
    "global_step": 4801978368,
    "source": "params_it00000383_ema.pkl",
    "generated_at": "2026-09-16 13:30 UTC"
+  },
+  {
+   "name": "params_it00000547_ema",
+   "display_name": "params_it00000547_ema (8h长训 it547 4.59B步 EMA)",
+   "arch": "transformer",
+   "obs_shape": [
+    14,
+    13,
+    15
+   ],
+   "embed": 392,
+   "patch": 3,
+   "depth": 4,
+   "n_players": 2,
+   "it": 547,
+   "global_step": 4588568576,
+   "source": "params_it00000547_ema.pkl",
+   "generated_at": "2026-09-22 02:02 UTC"
   },
   {
    "name": "params_it00000361_ema",
@@ -763,26 +819,6 @@
    "global_step": 4356833280,
    "source": "params_it00000278_ema.pkl",
    "generated_at": "2026-09-13 15:05 UTC"
-  },
-  {
-   "name": "params_it00000340_ema",
-   "display_name": "params_it00000340_ema (🔥 5Hz 破局宗师 · Stage5最新旗舰 42.8亿步 EMA)",
-   "arch": "transformer",
-   "obs_shape": [
-    14,
-    13,
-    15
-   ],
-   "embed": 392,
-   "patch": 3,
-   "depth": 4,
-   "n_players": 2,
-   "it": 340,
-   "global_step": 4278190080,
-   "source": "params_it00000340_ema.pkl",
-   "generated_at": "2026-09-22 08:32 CST",
-   "hz": 5,
-   "stage": 5
   },
   {
    "name": "ViTModel_500",
@@ -1136,7 +1172,7 @@
   },
   {
    "name": "params_it00000223_ema",
-   "display_name": "params_it00000223_ema (🥈 破局宗师 · 稍弱版 27.9亿步 EMA)",
+   "display_name": "params_it00000223_ema (8h长训 it223 2.79B步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -2200,7 +2236,7 @@
    ],
    "n_players": 2,
    "global_step": 400621568,
-   "elo": 2437.0,
+   "elo": 2437,
    "source": "duel_5x3.pt",
    "generated_at": "2026-08-16 15:11 UTC"
   },

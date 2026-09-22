@@ -2277,7 +2277,7 @@
     }
 
     _fallbackForward(obs, state) {
-      if (this.buf) {
+      if (this.buf && this.tensors && this.tensors.tok_w) {
         return TransformerModel.prototype.forward.call(this, obs, state);
       }
       return {
@@ -2288,7 +2288,7 @@
     }
 
     _fallbackForward2(o0, s0, o1, s1) {
-      if (this.buf) {
+      if (this.buf && this.tensors && this.tensors.tok_w) {
         return TransformerModel.prototype.forward2.call(this, o0, s0, o1, s1);
       }
       return [

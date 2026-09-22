@@ -421,7 +421,7 @@
       let timer;
       const runP = sess.run({ obs: dummyObs, state: dummyState });
       const toP = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('预热超时 (>8000ms)')), 8000);
+        timer = setTimeout(() => reject(new Error('预热超时 (>20000ms)')), 20000);
       });
       try {
         await Promise.race([runP, toP]);
@@ -435,7 +435,7 @@
     let backendUsed = 'wasm';
     if (hasGpu) {
       try {
-        const sess = await createOrtSessionWithTimeout(buffer, ['webgpu', 'wasm'], 8000);
+        const sess = await createOrtSessionWithTimeout(buffer, ['webgpu'], 20000);
         await warmupSession(sess);
         session = sess;
         backendUsed = 'webgpu';
@@ -445,7 +445,7 @@
       }
     }
     if (!session) {
-      const sess = await createOrtSessionWithTimeout(buffer, ['wasm'], 15000);
+      const sess = await createOrtSessionWithTimeout(buffer, ['wasm'], 20000);
       try {
         await warmupSession(sess);
         console.log('[ort] WASM 预热成功');
@@ -509,61 +509,25 @@
     return [MOVE_IDLE, 0];
   }
 
-  // 异步非阻塞 AI 决策调度器：
-  // 彻底解耦游戏物理 Tick（严格 10Hz/100ms）与神经网络推理耗时（避免 300-500ms 造成主循环冻结、泡泡引信延时与走步卡顿）。
-  const aiAsyncState = [
-    { move: MOVE_IDLE, bomb: 0, inferring: false, lastInferT: -1 },
-    { move: MOVE_IDLE, bomb: 0, inferring: false, lastInferT: -1 },
-  ];
-
-  function resetAiAsyncState() {
-    for (let p = 0; p < 2; p++) {
-      aiAsyncState[p].move = MOVE_IDLE;
-      aiAsyncState[p].bomb = 0;
-      aiAsyncState[p].inferring = false;
-      aiAsyncState[p].lastInferT = -1;
-    }
-  }
-
   // 玩家决策来源：'human' | '__hunter__' | 模型名（观战/规则 AI 时用）。
-  // 非阻塞：神经网络推理在后台运行，主物理循环绝不等待，泡泡引信与人类操作永远精准流畅。
-  function aiOf(pid) {
+  // 严格同步：模型决策与物理 step 逐帧对齐，确保放炮脉冲与移动方向 100% 准确生效
+  async function aiOf(pid) {
     if (pid === 0 && !elSpectate.checked) return [MOVE_IDLE, human.pendingBomb ? 1 : 0];
     const sel = pid === 0 ? p0Sel : enemySel;
     if (isRuleAi(sel)) {
       return getRuleAiAction(sim, pid, sel);
     }
     const m = sel ? modelCache.get(sel) : null;
-    if (!m) return [MOVE_IDLE, 0];          // 模型还没加载好：先站着
-
-    const st = aiAsyncState[pid];
-    const every = m.inferEvery || 1;
-    const need = !st.inferring && (st.lastInferT < 0 || (sim && sim.t - st.lastInferT >= every));
-
-    if (need && sim && !sim.done) {
-      st.inferring = true;
-      st.lastInferT = sim.t;
-      // 触发后台前向计算，绝不阻塞主物理循环
-      (async () => {
-        try {
-          const act = await m.act(sim, pid, rng);
-          if (Array.isArray(act)) {
-            st.move = act[0];
-            if (act[1] === 1) st.bomb = 1;
-          }
-        } catch (e) {
-          if (!m._lastInferError) m._lastInferError = String(e && e.message ? e.message : e);
-          console.error('[ai] 异步推理失败', sel, e);
-        } finally {
-          st.inferring = false;
-        }
-      })();
+    if (m) {
+      try {
+        return await m.act(sim, pid, rng);
+      } catch (e) {
+        if (!m._lastInferError) m._lastInferError = String(e && e.message ? e.message : e);
+        console.error('[ai] 推理失败', sel, e);
+        return [MOVE_IDLE, 0];
+      }
     }
-
-    // 消费放炮脉冲（仅在决策生效的单 tick 触发放炮，不连放），移动动作维持惯性走位
-    const b = st.bomb;
-    st.bomb = 0;
-    return [st.move, b];
+    return [MOVE_IDLE, 0];
   }
 
   // ------------------------------------------------------------ AI 动作即时执行与推理降频
@@ -587,14 +551,14 @@
     const m = modelCache.get(name);
     if (m && m.meta) {
       if (m.meta.hz === 5 || m.meta.stage === 5) return true;
-      if (typeof m.meta.display_name === 'string' && m.meta.display_name.includes('5Hz')) return true;
+      if (typeof m.meta.display_name === 'string' && (m.meta.display_name.includes('5Hz') || m.meta.display_name.includes('200ms'))) return true;
     }
     const item = (typeof modelList !== 'undefined' && modelList.find) ? modelList.find(x => x.name === name) : null;
     if (item) {
       if (item.hz === 5 || item.stage === 5) return true;
-      if (typeof item.display_name === 'string' && item.display_name.includes('5Hz')) return true;
+      if (typeof item.display_name === 'string' && (item.display_name.includes('5Hz') || item.display_name.includes('200ms'))) return true;
     }
-    if (/params_it000003[0-9]{2}/.test(name) || name.includes('5hz') || name.includes('stage5')) return true;
+    if (/params_it00000[3-9][0-9]{2}/.test(name) || name.includes('5hz') || name.includes('stage5')) return true;
     return false;
   }
 
@@ -609,7 +573,6 @@
       aiMotorQueues[p].lastMove = MOVE_IDLE;
       aiMotorQueues[p].accum = 0;
     }
-    resetAiAsyncState();
     const every = getInferEveryFromUi();
     for (const m of modelCache.values()) {
       m.inferEvery = every;
@@ -2260,14 +2223,14 @@
   let tickDebt = 0;                  // 后台节流补偿欠账(ms): 标签页隐藏时 setInterval 被
                                      // 节流到 ~1Hz(10倍慢) → 每次触发补跑缺失的 tick 保持实时
   const tickTimeline = [];
-  function logicTick() {
+  async function logicTick() {
     if (!running || !sim || sim.done || tickBusy) return;
     tickBusy = true;
     try {
       tickDebt += TICK * 1000;       // 本次触发期望推进 100ms
       let guard = 0;
       while (tickDebt >= TICK * 1000 && guard < 12 && running && sim && !sim.done) {
-        logicTickInner();
+        await logicTickInner();
         tickDebt -= TICK * 1000;
         guard++;
       }
@@ -2276,7 +2239,7 @@
       tickBusy = false;
     }
   }
-  function logicTickInner() {
+  async function logicTickInner() {
     const tk0 = performance.now();
     // 模型未就绪（正在加载/加载失败）先不推进：敌人 + 观战时的我方；
     // 规则 AI 随时可用。缺这一步观战 P0 模型没进缓存 → aiOf 返回 IDLE 站着。
@@ -2286,16 +2249,22 @@
 
     let a0, a1;
     const actionT0 = performance.now();
-    a0 = aiOf(0);
-    // 点按/长按区分: 每次 tick **消费** pendingBomb(只放一次), 仅当按键
-    // 仍按住且超过长按阈值(180ms)才**重新武装** → 点按=恰好1颗, 长按=连放
-    if (!spectate) {
-      human.pendingBomb = false;
-      const heldNow = held.has('Space') || joyBombDown;
-      const downSince = held.has('Space') ? spaceDownSince : joyDownSince;
-      if (heldNow && performance.now() - downSince > 180) human.pendingBomb = true;
+    const pairM = (spectate && enemySel === p0Sel) ? modelCache.get(enemySel) : null;
+    if (pairM && pairM.bothAct) {
+      const pair = await pairM.bothAct(sim, rng);
+      a0 = pair[0]; a1 = pair[1];
+    } else {
+      a0 = await aiOf(0);
+      // 点按/长按区分: 每次 tick **消费** pendingBomb(只放一次), 仅当按键
+      // 仍按住且超过长按阈值(180ms)才**重新武装** → 点按=恰好1颗, 长按=连放
+      if (!spectate) {
+        human.pendingBomb = false;
+        const heldNow = held.has('Space') || joyBombDown;
+        const downSince = held.has('Space') ? spaceDownSince : joyDownSince;
+        if (heldNow && performance.now() - downSince > 180) human.pendingBomb = true;
+      }
+      a1 = await aiOf(1);
     }
-    a1 = aiOf(1);
     const actionMs = performance.now() - actionT0;
     // 推理后即刻行动：零控制延迟，彻底消除左右摇摆震荡；AI 反应调速由模型的 inferEvery 降频负责
     // 拾取判定：人类玩家脚下 step 前有宝箱 → step 后没有 = 吃到

@@ -69,6 +69,6 @@ params_surgery*.pkl
 !web/models/params_it00000032*
 !web/models/params_it00000831*
 !web/models/params_it00000223*
-!web/models/params_it00000340*
+!web/models/params_it00000683*
 # !web/models/params_hunt_*
 eval_local/
