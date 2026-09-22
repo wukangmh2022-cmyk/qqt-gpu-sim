@@ -138,7 +138,7 @@
   },
   {
    "name": "params_it00000831_ema",
-   "display_name": "params_it00000831_ema (8h长训 it831 10.43B步 EMA)",
+   "display_name": "params_it00000831_ema (🏆 破局宗师 · 10Hz巅峰旗舰 104.3亿步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -766,7 +766,7 @@
   },
   {
    "name": "params_it00000340_ema",
-   "display_name": "params_it00000340_ema (🔥Stage5 5Hz最新旗舰 4.28B步 EMA)",
+   "display_name": "params_it00000340_ema (🔥 5Hz 破局宗师 · Stage5最新旗舰 42.8亿步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
@@ -1136,7 +1136,7 @@
   },
   {
    "name": "params_it00000223_ema",
-   "display_name": "params_it00000223_ema (8h长训 it223 2.79B步 EMA)",
+   "display_name": "params_it00000223_ema (🥈 破局宗师 · 稍弱版 27.9亿步 EMA)",
    "arch": "transformer",
    "obs_shape": [
     14,
