@@ -509,25 +509,61 @@
     return [MOVE_IDLE, 0];
   }
 
+  // 异步非阻塞 AI 决策调度器：
+  // 彻底解耦游戏物理 Tick（严格 10Hz/100ms）与神经网络推理耗时（避免 300-500ms 造成主循环冻结、泡泡引信延时与走步卡顿）。
+  const aiAsyncState = [
+    { move: MOVE_IDLE, bomb: 0, inferring: false, lastInferT: -1 },
+    { move: MOVE_IDLE, bomb: 0, inferring: false, lastInferT: -1 },
+  ];
+
+  function resetAiAsyncState() {
+    for (let p = 0; p < 2; p++) {
+      aiAsyncState[p].move = MOVE_IDLE;
+      aiAsyncState[p].bomb = 0;
+      aiAsyncState[p].inferring = false;
+      aiAsyncState[p].lastInferT = -1;
+    }
+  }
+
   // 玩家决策来源：'human' | '__hunter__' | 模型名（观战/规则 AI 时用）。
-  // async：ORT 模型的 act 是异步 session.run；纯 JS 模型同步值 await 后不变。
-  async function aiOf(pid) {
+  // 非阻塞：神经网络推理在后台运行，主物理循环绝不等待，泡泡引信与人类操作永远精准流畅。
+  function aiOf(pid) {
     if (pid === 0 && !elSpectate.checked) return [MOVE_IDLE, human.pendingBomb ? 1 : 0];
     const sel = pid === 0 ? p0Sel : enemySel;
     if (isRuleAi(sel)) {
       return getRuleAiAction(sim, pid, sel);
     }
     const m = sel ? modelCache.get(sel) : null;
-    if (m) {
-      try { return await m.act(sim, pid, rng); }
-      catch (e) {
-        // 推理失败不能伪装成正常 IDLE；记录首个错误供状态栏和调试钩子定位。
-        if (!m._lastInferError) m._lastInferError = String(e && e.message ? e.message : e);
-        console.error('[ai] 推理失败', sel, e);
-        return [MOVE_IDLE, 0];
-      }
+    if (!m) return [MOVE_IDLE, 0];          // 模型还没加载好：先站着
+
+    const st = aiAsyncState[pid];
+    const every = m.inferEvery || 1;
+    const need = !st.inferring && (st.lastInferT < 0 || (sim && sim.t - st.lastInferT >= every));
+
+    if (need && sim && !sim.done) {
+      st.inferring = true;
+      st.lastInferT = sim.t;
+      // 触发后台前向计算，绝不阻塞主物理循环
+      (async () => {
+        try {
+          const act = await m.act(sim, pid, rng);
+          if (Array.isArray(act)) {
+            st.move = act[0];
+            if (act[1] === 1) st.bomb = 1;
+          }
+        } catch (e) {
+          if (!m._lastInferError) m._lastInferError = String(e && e.message ? e.message : e);
+          console.error('[ai] 异步推理失败', sel, e);
+        } finally {
+          st.inferring = false;
+        }
+      })();
     }
-    return [MOVE_IDLE, 0];          // 模型还没加载好：先站着
+
+    // 消费放炮脉冲（仅在决策生效的单 tick 触发放炮，不连放），移动动作维持惯性走位
+    const b = st.bomb;
+    st.bomb = 0;
+    return [st.move, b];
   }
 
   // ------------------------------------------------------------ AI 动作即时执行与推理降频
@@ -573,6 +609,7 @@
       aiMotorQueues[p].lastMove = MOVE_IDLE;
       aiMotorQueues[p].accum = 0;
     }
+    resetAiAsyncState();
     const every = getInferEveryFromUi();
     for (const m of modelCache.values()) {
       m.inferEvery = every;
@@ -2223,14 +2260,14 @@
   let tickDebt = 0;                  // 后台节流补偿欠账(ms): 标签页隐藏时 setInterval 被
                                      // 节流到 ~1Hz(10倍慢) → 每次触发补跑缺失的 tick 保持实时
   const tickTimeline = [];
-  async function logicTick() {
+  function logicTick() {
     if (!running || !sim || sim.done || tickBusy) return;
     tickBusy = true;
     try {
       tickDebt += TICK * 1000;       // 本次触发期望推进 100ms
       let guard = 0;
       while (tickDebt >= TICK * 1000 && guard < 12 && running && sim && !sim.done) {
-        await logicTickInner();
+        logicTickInner();
         tickDebt -= TICK * 1000;
         guard++;
       }
@@ -2239,32 +2276,26 @@
       tickBusy = false;
     }
   }
-  async function logicTickInner() {
+  function logicTickInner() {
     const tk0 = performance.now();
     // 模型未就绪（正在加载/加载失败）先不推进：敌人 + 观战时的我方；
     // 规则 AI 随时可用。缺这一步观战 P0 模型没进缓存 → aiOf 返回 IDLE 站着。
     const spectate = elSpectate.checked;
     if (!isRuleAi(enemySel) && !modelCache.has(enemySel)) return;
     if (spectate && !isRuleAi(p0Sel) && !modelCache.has(p0Sel)) return;
-    // 观战 + 双方同一模型 → 一次批处理前向出双玩家动作（ORT 为 batch=2 一次 run）
+
     let a0, a1;
     const actionT0 = performance.now();
-    const pairM = (spectate && enemySel === p0Sel) ? modelCache.get(enemySel) : null;
-    if (pairM && pairM.bothAct) {
-      const pair = await pairM.bothAct(sim, rng);
-      a0 = pair[0]; a1 = pair[1];
-    } else {
-      a0 = await aiOf(0);
-      // 点按/长按区分: 每次 tick **消费** pendingBomb(只放一次), 仅当按键
-      // 仍按住且超过长按阈值(180ms)才**重新武装** → 点按=恰好1颗, 长按=连放
-      if (!spectate) {
-        human.pendingBomb = false;
-        const heldNow = held.has('Space') || joyBombDown;
-        const downSince = held.has('Space') ? spaceDownSince : joyDownSince;
-        if (heldNow && performance.now() - downSince > 180) human.pendingBomb = true;
-      }
-      a1 = await aiOf(1);
+    a0 = aiOf(0);
+    // 点按/长按区分: 每次 tick **消费** pendingBomb(只放一次), 仅当按键
+    // 仍按住且超过长按阈值(180ms)才**重新武装** → 点按=恰好1颗, 长按=连放
+    if (!spectate) {
+      human.pendingBomb = false;
+      const heldNow = held.has('Space') || joyBombDown;
+      const downSince = held.has('Space') ? spaceDownSince : joyDownSince;
+      if (heldNow && performance.now() - downSince > 180) human.pendingBomb = true;
     }
+    a1 = aiOf(1);
     const actionMs = performance.now() - actionT0;
     // 推理后即刻行动：零控制延迟，彻底消除左右摇摆震荡；AI 反应调速由模型的 inferEvery 降频负责
     // 拾取判定：人类玩家脚下 step 前有宝箱 → step 后没有 = 吃到
@@ -2383,7 +2414,7 @@
       if (ai) {
         elEnemyAi.value = ai; elP0Ai.value = ai;
         p0Sel = ai; enemySel = ai;
-        try { await ensureModel(ai); } catch (e) { console.warn('[auto] 模型加载失败', e); }
+        ensureModel(ai).catch(e => console.warn('[auto] 模型加载失败', e));
       } else {
         elEnemyAi.value = HUNTER_VAL;
         elP0Ai.value = HUNTER_VAL;
@@ -2394,7 +2425,7 @@
       console.log('[auto] 自动开局: 双方 ' + (ai || '规则 Hunter') + ', empty_scene');
     }
     // (B键坐标点击复制已移除)
-      await stopVideoRecorder();
+      stopVideoRecorder();
       running = false;
     }
   }
