@@ -21,10 +21,10 @@
   const H = 13, W = 15, N = H * W;
   const PUSH_TIME = 0.3;   // 推箱子: 持续推 ≥0.3s 才动一格
   const BUSH_EID = 6003;   // 野外绿色躲猫猫草丛（可通行、可被爆炸清除）
-  const ORT_RUN_TIMEOUT_MS = 1500;  // WebGPU 卡住时及时回退纯 JS，不能阻塞游戏 tick
+  const ORT_RUN_TIMEOUT_MS = 5000;  // 给予 WebGPU/WASM 充分的推理与着色器编译缓冲，避免误报超时回退
   const N_PLAYERS = 2;
-  const MOVE_UP = 0, MOVE_DOWN = 1, MOVE_LEFT = 2, MOVE_RIGHT = 3, MOVE_IDLE = 4;
   const N_MOVES = 5, N_BOMB = 2;
+  const MOVE_UP = 0, MOVE_DOWN = 1, MOVE_LEFT = 2, MOVE_RIGHT = 3, MOVE_IDLE = 4;
   // (dy, dx)，索引与方向编码对齐
   const DIRS = [[-1, 0], [1, 0], [0, -1], [0, 1]];
   const EPS = 1e-4;
@@ -1565,6 +1565,7 @@
     }
 
     T(name) {
+      if (!this.tensors || !this.tensors[name] || !this.buf) return new Float32Array(0);
       const [off, cnt] = this.tensors[name];
       return this.buf.subarray(off, off + cnt);
     }
@@ -2257,11 +2258,18 @@
           timer = setTimeout(() => reject(new Error(`ORT ${label} 超时（>${ORT_RUN_TIMEOUT_MS}ms），回退纯 JS`)),
                               ORT_RUN_TIMEOUT_MS);
         });
-        return await Promise.race([run, timeout]);
+        const out = await Promise.race([run, timeout]);
+        this._ortFailCount = 0;
+        return out;
       } catch (e) {
-        this._ortDisabled = true;
+        this._ortFailCount = (this._ortFailCount || 0) + 1;
         this._lastInferError = String(e && e.message ? e.message : e);
-        console.warn('[ort] 推理失败，回退纯 JS：', this._lastInferError);
+        if (this._ortFailCount >= 3) {
+          this._ortDisabled = true;
+          console.warn('[ort] 连续 3 次推理失败，彻底禁用 ORT：', this._lastInferError);
+        } else {
+          console.warn(`[ort] 推理异常 (${this._ortFailCount}/3)：`, this._lastInferError);
+        }
         return null;
       } finally {
         if (timer) clearTimeout(timer);
@@ -2269,11 +2277,24 @@
     }
 
     _fallbackForward(obs, state) {
-      return TransformerModel.prototype.forward.call(this, obs, state);
+      if (this.buf) {
+        return TransformerModel.prototype.forward.call(this, obs, state);
+      }
+      return {
+        move: new Float32Array([0, 0, 0, 0, 1]),
+        bomb: new Float32Array([1, 0]),
+        value: 0
+      };
     }
 
     _fallbackForward2(o0, s0, o1, s1) {
-      return TransformerModel.prototype.forward2.call(this, o0, s0, o1, s1);
+      if (this.buf) {
+        return TransformerModel.prototype.forward2.call(this, o0, s0, o1, s1);
+      }
+      return [
+        { move: new Float32Array([0, 0, 0, 0, 1]), bomb: new Float32Array([1, 0]), value: 0 },
+        { move: new Float32Array([0, 0, 0, 0, 1]), bomb: new Float32Array([1, 0]), value: 0 }
+      ];
     }
 
     async forward(obs, state) {

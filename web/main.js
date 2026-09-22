@@ -412,21 +412,54 @@
     if (elCurModel) elCurModel.textContent = '⚙️ 正在初始化推理引擎...';
     requestAnimationFrame(updateProgress);
 
+    async function warmupSession(sess) {
+      const C = (meta && meta.obs_shape) ? meta.obs_shape[0] : 14;
+      const H = (meta && meta.obs_shape) ? meta.obs_shape[1] : 13;
+      const W = (meta && meta.obs_shape) ? meta.obs_shape[2] : 15;
+      const dummyObs = new ort.Tensor('float32', new Float32Array(C * H * W), [1, C, H, W]);
+      const dummyState = new ort.Tensor('float32', new Float32Array(24), [1, 24]);
+      let timer;
+      const runP = sess.run({ obs: dummyObs, state: dummyState });
+      const toP = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('预热超时 (>8000ms)')), 8000);
+      });
+      try {
+        await Promise.race([runP, toP]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+
     const hasGpu = typeof navigator !== 'undefined' && !!navigator.gpu;
     let session = null;
+    let backendUsed = 'wasm';
     if (hasGpu) {
       try {
-        session = await createOrtSessionWithTimeout(buffer, ['webgpu', 'wasm'], 8000);
+        const sess = await createOrtSessionWithTimeout(buffer, ['webgpu', 'wasm'], 8000);
+        await warmupSession(sess);
+        session = sess;
+        backendUsed = 'webgpu';
+        console.log('[ort] WebGPU 会话与着色器预热成功');
       } catch (err) {
-        console.warn('[ort] WebGPU 初始化超时或失败，平滑降级至 WASM：', err);
+        console.warn('[ort] WebGPU 初始化或预热失败，平滑降级至 WASM：', err);
       }
     }
     if (!session) {
-      session = await createOrtSessionWithTimeout(buffer, ['wasm'], 15000);
+      const sess = await createOrtSessionWithTimeout(buffer, ['wasm'], 15000);
+      try {
+        await warmupSession(sess);
+        console.log('[ort] WASM 预热成功');
+      } catch (err) {
+        console.warn('[ort] WASM 预热警告：', err);
+      }
+      session = sess;
+      backendUsed = 'wasm';
     }
 
     loadPhase = '';
-    return new ORTTransformerModel({ meta }, session);
+    const m = new ORTTransformerModel({ meta }, session);
+    m._backend = backendUsed;
+    return m;
   }
 
   async function ensureModel(name) {
@@ -1630,9 +1663,10 @@
         `训练步数 ${fmtStep(m.meta.global_step ?? m.meta.it ?? 0)}<br>` +
         `观测 ${m.meta && m.meta.obs_shape ? m.meta.obs_shape.join('×') : '14×13×15'} · 参数约 ${numParams.toLocaleString()}<br>` +
         `推理后端：${m.constructor.name === 'ORTTransformerModel'
-          ? (navigator.gpu ? 'WebGPU' : 'WASM') : '纯 JS'}` +
+          ? (m._backend === 'webgpu' ? 'WebGPU' : 'WASM (CPU 多线程)') : '纯 JS'}` +
         (m._ortError ? `<br><span class="dim">ORT 失败：${m._ortError.slice(0, 120)}</span>` : '') +
         (m._lastInferError ? `<br><span class="dim">推理失败：${m._lastInferError.slice(0, 160)}</span>` : '');
+      if (sim) startGame();
     } catch (e) {
       modelLoaded = true;
       requestAnimationFrame(updateProgress);
