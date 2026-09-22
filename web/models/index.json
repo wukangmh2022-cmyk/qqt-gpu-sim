@@ -536,7 +536,7 @@
   },
   {
    "name": "params_it00000683_ema",
-   "display_name": "params_it00000683_ema (200ms反应者【训练中】)",
+   "display_name": "params_it00000683_ema (200ms反应者【自杀降低版】)",
    "arch": "transformer",
    "obs_shape": [
     14,

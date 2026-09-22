@@ -1631,36 +1631,49 @@
       }
     }
 
-    // AI 决策：pid 是物理玩家位。模型统一用 pid=0 视角 —— 玩家 1 时观测
-    // 先做通道互换把自己搬到通道 0（play/duel.py::_swap_player_channels）。
-    act(sim, pid, rng) {
+    _getLaggedInputs(sim, pid) {
       const every = this.inferEvery || 1;
+      const lagTicks = Math.max(0, Math.round(every - 1.0));
+      const currObs = sim.encodeObs();
+      if (pid === 1) this._swapChannels(currObs);
+      if (lagTicks <= 0) return currObs;
+
+      if (!this._obsHistory) this._obsHistory = [[], []];
+      if (!this._obsHistory[pid]) this._obsHistory[pid] = [];
+
+      const obsBuf = this._obsHistory[pid];
+      obsBuf.push(currObs);
+      if (obsBuf.length > lagTicks + 1) obsBuf.shift();
+
+      const [C, h, w] = this.obsShape;
+      const n = h * w;
+      const laggedObs = new Float32Array(obsBuf[0]);
+      // 自身坐标本体感觉实时：覆盖 ch0 (前 n 个浮点数)
+      for (let i = 0; i < n; i++) laggedObs[i] = currObs[i];
+      return laggedObs;
+    }
+
+    // AI 决策：pid 是物理玩家位。模型统一用 pid=0 视角 —— 玩家 1 时观测
+    // 先做通道互换把自己搬到通道 0。本体感觉 10Hz 实时微步，外部视觉滞后。
+    act(sim, pid, rng) {
       const changed = sim !== this._cSim || sim._gen !== this._cGen;
-      if (changed || !this._nextInferT) {
+      if (changed || !this._cT) {
+        this._cSim = sim; this._cGen = sim._gen;
         this._cT = [-1, -1];
         this._cA = [null, null];
-        this._nextInferT = [0, 0];
+        this._obsHistory = [[], []];
       }
-      const need = changed || this._cT[pid] < 0 || (sim.t >= this._nextInferT[pid]);
-      if (need) {
-        this._cSim = sim; this._cGen = sim._gen;
-        const obs = sim.encodeObs();
-        if (pid === 1) this._swapChannels(obs);
-        const { mm, bm } = sim.legalMask();
-        const logits = this.forward(obs);
-        const aM = this._sampleMasked(logits.move, mm[pid], rng);
-        const aB = this._sampleMasked(logits.bomb, bm[pid], rng);
-        this._cA[pid] = [aM, aB];
-        this._cT[pid] = sim.t;
-        if (sim.t - this._nextInferT[pid] > every) {
-          this._nextInferT[pid] = sim.t + every;
-        } else {
-          this._nextInferT[pid] += every;
-        }
+      if (this._cT[pid] === sim.t && this._cA[pid]) {
         return this._cA[pid];
       }
-      // 非推理 tick：延续上一次移动惯性，放炮指令仅在推理决策帧触发单次脉冲
-      return [this._cA[pid][0], 0];
+      const obs = this._getLaggedInputs(sim, pid);
+      const { mm, bm } = sim.legalMask();
+      const logits = this.forward(obs);
+      const aM = this._sampleMasked(logits.move, mm[pid], rng);
+      const aB = this._sampleMasked(logits.bomb, bm[pid], rng);
+      this._cA[pid] = [aM, aB];
+      this._cT[pid] = sim.t;
+      return this._cA[pid];
     }
 
     _swapChannels(obs) {
@@ -2164,38 +2177,64 @@
       return outs;
     }
 
-    // AI 决策：每玩家自己的视角，不需要通道互换。按 (sim, pid, tick) 缓存：
-    // 同一 tick 重复询问同一玩家不再重复推理；不同玩家各算各的（人机对局
-    // 只算 pid=1，不白跑 pid=0）。inferEvery>1 时每隔 N tick 才推理一次，
-    // 中间 tick 复用上一次的动作（支持 1.5 对应 150ms 降频；默认 1 = 每 tick 100ms）。
-    act(sim, pid, rng) {
+    _getLaggedInputs(sim, pid) {
       const every = this.inferEvery || 1;
+      const lagTicks = Math.max(0, Math.round(every - 1.0));
+      const currObs = sim.encodeObsJAX(pid, this.obsShape[0]);
+      const currGv = sim.encodeStateJAX(pid);
+      if (lagTicks <= 0) return { obs: currObs, state: currGv };
+
+      if (!this._obsHistory) this._obsHistory = [[], []];
+      if (!this._stateHistory) this._stateHistory = [[], []];
+      if (!this._obsHistory[pid]) this._obsHistory[pid] = [];
+      if (!this._stateHistory[pid]) this._stateHistory[pid] = [];
+
+      const obsBuf = this._obsHistory[pid];
+      const gvBuf = this._stateHistory[pid];
+      obsBuf.push(currObs);
+      gvBuf.push(currGv);
+      if (obsBuf.length > lagTicks + 1) obsBuf.shift();
+      if (gvBuf.length > lagTicks + 1) gvBuf.shift();
+
+      const laggedObs = new Float32Array(obsBuf[0]);
+      // 覆盖自身坐标 ch0 (前 N = 195 个浮点数)，保留本体感觉实时性
+      for (let i = 0; i < N; i++) laggedObs[i] = currObs[i];
+
+      // 覆盖自身状态本体实时：血量、泡泡数、威力、速度、存活
+      const laggedGv = new Float64Array(gvBuf[0]);
+      laggedGv[1] = currGv[1]; // self hp
+      laggedGv[3] = currGv[3]; // self bombs
+      laggedGv[4] = currGv[4]; // self blast
+      laggedGv[5] = currGv[5]; // self speed
+      laggedGv[9] = currGv[9]; // self alive
+
+      return { obs: laggedObs, state: laggedGv };
+    }
+
+    // AI 决策：本体感知 10Hz 实时（ch0 自身坐标与自身状态无延迟，走位微操与即刻刹车），
+    // 外部世界视觉延迟（ch1~ch14 危险图、对手、炸弹、箱子依 inferEvery 滞后 1~2 tick），
+    // 彻底根除 5Hz 动作重复（1.2格大步）引发的极限环超调震荡与踩火自杀。
+    act(sim, pid, rng) {
       const changed = sim !== this._cSim || sim._gen !== this._cGen;
-      if (changed || !this._nextInferT) {
+      if (changed || !this._cT) {
+        this._cSim = sim; this._cGen = sim._gen;
         this._cT = [-1, -1];
         this._cA = [null, null];
-        this._nextInferT = [0, 0];
+        this._obsHistory = [[], []];
+        this._stateHistory = [[], []];
       }
-      const need = changed || this._cT[pid] < 0 || (sim.t >= this._nextInferT[pid]);
-      if (need) {
-        this._cSim = sim; this._cGen = sim._gen;
-        const { mm, bm } = sim.legalMask();
-        this._cA[pid] = this._decide(sim, pid, mm, bm, rng);
-        this._cT[pid] = sim.t;
-        if (sim.t - this._nextInferT[pid] > every) {
-          this._nextInferT[pid] = sim.t + every;
-        } else {
-          this._nextInferT[pid] += every;
-        }
+      if (this._cT[pid] === sim.t && this._cA[pid]) {
         return this._cA[pid];
       }
-      // 非推理 tick：延续上一次移动惯性，放炮指令仅在推理决策帧触发单次脉冲
-      return [this._cA[pid][0], 0];
+      const { mm, bm } = sim.legalMask();
+      this._cA[pid] = this._decide(sim, pid, mm, bm, rng);
+      this._cT[pid] = sim.t;
+      return this._cA[pid];
     }
 
     _decide(sim, pid, mm, bm, rng) {
-      const logits = this.forward(sim.encodeObsJAX(pid, this.obsShape[0]),
-                                  sim.encodeStateJAX(pid));
+      const { obs, state } = this._getLaggedInputs(sim, pid);
+      const logits = this.forward(obs, state);
       if (!this._lastVal) this._lastVal = [0, 0];
       this._lastVal[pid] = logits.value;
       const aM = this._sampleMasked(logits.move, mm[pid], rng);
@@ -2204,37 +2243,30 @@
     }
 
     // 观战双模型：一次批处理前向出双玩家动作（权重只读一遍，比两次单玩家
-    // 前向省 ~35%）。返回 [a0, a1]，缓存语义与 act 一致（含降频）。
+    // 前向省 ~35%）。返回 [a0, a1]，本体实时 + 视觉延迟解耦。
     bothAct(sim, rng) {
-      const every = this.inferEvery || 1;
       const changed = sim !== this._cSim || sim._gen !== this._cGen;
-      if (changed || !this._nextInferT) {
+      if (changed || !this._cT) {
+        this._cSim = sim; this._cGen = sim._gen;
         this._cT = [-1, -1];
         this._cA = [null, null];
-        this._nextInferT = [0, 0];
+        this._obsHistory = [[], []];
+        this._stateHistory = [[], []];
       }
-      const need = changed || this._cT[0] < 0 || (sim.t >= this._nextInferT[0]);
-      if (need) {
-        this._cSim = sim; this._cGen = sim._gen;
-        const { mm, bm } = sim.legalMask();
-        const [f0, f1] = this.forward2(
-          sim.encodeObsJAX(0, this.obsShape[0]), sim.encodeStateJAX(0),
-          sim.encodeObsJAX(1, this.obsShape[0]), sim.encodeStateJAX(1));
-        this._lastVal = [f0.value, f1.value];
-        this._cA[0] = [this._sampleMasked(f0.move, mm[0], rng),
-                      this._sampleMasked(f0.bomb, bm[0], rng)];
-        this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
-                      this._sampleMasked(f1.bomb, bm[1], rng)];
-        this._cT[0] = sim.t; this._cT[1] = sim.t;
-        if (sim.t - this._nextInferT[0] > every) {
-          this._nextInferT[0] = sim.t + every;
-        } else {
-          this._nextInferT[0] += every;
-        }
-        this._nextInferT[1] = this._nextInferT[0];
-        return this._cA;
+      if (this._cT[0] === sim.t && this._cT[1] === sim.t && this._cA[0] && this._cA[1]) {
+        return [this._cA[0], this._cA[1]];
       }
-      return [[this._cA[0][0], 0], [this._cA[1][0], 0]];
+      const { mm, bm } = sim.legalMask();
+      const in0 = this._getLaggedInputs(sim, 0);
+      const in1 = this._getLaggedInputs(sim, 1);
+      const [f0, f1] = this.forward2(in0.obs, in0.state, in1.obs, in1.state);
+      this._lastVal = [f0.value, f1.value];
+      this._cA[0] = [this._sampleMasked(f0.move, mm[0], rng),
+                    this._sampleMasked(f0.bomb, bm[0], rng)];
+      this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
+                    this._sampleMasked(f1.bomb, bm[1], rng)];
+      this._cT[0] = sim.t; this._cT[1] = sim.t;
+      return [this._cA[0], this._cA[1]];
     }
   }
 
@@ -2337,65 +2369,51 @@
     }
 
     async act(sim, pid, rng) {
-      const every = this.inferEvery || 1;
       const changed = sim !== this._cSim || sim._gen !== this._cGen;
-      if (changed || !this._nextInferT) {
+      if (changed || !this._cT) {
+        this._cSim = sim; this._cGen = sim._gen;
         this._cT = [-1, -1];
         this._cA = [null, null];
-        this._nextInferT = [0, 0];
+        this._obsHistory = [[], []];
+        this._stateHistory = [[], []];
       }
-      const need = changed || this._cT[pid] < 0 || (sim.t >= this._nextInferT[pid]);
-      if (need) {
-        this._cSim = sim; this._cGen = sim._gen;
-        const { mm, bm } = sim.legalMask();
-        this._cA[pid] = await this._decide(sim, pid, mm, bm, rng);
-        this._cT[pid] = sim.t;
-        if (sim.t - this._nextInferT[pid] > every) {
-          this._nextInferT[pid] = sim.t + every;
-        } else {
-          this._nextInferT[pid] += every;
-        }
+      if (this._cT[pid] === sim.t && this._cA[pid]) {
         return this._cA[pid];
       }
-      // 非推理 tick：延续上一次移动惯性，放炮指令仅在推理决策帧触发单次脉冲
-      return [this._cA[pid][0], 0];
+      const { mm, bm } = sim.legalMask();
+      this._cA[pid] = await this._decide(sim, pid, mm, bm, rng);
+      this._cT[pid] = sim.t;
+      return this._cA[pid];
     }
 
     async bothAct(sim, rng) {
-      const every = this.inferEvery || 1;
       const changed = sim !== this._cSim || sim._gen !== this._cGen;
-      if (changed || !this._nextInferT) {
+      if (changed || !this._cT) {
+        this._cSim = sim; this._cGen = sim._gen;
         this._cT = [-1, -1];
         this._cA = [null, null];
-        this._nextInferT = [0, 0];
+        this._obsHistory = [[], []];
+        this._stateHistory = [[], []];
       }
-      const need = changed || this._cT[0] < 0 || (sim.t >= this._nextInferT[0]);
-      if (need) {
-        this._cSim = sim; this._cGen = sim._gen;
-        const { mm, bm } = sim.legalMask();
-        const [f0, f1] = await this.forward2(
-          sim.encodeObsJAX(0, this.obsShape[0]), sim.encodeStateJAX(0),
-          sim.encodeObsJAX(1, this.obsShape[0]), sim.encodeStateJAX(1));
-        this._lastVal = [f0.value, f1.value];
-        this._cA[0] = [this._sampleMasked(f0.move, mm[0], rng),
-                      this._sampleMasked(f0.bomb, bm[0], rng)];
-        this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
-                      this._sampleMasked(f1.bomb, bm[1], rng)];
-        this._cT[0] = sim.t; this._cT[1] = sim.t;
-        if (sim.t - this._nextInferT[0] > every) {
-          this._nextInferT[0] = sim.t + every;
-        } else {
-          this._nextInferT[0] += every;
-        }
-        this._nextInferT[1] = this._nextInferT[0];
-        return this._cA;
+      if (this._cT[0] === sim.t && this._cT[1] === sim.t && this._cA[0] && this._cA[1]) {
+        return [this._cA[0], this._cA[1]];
       }
-      return [[this._cA[0][0], 0], [this._cA[1][0], 0]];
+      const { mm, bm } = sim.legalMask();
+      const in0 = this._getLaggedInputs(sim, 0);
+      const in1 = this._getLaggedInputs(sim, 1);
+      const [f0, f1] = await this.forward2(in0.obs, in0.state, in1.obs, in1.state);
+      this._lastVal = [f0.value, f1.value];
+      this._cA[0] = [this._sampleMasked(f0.move, mm[0], rng),
+                    this._sampleMasked(f0.bomb, bm[0], rng)];
+      this._cA[1] = [this._sampleMasked(f1.move, mm[1], rng),
+                    this._sampleMasked(f1.bomb, bm[1], rng)];
+      this._cT[0] = sim.t; this._cT[1] = sim.t;
+      return [this._cA[0], this._cA[1]];
     }
 
     async _decide(sim, pid, mm, bm, rng) {
-      const logits = await this.forward(
-        sim.encodeObsJAX(pid, this.obsShape[0]), sim.encodeStateJAX(pid));
+      const { obs, state } = this._getLaggedInputs(sim, pid);
+      const logits = await this.forward(obs, state);
       if (!this._lastVal) this._lastVal = [0, 0];
       this._lastVal[pid] = logits.value;
       const aM = this._sampleMasked(logits.move, mm[pid], rng);

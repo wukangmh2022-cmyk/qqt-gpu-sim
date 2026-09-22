@@ -1481,7 +1481,7 @@
   // 权威内置旗舰模型昵称映射表（双重保险：即便 index.json 被外部脚本覆写或丢失 display_name，UI 也永久呈现宗师等称号）
   const CANONICAL_NICKNAMES = {
     // Stage 5 最新
-    'params_it00000683_ema': '🔥 200ms反应者【训练中】· Stage5最新',
+    'params_it00000683_ema': '🔥 200ms反应者【自杀降低版】· Stage5最新',
     'params_it00000615_ema': '🔥 5Hz 宗师雏形 (it615)',
     'params_it00000547_ema': '🔥 5Hz 宗师雏形 (it547)',
     'params_it00000340_ema': '🔥 5Hz 破局宗师 · Stage5早期',
