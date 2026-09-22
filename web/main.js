@@ -1478,8 +1478,66 @@
     return String(n);
   }
 
+  // 权威内置旗舰模型昵称映射表（双重保险：即便 index.json 被外部脚本覆写或丢失 display_name，UI 也永久呈现宗师等称号）
+  const CANONICAL_NICKNAMES = {
+    // Stage 5 最新
+    'params_it00000683_ema': '🔥 200ms反应者【训练中】· Stage5最新',
+    'params_it00000615_ema': '🔥 5Hz 宗师雏形 (it615)',
+    'params_it00000547_ema': '🔥 5Hz 宗师雏形 (it547)',
+    'params_it00000340_ema': '🔥 5Hz 破局宗师 · Stage5早期',
+    // Stage 4 巅峰旗舰
+    'params_it00001100_ema': '👑 8h全量完赛 · 终极宗师 (EMA)',
+    'params_it00001100': '👑 8h全量完赛 · 终极宗师 (生权重)',
+    'params_it00001021_ema': '🏆 破局宗师 (it1021)',
+    'params_it00000889_ema': '🏆 破局宗师 (it889)',
+    'params_it00000831_ema': '🏆 破局宗师 · 10Hz巅峰旗舰',
+    'params_it00000800_ema': '🏆 破局宗师 (it800)',
+    'params_it00000767_ema': '🏆 破局宗师 (it767)',
+    'params_it00000726_ema': '🏆 破局宗师 (it726)',
+    'params_it00000703_ema': '🏆 破局宗师 (it703)',
+    'params_it00000639_ema': '🏆 破局宗师 (it639)',
+    'params_it00000575_ema': '🏆 破局宗师 (it575)',
+    'params_it00000512_ema': '🏆 破局宗师 (it512)',
+    'params_it00000511_ema': '🏆 破局宗师 (it511)',
+    'params_it00000448_ema': '🏆 破局宗师 (it448)',
+    'params_it00000223_ema': '🥈 破局宗师 · 稍弱版',
+    'params_it00000191_ema': '🥈 破局宗师 · 早期版',
+    'params_it00000159_ema': '🥈 破局宗师 (it159)',
+    'params_it00000127_ema': '🥈 破局宗师 (it127)',
+    'params_it00000095_ema': '🥈 破局宗师 (it95)',
+    'params_it00000063_ema': '🥈 破局宗师 (it63)',
+    'params_it00000031_ema': '🥈 破局宗师 (it31)',
+    // 经典与历史初代宗师
+    'ViTModel2_31.9B': '💎 初代宗师 (31.9B步)',
+    'ViTModel2_22.6B': '💎 初代宗师 (22.6B步)',
+    'ViTModel2_7.5B': '💎 初代宗师 (7.5B步)',
+    'duel_latest_13.67B': '🎖️ MLP巅峰宗师 (13.7B步)',
+  };
+
   function modelDisplayName(meta) {
-    return meta.display_name || meta.name;
+    if (!meta) return '未知模型';
+    const name = meta.name || '';
+    // 1. 优先查内置权威昵称表（彻底根除 index.json 重构或覆写导致的昵称丢失）
+    if (CANONICAL_NICKNAMES[name]) {
+      return CANONICAL_NICKNAMES[name];
+    }
+    // 2. 检查 meta.display_name 是否已有自定义称号
+    if (meta.display_name && meta.display_name !== name) {
+      if (meta.display_name.includes('宗师') || meta.display_name.includes('反应者') ||
+          meta.display_name.includes('🏆') || meta.display_name.includes('👑') ||
+          meta.display_name.includes('🔥') || meta.display_name.includes('💎')) {
+        return meta.display_name;
+      }
+    }
+    // 3. 规则推断宗师/进阶模型（防未来新 checkpoint 未预埋条目）
+    const mIt = name.match(/params(?:_8h)?_it0*(\d+)/);
+    if (mIt) {
+      const it = parseInt(mIt[1], 10);
+      if (it >= 500) return `🏆 破局宗师 (it${it})`;
+      if (it >= 300) return `🥈 进阶大师 (it${it})`;
+      return `🥉 进阶模型 (it${it})`;
+    }
+    return meta.display_name || name;
   }
 
   function fillAiSelect(sel, includeHunter) {
@@ -1530,7 +1588,7 @@
   }
 
   async function loadModelList() {
-    const resp = await fetch('models/index.json?v=20260922-restore-names-v4');
+    const resp = await fetch('models/index.json?v=20260922-permanent-names-v7');
     modelList = (await resp.json()).models || [];
     // 按时间倒序排列（最新导出的模型排在最前）
     modelList.sort((a, b) => {
