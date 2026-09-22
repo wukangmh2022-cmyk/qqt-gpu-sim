@@ -513,6 +513,22 @@
     return 1.0;
   }
 
+  function is5HzModel(name) {
+    if (!name || isRuleAi(name)) return false;
+    const m = modelCache.get(name);
+    if (m && m.meta) {
+      if (m.meta.hz === 5 || m.meta.stage === 5) return true;
+      if (typeof m.meta.display_name === 'string' && m.meta.display_name.includes('5Hz')) return true;
+    }
+    const item = (typeof modelList !== 'undefined' && modelList.find) ? modelList.find(x => x.name === name) : null;
+    if (item) {
+      if (item.hz === 5 || item.stage === 5) return true;
+      if (typeof item.display_name === 'string' && item.display_name.includes('5Hz')) return true;
+    }
+    if (/params_it000003[0-9]{2}/.test(name) || name.includes('5hz') || name.includes('stage5')) return true;
+    return false;
+  }
+
   const aiMotorQueues = [
     { queue: [], lastMove: MOVE_IDLE, accum: 0 },
     { queue: [], lastMove: MOVE_IDLE, accum: 0 },
@@ -1481,7 +1497,7 @@
   }
 
   async function loadModelList() {
-    const resp = await fetch('models/index.json?v=20260917-weaker-flagship');
+    const resp = await fetch('models/index.json?v=20260922-stage5-5hz-it340');
     modelList = (await resp.json()).models || [];
     // 按时间倒序排列（最新导出的模型排在最前）
     modelList.sort((a, b) => {
@@ -1588,6 +1604,16 @@
     if (elCurModel) elCurModel.textContent = `⏳ 正在连接下载 ${sel}…`;
     elStatus.innerHTML = `正在加载模型 <b>${sel}</b>…`;
 
+    // 智能识别模型决策频率：新一代 5Hz 模型（Stage 5）起始反应配置设为 200ms；前代 10Hz 模型设为 100ms
+    if (elAiLatency) {
+      if (is5HzModel(sel)) {
+        elAiLatency.value = '200';
+      } else if (!isRuleAi(sel)) {
+        elAiLatency.value = '100';
+      }
+      resetAiMotorQueues();
+    }
+
     try {
       const m = await ensureModel(sel);
       enemySel = sel;
@@ -1597,8 +1623,10 @@
         `${modelDisplayName(m.meta)}（${fmtStep(m.meta.global_step ?? m.meta.it ?? 0)}步 · 导出于 ${(m.meta.generated_at || '').slice(0, 10)}）`;
       const numParams = m.tensors && Object.keys(m.tensors).length > 0
         ? Object.values(m.tensors).reduce((s, [, n]) => s + n, 0) : 7500000;
+      const is5Hz = is5HzModel(sel);
       elStatus.innerHTML =
         `当前模型：<b>${modelDisplayName(m.meta)}</b><br>` +
+        `决策频率：<b>${is5Hz ? '5Hz 原生（200ms/步）' : '10Hz 原生（100ms/步）'}</b> · 反应配置 ${elAiLatency ? elAiLatency.value : 100}ms<br>` +
         `训练步数 ${fmtStep(m.meta.global_step ?? m.meta.it ?? 0)}<br>` +
         `观测 ${m.meta && m.meta.obs_shape ? m.meta.obs_shape.join('×') : '14×13×15'} · 参数约 ${numParams.toLocaleString()}<br>` +
         `推理后端：${m.constructor.name === 'ORTTransformerModel'
@@ -1659,9 +1687,6 @@
   if (elAiLatency) {
     elAiLatency.addEventListener('change', () => {
       resetAiMotorQueues();
-      for (const m of modelCache.values()) {
-        m.inferEvery = 1;
-      }
     });
   }
   // 「录制剪片」开关：只管 GIF/剪片采样（canvas 20fps 环形缓冲 + MediaRecorder）。
@@ -1684,11 +1709,20 @@
     applyModel();
   });   // 换敌人 AI → 应用并重开
   elP0Ai.addEventListener('change', async () => {
-    resetAiMotorQueues();
     // 观战「我方：」：规则 → hunter / time_astar；模型 → 懒加载进缓存（不阻塞开局）
     p0Sel = elP0Ai.value;
     if (!isRuleAi(p0Sel)) {
+      if (elAiLatency) {
+        if (is5HzModel(p0Sel)) {
+          elAiLatency.value = '200';
+        } else {
+          elAiLatency.value = '100';
+        }
+      }
+      resetAiMotorQueues();
       try { await ensureModel(p0Sel); } catch (e) { elStatus.innerHTML = `我方模型加载失败：${e.message}`; }
+    } else {
+      resetAiMotorQueues();
     }
     startGame();
   });

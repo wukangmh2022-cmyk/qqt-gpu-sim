@@ -44,9 +44,10 @@ def check_cluster():
     print(f"=== [1/3] 集群存活状态校验（共 {len(nodes)} 台）===")
     active_count = 0
     for idx, (port, host, pw) in enumerate(nodes):
-        pid = run_ssh(port, host, pw, "ps aux | grep train_real | grep -v grep | awk '{print $2}'")
-        if pid and pid.isdigit():
-            print(f"  ✓ Rank {idx} (port {port}): 在线 [PID {pid}]")
+        pid = run_ssh(port, host, pw, "pgrep -f 'jax_bomb.train_real'")
+        if pid and any(p.isdigit() for p in pid.split()):
+            clean_pid = pid.split()[0]
+            print(f"  ✓ Rank {idx} (port {port}): 在线 [PID {clean_pid}]")
             active_count += 1
         else:
             print(f"  ✗ Rank {idx} (port {port}): 异常离线或未启动 [输出: {pid}]")
@@ -56,24 +57,16 @@ def check_cluster():
     # 检查 Rank 0 日志
     print("\n=== [2/3] Rank 0 训练遥测 ===")
     r0_port, r0_host, r0_pw = nodes[0]
-    log_tail = run_ssh(r0_port, r0_host, r0_pw, "tail -n 35 /root/train_r0.log 2>/dev/null")
+    log_tail = run_ssh(r0_port, r0_host, r0_pw, "tail -n 25 /root/train_r0.log 2>/dev/null")
     print(log_tail)
 
-    # 提取关键指标
-    print("\n=== [3/3] 核心指标与曲线趋势评估 ===")
-    iters = re.findall(r'iter\s+(\d+)', log_tail)
-    sps = re.findall(r'([\d\.]+)\s+sps', log_tail)
-    rewards = re.findall(r'rew\s+([\d\.\-]+)', log_tail)
-    kills = re.findall(r'kill\s+([\d\.\-]+)%?', log_tail)
-    
-    if iters:
-        print(f"当前最新进度: Iteration {iters[-1]}")
-    if sps:
-        print(f"最新吞吐: {sps[-1]} SPS")
-    if rewards:
-        print(f"最新 Episode 奖励: {rewards[-1]}")
-    if kills:
-        print(f"最新击杀率: {kills[-1]}%")
+    # 4. 自动拉取最新 checkpoint 并执行本地 Headless 真实对局基准评测 (180 局)
+    print("\n=== [4/4] 本地 Headless 真实对局基准评测 (180 局) ===")
+    try:
+        res = subprocess.run(["bash", "scripts/pull_and_eval_latest.sh"], timeout=600)
+    except Exception as e:
+        print(f"评测执行异常: {e}")
 
 if __name__ == "__main__":
     check_cluster()
+
